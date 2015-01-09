@@ -519,26 +519,6 @@ void MainWindow::handleEvent(UEvent* anEvent)
 				this->pauseDetection();
 			}
 		}
-		UDEBUG("stat.rawLikelihood().size()=%d", stats.rawLikelihood().size());
-		// Performance issue: don't process the pdf and likelihood if the last event is
-		// not yet completely processed, to avoid an unresponsive GUI when events accumulate.
-		if(_processingStatistics || !_ui->dockWidget_posterior->isVisible())
-		{
-			stats.setPosterior(std::map<int, float>());
-		}
-		if(_processingStatistics || !_ui->dockWidget_likelihood->isVisible())
-		{
-			stats.setLikelihood(std::map<int, float>());
-		}
-		if(_processingStatistics || !_ui->dockWidget_rawlikelihood->isVisible())
-		{
-			stats.setRawLikelihood(std::map<int, float>());
-		}
-		if(_processingStatistics || (!_ui->dockWidget_posterior->isVisible() && !_ui->dockWidget_likelihood->isVisible()))
-		{
-			stats.setWeights(std::map<int,int>());
-		}
-
 		emit statsReceived(stats);
 	}
 	else if(anEvent->getClassName().compare("RtabmapEventInit") == 0)
@@ -566,9 +546,7 @@ void MainWindow::handleEvent(UEvent* anEvent)
 	else if(anEvent->getClassName().compare("OdometryEvent") == 0)
 	{
 		OdometryEvent * odomEvent = (OdometryEvent*)anEvent;
-		if((_ui->dockWidget_cloudViewer->isVisible() || _ui->dockWidget_odometry->isVisible()) &&
-		   _lastOdometryProcessed &&
-		   !_processingStatistics)
+		if(_lastOdometryProcessed && !_processingStatistics)
 		{
 			_lastOdometryProcessed = false; // if we receive too many odometry events!
 			emit odometryReceived(odomEvent->data(), odomEvent->info());
@@ -596,6 +574,7 @@ void MainWindow::handleEvent(UEvent* anEvent)
 
 void MainWindow::processOdometry(const rtabmap::SensorData & data, const rtabmap::OdometryInfo & info)
 {
+	UTimer time;
 	Transform pose = data.pose();
 	bool lost = false;
 	_ui->imageView_odometry->resetTransform();
@@ -725,6 +704,16 @@ void MainWindow::processOdometry(const rtabmap::SensorData & data, const rtabmap
 	if(_ui->dockWidget_odometry->isVisible() &&
 	   !data.image().empty())
 	{
+		int alpha = _preferencesDialog->getKeypointsOpacity()*255/100;
+		if(info.type == 0)
+		{
+			_ui->imageView_odometry->setFeatures(info.words, QColor(255,255,0, alpha));
+		}
+		else if(info.type == 1)
+		{
+			_ui->imageView_odometry->setFeatures(info.refCorners, QColor(255,0,0, alpha));
+		}
+		_ui->imageView_odometry->clearLines();
 		if(lost)
 		{
 			_ui->imageView_odometry->setImageDepth(uCvMat2QImage(data.image()));
@@ -736,6 +725,35 @@ void MainWindow::processOdometry(const rtabmap::SensorData & data, const rtabmap
 			_ui->imageView_odometry->setImage(uCvMat2QImage(data.image()));
 			_ui->imageView_odometry->setImageShown(true);
 			_ui->imageView_odometry->setImageDepthShown(false);
+
+			if(info.type == 0)
+			{
+				for(unsigned int i=0; i<info.wordMatches.size(); ++i)
+				{
+					_ui->imageView_odometry->setFeatureColor(info.wordMatches[i], QColor(255,0,0, alpha)); // outliers
+				}
+				for(unsigned int i=0; i<info.wordInliers.size(); ++i)
+				{
+					_ui->imageView_odometry->setFeatureColor(info.wordInliers[i], QColor(0,255,0, alpha)); // inliers
+				}
+			}
+			else if(info.type == 1)
+			{
+				//draw lines
+				UASSERT(info.refCorners.size() == info.newCorners.size());
+				for(unsigned int i=0; i<info.cornerInliers.size(); ++i)
+				{
+					_ui->imageView_odometry->setFeatureColor(info.cornerInliers[i], QColor(0,255,0, alpha)); // inliers
+					QGraphicsLineItem * item = _ui->imageView_odometry->scene()->addLine(
+							info.refCorners[info.cornerInliers[i]].pt.x,
+							info.refCorners[info.cornerInliers[i]].pt.y,
+							info.newCorners[info.cornerInliers[i]].pt.x,
+							info.newCorners[info.cornerInliers[i]].pt.y,
+							QPen(QColor(0, 0, 255, alpha)));
+					item->setVisible(_ui->imageView_odometry->isLinesShown());
+					item->setZValue(1);
+				}
+			}
 		}
 
 		_ui->imageView_odometry->resetZoom();
@@ -753,6 +771,8 @@ void MainWindow::processOdometry(const rtabmap::SensorData & data, const rtabmap
 	{
 		this->captureScreen();
 	}
+
+	_ui->statsToolBox->updateStat("/Gui refresh odom/ms", (float)data.id(), time.elapsed()*1000.0);
 }
 
 void MainWindow::processStats(const rtabmap::Statistics & stat)
@@ -1018,6 +1038,13 @@ void MainWindow::processStats(const rtabmap::Statistics & stat)
 				UDEBUG("time= %d ms", time.restart());
 			}
 		}
+
+		// update posterior on the graph view
+		if(_preferencesDialog->isPosteriorGraphView() && _ui->graphicsView_graphView->isVisible() && stat.posterior().size())
+		{
+			_ui->graphicsView_graphView->updatePosterior(stat.posterior());
+		}
+
 		UDEBUG("");
 	}
 	else if(!stat.extended() && stat.loopClosureId()>0)
@@ -1042,6 +1069,8 @@ void MainWindow::updateMapCloud(
 		const std::map<int, int> & mapIdsIn,
 		bool verboseProgress)
 {
+	UDEBUG("posesIn=%d constraints=%d mapIdsIn=%d currentPose=%s",
+			(int)posesIn.size(), (int)constraints.size(), (int)mapIdsIn.size(), currentPose.prettyPrint().c_str());
 	if(posesIn.size())
 	{
 		_currentPosesMap = posesIn;
@@ -1203,10 +1232,6 @@ void MainWindow::updateMapCloud(
 				QApplication::processEvents();
 			}
 		}
-		else
-		{
-			UERROR("transform is null!?");
-		}
 
 		++i;
 	}
@@ -1259,7 +1284,7 @@ void MainWindow::updateMapCloud(
 	}
 
 	// Update occupancy grid map in 3D map view and graph view
-	if(_ui->graphicsView_graphView->isVisible() && constraints.size())
+	if(_ui->graphicsView_graphView->isVisible())
 	{
 		_ui->graphicsView_graphView->updateGraph(posesIn, constraints);
 	}
@@ -1337,6 +1362,7 @@ void MainWindow::updateMapCloud(
 
 void MainWindow::createAndAddCloudToMap(int nodeId, const Transform & pose, int mapId)
 {
+	UASSERT(!pose.isNull());
 	std::string cloudName = uFormat("cloud%d", nodeId);
 	if(_ui->widget_cloudViewer->getAddedClouds().contains(cloudName))
 	{
@@ -1562,18 +1588,45 @@ void MainWindow::processRtabmapEventInit(int status, const QString & info)
 		   !_emptyNewDatabase)
 		{
 			// Temp database used, automatically backup with unique name (timestamp)
-			QString newName = _preferencesDialog->getWorkingDirectory()+QDir::separator()+(QString("rtabmap_%1.db").arg(QDateTime::currentDateTime().toString("yyMMdd-hhmmsszzz")));
-			if(QFile::rename(_openedDatabasePath, newName))
+			QString newName = QDateTime::currentDateTime().toString("yyMMdd-hhmmss");
+			bool ok = false;
+			newName = QInputDialog::getText(this, tr("Saving database..."), tr("Database name:"), QLineEdit::Normal, newName, &ok);
+			while(ok)
 			{
-				std::string msg = uFormat("Database saved to \"%s\".", newName.toStdString().c_str());
-				UINFO(msg.c_str());
-				QMessageBox::information(this, tr("Database saved!"), QString(msg.c_str()));
-			}
-			else
-			{
-				std::string msg = uFormat("Failed to rename temporary database from \"%s\" to \"%s\".", _openedDatabasePath.toStdString().c_str(), newName.toStdString().c_str());
-				UERROR(msg.c_str());
-				QMessageBox::critical(this, tr("Closing failed!"), QString(msg.c_str()));
+				QString newPath = _preferencesDialog->getWorkingDirectory()+QDir::separator()+newName+".db";
+				if(QFile::exists(newPath))
+				{
+					QMessageBox::StandardButton b = QMessageBox::question(this,
+							tr("Saving database..."),
+							tr("Database \"%1\" already exists, do you want to overwrite?").arg(newName+".db"),
+							QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+					if(b == QMessageBox::Yes && QFile::remove(newPath))
+					{
+						UINFO("Deleted database \"%s\".", newPath.toStdString().c_str());
+					}
+					else
+					{
+						if(b == QMessageBox::Yes)
+						{
+							UERROR("Failed to erase database \"%s\"! Asking for new name...", newPath.toStdString().c_str());
+						}
+						newName = QInputDialog::getText(this, tr("Saving database..."), tr("Database name:"), QLineEdit::Normal, newName, &ok);
+						continue;
+					}
+				}
+				if(QFile::rename(_openedDatabasePath, newPath))
+				{
+					std::string msg = uFormat("Database saved to \"%s\".", newPath.toStdString().c_str());
+					UINFO(msg.c_str());
+					QMessageBox::information(this, tr("Database saved!"), QString(msg.c_str()));
+				}
+				else
+				{
+					std::string msg = uFormat("Failed to rename temporary database from \"%s\" to \"%s\".", _openedDatabasePath.toStdString().c_str(), (newName+".db").toStdString().c_str());
+					UERROR(msg.c_str());
+					QMessageBox::critical(this, tr("Closing failed!"), QString(msg.c_str()));
+				}
+				break;
 			}
 		}
 		_openedDatabasePath.clear();
@@ -1711,6 +1764,10 @@ void MainWindow::applyPrefSettings(PreferencesDialog::PANEL_FLAGS flags)
 	{
 		UDEBUG("General settings changed...");
 		setupMainLayout(_preferencesDialog->isVerticalLayoutUsed());
+		if(!_preferencesDialog->isPosteriorGraphView() && _ui->graphicsView_graphView->isVisible())
+		{
+			_ui->graphicsView_graphView->clearPosterior();
+		}
 	}
 
 	if(flags & PreferencesDialog::kPanelCloudRendering)
@@ -1718,7 +1775,11 @@ void MainWindow::applyPrefSettings(PreferencesDialog::PANEL_FLAGS flags)
 		UDEBUG("Cloud rendering settings changed...");
 		if(_currentPosesMap.size())
 		{
-			this->updateMapCloud(_currentPosesMap, Transform(), _currentLinksMap, _currentMapIds);
+			this->updateMapCloud(
+					std::map<int, Transform>(_currentPosesMap),
+					Transform(),
+					std::multimap<int, Link>(_currentLinksMap),
+					std::map<int, int>(_currentMapIds));
 		}
 	}
 
@@ -1815,7 +1876,7 @@ void MainWindow::drawKeypoints(const std::multimap<int, cv::KeyPoint> & refWords
 								"X = %5\n"
 								"Y = %6\n"
 								"Size = %7").arg(id).arg(1).arg(r.angle).arg(r.response).arg(r.pt.x).arg(r.pt.y).arg(r.size);
-		float radius = r.size*1.2/9.*2;
+		float radius = r.size/2.0f;
 		if(uContains(loopWords, id))
 		{
 			// PINK = FOUND IN LOOP SIGNATURE
@@ -1864,7 +1925,7 @@ void MainWindow::drawKeypoints(const std::multimap<int, cv::KeyPoint> & refWords
 								"X = %5\n"
 								"Y = %6\n"
 								"Size = %7").arg(id).arg(1).arg(r.angle).arg(r.response).arg(r.pt.x).arg(r.pt.y).arg(r.size);
-		float radius = r.size*1.2/9.*2;
+		float radius = r.size/2.0f;
 		if(uContains(refWords, id))
 		{
 			// PINK = FOUND IN LOOP SIGNATURE
@@ -1945,7 +2006,7 @@ void MainWindow::resizeEvent(QResizeEvent* anEvent)
 {
 	_ui->imageView_source->fitInView(_ui->imageView_source->sceneRect(), Qt::KeepAspectRatio);
 	_ui->imageView_loopClosure->fitInView(_ui->imageView_source->sceneRect(), Qt::KeepAspectRatio);
-	_ui->imageView_source->fitInView(_ui->imageView_odometry->sceneRect(), Qt::KeepAspectRatio);
+	_ui->imageView_odometry->fitInView(_ui->imageView_odometry->sceneRect(), Qt::KeepAspectRatio);
 	_ui->imageView_source->resetZoom();
 	_ui->imageView_loopClosure->resetZoom();
 	_ui->imageView_odometry->resetZoom();
@@ -3065,7 +3126,7 @@ void MainWindow::postProcessing()
 	_initProgressDialog->incrementStep();
 
 	_initProgressDialog->appendText(tr("Updating map..."));
-	this->updateMapCloud(optimizedPoses, Transform(), _currentLinksMap, _currentMapIds, false);
+	this->updateMapCloud(optimizedPoses, Transform(), std::multimap<int, Link>(_currentLinksMap), std::map<int, int>(_currentMapIds), false);
 	_initProgressDialog->appendText(tr("Updating map... done!"));
 
 	_initProgressDialog->setValue(_initProgressDialog->maximumSteps());
