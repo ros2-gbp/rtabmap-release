@@ -1,3 +1,24 @@
+## rtabmap (hydro) - 0.8.2-0
+
+The packages in the `rtabmap` repository were released into the `hydro` distro by running `/usr/bin/bloom-release rtabmap --track hydro --rosdistro hydro` on `Mon, 12 Jan 2015 19:54:07 -0000`
+
+The `rtabmap` package was released.
+
+Version of package(s) in repository `rtabmap`:
+- upstream repository: https://github.com/introlab/rtabmap.git
+- release repository: https://github.com/introlab/rtabmap-release.git
+- rosdistro version: `0.8.1-0`
+- old version: `0.8.1-0`
+- new version: `0.8.2-0`
+
+Versions of tools used:
+- bloom version: `0.5.16`
+- catkin_pkg version: `0.2.6`
+- rosdep version: `0.11.0`
+- rosdistro version: `0.4.0`
+- vcstools version: `0.1.36`
+
+
 ## rtabmap (indigo) - 0.8.1-0
 
 The packages in the `rtabmap` repository were released into the `indigo` distro by running `/usr/bin/bloom-release rtabmap --track indigo --rosdistro indigo` on `Mon, 12 Jan 2015 16:04:22 -0000`
