@@ -1,12 +1,10 @@
 # Top-Level CmakeLists.txt
-IF(APPLE OR WIN32)
-  # BundleUtilities.cmake from 2.8.3 required on Mac and ?Windows?
-  cmake_minimum_required(VERSION 2.8.3)
-ELSE()
-  cmake_minimum_required(VERSION 2.8.0)
-ENDIF()
+# For GNUInstallDirs
+cmake_minimum_required(VERSION 2.8.5)
 PROJECT( RTABMap )
 SET(PROJECT_PREFIX rtabmap)
+
+INCLUDE(GNUInstallDirs)
 
 ####### local cmake modules #######
 SET(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake_modules")
@@ -16,7 +14,7 @@ SET(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake_modules")
 #######################
 SET(RTABMAP_MAJOR_VERSION 0)
 SET(RTABMAP_MINOR_VERSION 8)
-SET(RTABMAP_PATCH_VERSION 0)
+SET(RTABMAP_PATCH_VERSION 1)
 SET(RTABMAP_VERSION
   ${RTABMAP_MAJOR_VERSION}.${RTABMAP_MINOR_VERSION}.${RTABMAP_PATCH_VERSION})
   
@@ -82,9 +80,6 @@ IF(APPLE)
 ENDIF()
 
 ####### Build libraries as shared or static #######
-# It is a bit messed up on Windows between STATIC and SHARED, if we don't want
-# to add UtiLite_DEFINITIONS in FindUtiLite.cmake... to know from 3rd party application if it needs to
-# link dynamically [UTILITE_EXP __declspec( dllimport )] or statically (UTILITE_EXP "nothing").
 OPTION( BUILD_SHARED_LIBS "Set to OFF to build static libraries" ON )
 
 
@@ -94,9 +89,6 @@ SET(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/bin)
 SET(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/lib)
 
 ####### INSTALL DIR #######
-# Offer the user the choice of overriding the installation directories
-set(INSTALL_LIB_DIR lib CACHE PATH "Installation directory for libraries")
-set(INSTALL_BIN_DIR bin CACHE PATH "Installation directory for executables")
 set(INSTALL_INCLUDE_DIR include/${PROJECT_PREFIX}-${RTABMAP_MAJOR_VERSION}.${RTABMAP_MINOR_VERSION} CACHE PATH
   "Installation directory for header files")
 if(WIN32 AND NOT CYGWIN)
@@ -191,7 +183,7 @@ ADD_CUSTOM_TARGET(uninstall
 ####
 # Create the RTABMapConfig.cmake and RTABMapConfigVersion files
 file(RELATIVE_PATH REL_INCLUDE_DIR "${CMAKE_INSTALL_PREFIX}/${INSTALL_CMAKE_DIR}" "${CMAKE_INSTALL_PREFIX}/${INSTALL_INCLUDE_DIR}")
-file(RELATIVE_PATH REL_LIB_DIR "${CMAKE_INSTALL_PREFIX}/${INSTALL_CMAKE_DIR}" "${CMAKE_INSTALL_PREFIX}/${INSTALL_LIB_DIR}")
+file(RELATIVE_PATH REL_LIB_DIR "${CMAKE_INSTALL_PREFIX}/${INSTALL_CMAKE_DIR}" "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}")
    
 # ... for the build tree
 set(CONF_INCLUDE_DIRS "${PROJECT_SOURCE_DIR}/corelib/include" 
@@ -219,7 +211,7 @@ install(FILES
 ####
 
 ### Install package.xml for catkin
-install(FILES package.xml DESTINATION "share/${PROJECT_PREFIX}")
+install(FILES package.xml DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/${PROJECT_PREFIX}")
 
 #######################
 # CPACK (Packaging)
