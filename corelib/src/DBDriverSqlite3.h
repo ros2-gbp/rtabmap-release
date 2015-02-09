@@ -60,8 +60,8 @@ private:
 
 	virtual void saveQuery(const std::list<Signature *> & signatures) const;
 	virtual void saveQuery(const std::list<VisualWord *> & words) const;
-	virtual void updateQuery(const std::list<Signature *> & signatures) const;
-	virtual void updateQuery(const std::list<VisualWord *> & words) const;
+	virtual void updateQuery(const std::list<Signature *> & signatures, bool updateTimestamp) const;
+	virtual void updateQuery(const std::list<VisualWord *> & words, bool updateTimestamp) const;
 
 	// Load objects
 	virtual void loadQuery(VWDictionary * dictionary) const;
@@ -109,7 +109,7 @@ private:
 			float cx,
 			float cy,
 			const Transform & localTransform) const;
-	void stepLink(sqlite3_stmt * ppStmt, int fromId, int toId, int type, float variance, const Transform & transform) const;
+	void stepLink(sqlite3_stmt * ppStmt, int fromId, int toId, Link::Type type, float variance, const Transform & transform) const;
 	void stepWordsChanged(sqlite3_stmt * ppStmt, int signatureId, int oldWordId, int newWordId) const;
 	void stepKeypoint(sqlite3_stmt * ppStmt, int signatureId, int wordId, const cv::KeyPoint & kp, const pcl::PointXYZ & pt) const;
 
