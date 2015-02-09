@@ -127,7 +127,7 @@ public:
 			float opacity);
 	void removeOccupancyGridMap();
 
-	void updateCameraPosition(
+	void updateCameraTargetPosition(
 		const Transform & pose);
 
 	void addOrUpdateGraph(
@@ -137,8 +137,10 @@ public:
 	void removeGraph(const std::string & id);
 	void removeAllGraphs();
 
+	bool isTrajectoryShown() const;
+	unsigned int getTrajectorySize() const;
 	void setTrajectoryShown(bool shown);
-	void setTrajectorySize(int value);
+	void setTrajectorySize(unsigned int value);
 	void clearTrajectory();
 
 	void removeAllClouds(); //including meshes
@@ -149,25 +151,47 @@ public:
 
 	const QMap<std::string, Transform> & getAddedClouds() const {return _addedClouds;} //including meshes
 	const QColor & getBackgroundColor() const;
+	Transform getTargetPose() const;
+	void getCameraPosition(
+			float & x, float & y, float & z,
+			float & focalX, float & focalY, float & focalZ,
+			float & upX, float & upY, float & upZ) const;
+	bool isCameraTargetLocked() const;
+	bool isCameraTargetFollow() const;
+	bool isCameraFree() const;
+	bool isCameraLockZ() const;
+	bool isGridShown() const;
+	unsigned int getGridCellCount() const;
+	float getGridCellSize() const;
 
+	void setCameraPosition(
+			float x, float y, float z,
+			float focalX, float focalY, float focalZ,
+			float upX, float upY, float upZ);
 	void setCameraTargetLocked(bool enabled = true);
 	void setCameraTargetFollow(bool enabled = true);
 	void setCameraFree();
 	void setCameraLockZ(bool enabled = true);
 	void setGridShown(bool shown);
+	void setGridCellCount(unsigned int count);
+	void setGridCellSize(float size);
 	void setWorkingDirectory(const QString & path) {_workingDirectory = path;}
 
 public slots:
-	void render();
 	void setBackgroundColor(const QColor & color);
 	void setCloudVisibility(const std::string & id, bool isVisible);
 	void setCloudOpacity(const std::string & id, double opacity = 1.0);
 	void setCloudPointSize(const std::string & id, int size);
 	virtual void clear() {removeAllClouds(); clearTrajectory();}
 
+signals:
+	void configChanged();
+
 protected:
 	virtual void keyReleaseEvent(QKeyEvent * event);
 	virtual void keyPressEvent(QKeyEvent * event);
+	virtual void mousePressEvent(QMouseEvent * event);
+	virtual void mouseMoveEvent(QMouseEvent * event);
 	virtual void contextMenuEvent(QContextMenuEvent * event);
 	virtual void handleAction(QAction * event);
 	QMenu * menu() {return _menu;}
@@ -188,11 +212,15 @@ private:
     QAction * _aSetTrajectorySize;
     QAction * _aClearTrajectory;
     QAction * _aShowGrid;
+    QAction * _aSetGridCellCount;
+    QAction * _aSetGridCellSize;
     QAction * _aSetBackgroundColor;
     QMenu * _menu;
     std::map<std::string, pcl::PointCloud<pcl::PointXYZ>::Ptr > _graphes;
     pcl::PointCloud<pcl::PointXYZ>::Ptr _trajectory;
     unsigned int _maxTrajectorySize;
+    unsigned int _gridCellCount;
+    float _gridCellSize;
     QMap<std::string, Transform> _addedClouds; // include cloud, scan, meshes
     Transform _lastPose;
     std::list<std::string> _gridLines;
