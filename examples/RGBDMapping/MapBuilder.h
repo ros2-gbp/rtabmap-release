@@ -126,10 +126,10 @@ private slots:
 			if(!data.pose().isNull())
 			{
 				// update camera position
-				cloudViewer_->updateCameraPosition(data.pose());
+				cloudViewer_->updateCameraTargetPosition(data.pose());
 			}
 		}
-		cloudViewer_->render();
+		cloudViewer_->update();
 
 		_lastOdometryProcessed = true;
 	}
@@ -165,14 +165,16 @@ private slots:
 				else if(iter->first == stats.refImageId() &&
 						stats.getSignature().id() == iter->first)
 				{
+					Signature s = stats.getSignature();
+					s.uncompressData(); // make sure data is uncompressed
 					// Add the new cloud
 					pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud = util3d::cloudFromDepthRGB(
-							stats.getSignature().getImageRaw(),
-							stats.getSignature().getDepthRaw(),
-							stats.getSignature().getDepthCx(),
-							stats.getSignature().getDepthCy(),
-							stats.getSignature().getDepthFx(),
-							stats.getSignature().getDepthFy(),
+							s.getImageRaw(),
+							s.getDepthRaw(),
+							s.getDepthCx(),
+							s.getDepthCy(),
+							s.getDepthFx(),
+							s.getDepthFy(),
 						   8); // decimation
 
 					if(cloud->size())
@@ -191,7 +193,7 @@ private slots:
 			}
 		}
 
-		cloudViewer_->render();
+		cloudViewer_->update();
 
 		_processingStatistics = false;
 	}

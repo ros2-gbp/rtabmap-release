@@ -97,10 +97,13 @@ public:
 	virtual QString getIniFilePath() const;
 	void init();
 
-	void saveWindowGeometry(const QString & windowName, const QWidget * window);
-	void loadWindowGeometry(const QString & windowName, QWidget * window);
+	void saveWindowGeometry(const QWidget * window);
+	void loadWindowGeometry(QWidget * window);
 	void saveMainWindowState(const QMainWindow * mainWindow);
-	void loadMainWindowState(QMainWindow * mainWindow);
+	void loadMainWindowState(QMainWindow * mainWindow, bool & maximized);
+
+	void saveWidgetState(const QWidget * widget);
+	void loadWidgetState(QWidget * widget);
 
 	void saveCustomConfig(const QString & section, const QString & key, const QString & value);
 	QString loadCustomConfig(const QString & section, const QString & key);
@@ -114,11 +117,9 @@ public:
 	int getGeneralLoggerType() const;
 	bool getGeneralLoggerPrintTime() const;
 	bool isVerticalLayoutUsed() const;
-	bool isImageFlipped() const;
 	bool imageRejectedShown() const;
 	bool imageHighestHypShown() const;
 	bool beepOnPause() const;
-	int getKeypointsOpacity() const;
 	int getOdomQualityWarnThr() const;
 	bool isPosteriorGraphView() const;
 
@@ -158,7 +159,7 @@ public:
 	bool isSourceImageUsed() const;
 	bool isSourceDatabaseUsed() const;
 	bool isSourceOpenniUsed() const;
-	int getSourceImageType() const;
+	PreferencesDialog::Src getSourceImageType() const;
 	QString getSourceImageTypeStr() const;
 	int getSourceWidth() const;
 	int getSourceHeight() const;
@@ -211,9 +212,9 @@ public slots:
 	void setHardThr(int value);
 	void setTimeLimit(float value);
 	void setSLAMMode(bool enabled);
-	void selectSourceImage(Src src = kSrcUndef);
-	void selectSourceDatabase(bool user = false);
-	void selectSourceRGBD(Src src = kSrcUndef);
+	void selectSourceImage(Src src = kSrcUndef, bool checked = true);
+	void selectSourceDatabase(bool user = false, bool checked = true);
+	void selectSourceRGBD(Src src = kSrcUndef, bool checked = true);
 
 private slots:
 	void closeDialog ( QAbstractButton * button );
