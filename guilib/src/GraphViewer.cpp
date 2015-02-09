@@ -101,13 +101,13 @@ class LinkItem: public QGraphicsLineItem
 {
 public:
 	// in meter
-	LinkItem(int from, int to, const Transform & poseA, const Transform & poseB, bool loopClosure) :
+	LinkItem(int from, int to, const Transform & poseA, const Transform & poseB, Link::Type type) :
 		QGraphicsLineItem(-poseA.y(), -poseA.x(), -poseB.y(), -poseB.x()),
 		_from(from),
 		_to(to),
 		_poseA(poseA),
 		_poseB(poseB),
-		_loopClosure(loopClosure)
+		_type(type)
 	{
 		this->setAcceptHoverEvents(true);
 	}
@@ -126,7 +126,7 @@ public:
 		_poseB = poseB;
 	}
 
-	bool isLoopClosure() const {return _loopClosure;}
+	Link::Type linkType() const {return _type;}
 	int from() const {return _from;}
 	int to() const {return _to;}
 
@@ -146,7 +146,7 @@ private:
 	int _to;
 	Transform _poseA;
 	Transform _poseB;
-	bool _loopClosure;
+	Link::Type _type;
 };
 
 GraphViewer::GraphViewer(QWidget * parent) :
@@ -154,6 +154,10 @@ GraphViewer::GraphViewer(QWidget * parent) :
 		_nodeColor(Qt::blue),
 		_neighborColor(Qt::blue),
 		_loopClosureColor(Qt::red),
+		_loopClosureLocalColor(Qt::yellow),
+		_loopClosureUserColor(Qt::red),
+		_loopClosureVirtualColor(Qt::magenta),
+		_pathColor(Qt::cyan),
 		_root(0),
 		_nodeRadius(0.01),
 		_linkWidth(0),
@@ -192,6 +196,8 @@ GraphViewer::GraphViewer(QWidget * parent) :
 	_gridMap = this->scene()->addPixmap(QPixmap());
 	_gridMap->setZValue(0);
 	_gridMap->setParentItem(_root);
+
+	this->restoreDefaults();
 }
 
 GraphViewer::~GraphViewer()
@@ -201,6 +207,7 @@ GraphViewer::~GraphViewer()
 void GraphViewer::updateGraph(const std::map<int, Transform> & poses,
 				 const std::multimap<int, Link> & constraints)
 {
+	bool wasEmpty = _nodeItems.size() == 0 && _linkItems.size() == 0;
 	UDEBUG("poses=%d constraints=%d", (int)poses.size(), (int)constraints.size());
 	//Hide nodes and links
 	for(QMap<int, NodeItem*>::iterator iter = _nodeItems.begin(); iter!=_nodeItems.end(); ++iter)
@@ -208,11 +215,7 @@ void GraphViewer::updateGraph(const std::map<int, Transform> & poses,
 		iter.value()->hide();
 		iter.value()->setColor(_nodeColor); // reset color
 	}
-	for(QMultiMap<int, LinkItem*>::iterator iter = _loopLinkItems.begin(); iter!=_loopLinkItems.end(); ++iter)
-	{
-		iter.value()->hide();
-	}
-	for(QMultiMap<int, LinkItem*>::iterator iter = _neighborLinkItems.begin(); iter!=_neighborLinkItems.end(); ++iter)
+	for(QMultiMap<int, LinkItem*>::iterator iter = _linkItems.begin(); iter!=_linkItems.end(); ++iter)
 	{
 		iter.value()->hide();
 	}
@@ -243,41 +246,50 @@ void GraphViewer::updateGraph(const std::map<int, Transform> & poses,
 
 	for(std::multimap<int, Link>::const_iterator iter=constraints.begin(); iter!=constraints.end(); ++iter)
 	{
-		std::map<int, Transform>::const_iterator jterA = poses.find(iter->first);
-		std::map<int, Transform>::const_iterator jterB = poses.find(iter->second.to());
+		// make the first id the smallest one
+		int idFrom = iter->first<iter->second.to()?iter->first:iter->second.to();
+		int idTo = iter->first<iter->second.to()?iter->second.to():iter->first;
+
+		std::map<int, Transform>::const_iterator jterA = poses.find(idFrom);
+		std::map<int, Transform>::const_iterator jterB = poses.find(idTo);
 		if(jterA != poses.end() && jterB != poses.end() &&
-		   _nodeItems.contains(iter->first) && _nodeItems.contains(iter->second.to()))
+		   _nodeItems.contains(iter->first) && _nodeItems.contains(idTo))
 		{
 			const Transform & poseA = jterA->second;
 			const Transform & poseB = jterB->second;
-			bool loopClosure = iter->second.type() != Link::kNeighbor;
 
 			bool added = false;
-			if(loopClosure && _loopLinkItems.contains(iter->first))
+			if(_linkItems.contains(idFrom))
 			{
-				QMultiMap<int, LinkItem*>::iterator itemIter = _loopLinkItems.find(iter->first);
-				while(itemIter.key() == iter->first && itemIter != _loopLinkItems.end())
+				QMultiMap<int, LinkItem*>::iterator itemIter = _linkItems.find(iter->first);
+				while(itemIter.key() == idFrom && itemIter != _linkItems.end())
 				{
-					if(itemIter.value()->to() == iter->second.to())
+					if(itemIter.value()->to() == idTo)
 					{
 						itemIter.value()->setPoses(poseA, poseB);
 						itemIter.value()->show();
 						added = true;
-						break;
-					}
-					++itemIter;
-				}
-			}
-			else if(!loopClosure && _neighborLinkItems.contains(iter->first))
-			{
-				QMultiMap<int, LinkItem*>::iterator itemIter = _neighborLinkItems.find(iter->first);
-				while(itemIter.key() == iter->first && itemIter != _neighborLinkItems.end())
-				{
-					if(itemIter.value()->to() == iter->second.to())
-					{
-						itemIter.value()->setPoses(poseA, poseB);
-						itemIter.value()->show();
-						added = true;
+						// reset color
+						if(iter->second.type() == Link::kNeighbor)
+						{
+							itemIter.value()->setColor(_neighborColor);
+						}
+						else if(iter->second.type() == Link::kVirtualClosure)
+						{
+							itemIter.value()->setColor(_loopClosureVirtualColor);
+						}
+						else if(iter->second.type() == Link::kUserClosure)
+						{
+							itemIter.value()->setColor(_loopClosureUserColor);
+						}
+						else if(iter->second.type() == Link::kLocalSpaceClosure || iter->second.type() == Link::kLocalTimeClosure)
+						{
+							itemIter.value()->setColor(_loopClosureLocalColor);
+						}
+						else
+						{
+							itemIter.value()->setColor(_loopClosureColor);
+						}
 						break;
 					}
 					++itemIter;
@@ -286,22 +298,34 @@ void GraphViewer::updateGraph(const std::map<int, Transform> & poses,
 			if(!added)
 			{
 				//create a link item
-				LinkItem * item = new LinkItem(iter->first, iter->second.to(), poseA, poseB, loopClosure);
+				LinkItem * item = new LinkItem(idFrom, idTo, poseA, poseB, iter->second.type());
 				QPen p = item->pen();
 				p.setWidthF(_linkWidth);
 				item->setPen(p);
-				item->setColor(loopClosure?_loopClosureColor:_neighborColor);
-				this->scene()->addItem(item);
-				item->setZValue(1);
-				item->setParentItem(_root);
-				if(loopClosure)
+				if(iter->second.type() == Link::kNeighbor)
 				{
-					_loopLinkItems.insert(iter->first, item);
+					item->setColor(_neighborColor);
+				}
+				else if(iter->second.type() == Link::kVirtualClosure)
+				{
+					item->setColor(_loopClosureVirtualColor);
+				}
+				else if(iter->second.type() == Link::kUserClosure)
+				{
+					item->setColor(_loopClosureUserColor);
+				}
+				else if(iter->second.type() == Link::kLocalSpaceClosure || iter->second.type() == Link::kLocalTimeClosure)
+				{
+					item->setColor(_loopClosureLocalColor);
 				}
 				else
 				{
-					_neighborLinkItems.insert(iter->first, item);
+					item->setColor(_loopClosureColor);
 				}
+				this->scene()->addItem(item);
+				item->setZValue(1);
+				item->setParentItem(_root);
+				_linkItems.insert(idFrom, item);
 			}
 		}
 	}
@@ -319,24 +343,12 @@ void GraphViewer::updateGraph(const std::map<int, Transform> & poses,
 			++iter;
 		}
 	}
-	for(QMultiMap<int, LinkItem*>::iterator iter = _loopLinkItems.begin(); iter!=_loopLinkItems.end();)
+	for(QMultiMap<int, LinkItem*>::iterator iter = _linkItems.begin(); iter!=_linkItems.end();)
 	{
 		if(!iter.value()->isVisible())
 		{
 			delete iter.value();
-			iter = _loopLinkItems.erase(iter);
-		}
-		else
-		{
-			++iter;
-		}
-	}
-	for(QMultiMap<int, LinkItem*>::iterator iter = _neighborLinkItems.begin(); iter!=_neighborLinkItems.end();)
-	{
-		if(!iter.value()->isVisible())
-		{
-			delete iter.value();
-			iter = _neighborLinkItems.erase(iter);
+			iter = _linkItems.erase(iter);
 		}
 		else
 		{
@@ -356,7 +368,15 @@ void GraphViewer::updateGraph(const std::map<int, Transform> & poses,
 	}
 
 	this->scene()->setSceneRect(this->scene()->itemsBoundingRect());  // Re-shrink the scene to it's bounding contents
-	this->fitInView(this->scene()->itemsBoundingRect(), Qt::KeepAspectRatio);
+
+	if(poses.size() == 0 || wasEmpty)
+	{
+		this->fitInView(this->scene()->itemsBoundingRect(), Qt::KeepAspectRatio);
+	}
+	else
+	{
+		this->centerOn(_lastReferential);
+	}
 }
 
 void GraphViewer::updateMap(const cv::Mat & map8U, float resolution, float xMin, float yMin)
@@ -407,14 +427,37 @@ void GraphViewer::updatePosterior(const std::map<int, float> & posterior)
 	}
 }
 
+void GraphViewer::updateLocalPath(const std::vector<int> & localPath)
+{
+	if(localPath.size() > 1)
+	{
+		for(unsigned int i=0; i<localPath.size()-1; ++i)
+		{
+			if(_linkItems.contains(localPath[i]))
+			{
+				int idFrom = localPath[i]<localPath[i+1]?localPath[i]:localPath[i+1];
+				int idTo = localPath[i]<localPath[i+1]?localPath[i+1]:localPath[i];
+				QMultiMap<int, LinkItem*>::iterator itemIter = _linkItems.find(idFrom);
+				while(itemIter.key() == idFrom && itemIter != _linkItems.end())
+				{
+					if(itemIter.value()->to() == idTo)
+					{
+						itemIter.value()->setColor(_pathColor);
+						break;
+					}
+					++itemIter;
+				}
+			}
+		}
+	}
+}
+
 void GraphViewer::clearGraph()
 {
 	qDeleteAll(_nodeItems);
 	_nodeItems.clear();
-	qDeleteAll(_neighborLinkItems);
-	_neighborLinkItems.clear();
-	qDeleteAll(_loopLinkItems);
-	_loopLinkItems.clear();
+	qDeleteAll(_linkItems);
+	_linkItems.clear();
 	_lastReferential->resetTransform();
 	this->scene()->setSceneRect(this->scene()->itemsBoundingRect());  // Re-shrink the scene to it's bounding contents
 }
@@ -438,6 +481,129 @@ void GraphViewer::clearAll()
 	clearGraph();
 }
 
+bool GraphViewer::isGridMapVisible() const
+{
+	return _gridMap->isVisible();
+}
+
+void GraphViewer::setWorkingDirectory(const QString & path)
+{
+	_workingDirectory = path;
+}
+void GraphViewer::setNodeRadius(float radius)
+{
+	_nodeRadius = radius;
+	for(QMap<int, NodeItem*>::iterator iter=_nodeItems.begin(); iter!=_nodeItems.end(); ++iter)
+	{
+		iter.value()->setRect(-_nodeRadius, -_nodeRadius, _nodeRadius*2.0f, _nodeRadius*2.0f);
+	}
+}
+void GraphViewer::setLinkWidth(float width)
+{
+	_linkWidth = width;
+	QList<QGraphicsItem*> items = this->scene()->items();
+	for(int i=0; i<items.size(); ++i)
+	{
+		QGraphicsLineItem * line = qgraphicsitem_cast<QGraphicsLineItem *>(items[i]);
+		if(line)
+		{
+			QPen pen = line->pen();
+			pen.setWidthF(_linkWidth);
+			line->setPen(pen);
+		}
+	}
+}
+void GraphViewer::setNodeColor(const QColor & color)
+{
+	_nodeColor = color;
+	for(QMap<int, NodeItem*>::iterator iter=_nodeItems.begin(); iter!=_nodeItems.end(); ++iter)
+	{
+		iter.value()->setColor(_nodeColor);
+	}
+}
+void GraphViewer::setNeighborColor(const QColor & color)
+{
+	_neighborColor = color;
+	for(QMultiMap<int, LinkItem*>::iterator iter=_linkItems.begin(); iter!=_linkItems.end(); ++iter)
+	{
+		if(iter.value()->linkType() == Link::kNeighbor)
+		{
+			iter.value()->setColor(_neighborColor);
+		}
+	}
+}
+void GraphViewer::setGlobalLoopClosureColor(const QColor & color)
+{
+	_loopClosureColor = color;
+	for(QMultiMap<int, LinkItem*>::iterator iter=_linkItems.begin(); iter!=_linkItems.end(); ++iter)
+	{
+		if(iter.value()->linkType() != Link::kNeighbor &&
+			iter.value()->linkType() != Link::kLocalSpaceClosure &&
+			iter.value()->linkType() != Link::kLocalTimeClosure &&
+			iter.value()->linkType() != Link::kUserClosure &&
+			iter.value()->linkType() != Link::kVirtualClosure)
+		{
+			iter.value()->setColor(_loopClosureColor);
+		}
+	}
+}
+void GraphViewer::setLocalLoopClosureColor(const QColor & color)
+{
+	_loopClosureLocalColor = color;
+	for(QMultiMap<int, LinkItem*>::iterator iter=_linkItems.begin(); iter!=_linkItems.end(); ++iter)
+	{
+		if(iter.value()->linkType() == Link::kLocalSpaceClosure ||
+		   iter.value()->linkType() == Link::kLocalTimeClosure)
+		{
+			iter.value()->setColor(_loopClosureLocalColor);
+		}
+	}
+}
+void GraphViewer::setUserLoopClosureColor(const QColor & color)
+{
+	_loopClosureUserColor = color;
+	for(QMultiMap<int, LinkItem*>::iterator iter=_linkItems.begin(); iter!=_linkItems.end(); ++iter)
+	{
+		if(iter.value()->linkType() == Link::kUserClosure)
+		{
+			iter.value()->setColor(_loopClosureUserColor);
+		}
+	}
+}
+void GraphViewer::setVirtualLoopClosureColor(const QColor & color)
+{
+	_loopClosureVirtualColor = color;
+	for(QMultiMap<int, LinkItem*>::iterator iter=_linkItems.begin(); iter!=_linkItems.end(); ++iter)
+	{
+		if(iter.value()->linkType() == Link::kVirtualClosure)
+		{
+			iter.value()->setColor(_loopClosureVirtualColor);
+		}
+	}
+}
+void GraphViewer::setLocalPathColor(const QColor & color)
+{
+	_pathColor = color;
+}
+void GraphViewer::setGridMapVisible(bool visible)
+{
+	_gridMap->setVisible(visible);
+}
+
+void GraphViewer::restoreDefaults()
+{
+	setNodeRadius(0.01f);
+	setLinkWidth(0.0f);
+	setNodeColor(Qt::blue);
+	setNeighborColor(Qt::blue);
+	setGlobalLoopClosureColor(Qt::red);
+	setLocalLoopClosureColor(Qt::yellow);
+	setUserLoopClosureColor(Qt::red);
+	setVirtualLoopClosureColor(Qt::magenta);
+	setGridMapVisible(true);
+}
+
+
 void GraphViewer::wheelEvent ( QWheelEvent * event )
 {
 	if(event->delta() > 0)
@@ -450,15 +616,44 @@ void GraphViewer::wheelEvent ( QWheelEvent * event )
 	}
 }
 
+QIcon createIcon(const QColor & color)
+{
+	QPixmap pixmap(50, 50);
+	pixmap.fill(color);
+	return QIcon(pixmap);
+}
+
 void GraphViewer::contextMenuEvent(QContextMenuEvent * event)
 {
 	QMenu menu;
 	QAction * aScreenShotPNG = menu.addAction(tr("Take a screenshot (PNG)"));
 	QAction * aScreenShotSVG = menu.addAction(tr("Take a screenshot (SVG)"));
 	menu.addSeparator();
-	QAction * aChangeNodeColor = menu.addAction(tr("Set node color..."));
-	QAction * aChangeNeighborColor = menu.addAction(tr("Set neighbor link color..."));
-	QAction * aChangeLoopColor = menu.addAction(tr("Set loop closure link color..."));
+
+	QAction * aChangeNodeColor = menu.addAction(createIcon(_nodeColor), tr("Set node color..."));
+	aChangeNodeColor->setIconVisibleInMenu(true);
+
+	// Links
+	QMenu * menuLink = menu.addMenu(tr("Set link color..."));
+	QAction * aChangeNeighborColor = menuLink->addAction(tr("Neighbor"));
+	QAction * aChangeGlobalLoopColor = menuLink->addAction(tr("Global loop closure"));
+	QAction * aChangeLocalLoopColor = menuLink->addAction(tr("Local loop closure"));
+	QAction * aChangeUserLoopColor = menuLink->addAction(tr("User loop closure"));
+	QAction * aChangeVirtualLoopColor = menuLink->addAction(tr("Virtual loop closure"));
+	QAction * aChangeLocalPathColor = menuLink->addAction(tr("Local path"));
+	aChangeNeighborColor->setIcon(createIcon(_neighborColor));
+	aChangeGlobalLoopColor->setIcon(createIcon(_loopClosureColor));
+	aChangeLocalLoopColor->setIcon(createIcon(_loopClosureLocalColor));
+	aChangeUserLoopColor->setIcon(createIcon(_loopClosureUserColor));
+	aChangeVirtualLoopColor->setIcon(createIcon(_loopClosureVirtualColor));
+	aChangeLocalPathColor->setIcon(createIcon(_pathColor));
+	aChangeNeighborColor->setIconVisibleInMenu(true);
+	aChangeGlobalLoopColor->setIconVisibleInMenu(true);
+	aChangeLocalLoopColor->setIconVisibleInMenu(true);
+	aChangeUserLoopColor->setIconVisibleInMenu(true);
+	aChangeVirtualLoopColor->setIconVisibleInMenu(true);
+	aChangeLocalPathColor->setIconVisibleInMenu(true);
+
 	menu.addSeparator();
 	QAction * aSetNodeSize = menu.addAction(tr("Set node radius..."));
 	QAction * aSetLinkSize = menu.addAction(tr("Set link width..."));
@@ -472,6 +667,8 @@ void GraphViewer::contextMenuEvent(QContextMenuEvent * event)
 	{
 		aShowHideGridMap = menu.addAction(tr("Show grid map"));
 	}
+	menu.addSeparator();
+	QAction * aRestoreDefaults = menu.addAction(tr("Restore defaults"));
 
 	QAction * r = menu.exec(event->globalPos());
 	if(r == aScreenShotPNG || r == aScreenShotSVG)
@@ -535,56 +732,81 @@ void GraphViewer::contextMenuEvent(QContextMenuEvent * event)
 
 			QDesktopServices::openUrl(QUrl::fromLocalFile(targetDir + name));
 		}
+		return; // without emitting configChanged
 	}
 	else if(r == aChangeNodeColor ||
 			r == aChangeNeighborColor ||
-			r == aChangeLoopColor)
+			r == aChangeGlobalLoopColor ||
+			r == aChangeLocalLoopColor ||
+			r == aChangeUserLoopColor ||
+			r == aChangeVirtualLoopColor ||
+			r == aChangeLocalPathColor)
 	{
 		QColor color;
 		if(r == aChangeNodeColor)
 		{
 			color = _nodeColor;
 		}
-		else if(r == aChangeNeighborColor)
-		{
-			color = _neighborColor;
-		}
-		else if(r == aChangeLoopColor)
+		else if(r == aChangeGlobalLoopColor)
 		{
 			color = _loopClosureColor;
 		}
+		else if(r == aChangeLocalLoopColor)
+		{
+			color = _loopClosureLocalColor;
+		}
+		else if(r == aChangeUserLoopColor)
+		{
+			color = _loopClosureUserColor;
+		}
+		else if(r == aChangeVirtualLoopColor)
+		{
+			color = _loopClosureVirtualColor;
+		}
+		else if(r == aChangeLocalPathColor)
+		{
+			color = _pathColor;
+		}
+		else //if(r == aChangeNeighborColor)
+		{
+			color = _neighborColor;
+		}
 		color = QColorDialog::getColor(color, this);
+		if(color.isValid())
+		{
 
-		if(r == aChangeNodeColor)
-		{
-			_nodeColor = color;
-		}
-		else if(r == aChangeNeighborColor)
-		{
-			_neighborColor = color;
-		}
-		else if(r == aChangeLoopColor)
-		{
-			_loopClosureColor = color;
-		}
-
-		QList<QGraphicsItem*> items = this->scene()->items();
-		for(int i=0; i<items.size(); ++i)
-		{
-			LinkItem * link = qgraphicsitem_cast<LinkItem *>(items[i]);
-			NodeItem * node = qgraphicsitem_cast<NodeItem *>(items[i]);
-			if(r == aChangeNodeColor && node)
+			if(r == aChangeNodeColor)
 			{
-				node->setColor(color);
+				this->setNodeColor(color);
 			}
-			else if(r == aChangeNeighborColor && link && !link->isLoopClosure())
+			else if(r == aChangeGlobalLoopColor)
 			{
-				link->setColor(color);
+				this->setGlobalLoopClosureColor(color);
 			}
-			else if(r == aChangeLoopColor && link && link->isLoopClosure())
+			else if(r == aChangeLocalLoopColor)
 			{
-				link->setColor(color);
+				this->setLocalLoopClosureColor(color);
 			}
+			else if(r == aChangeUserLoopColor)
+			{
+				this->setUserLoopClosureColor(color);
+			}
+			else if(r == aChangeVirtualLoopColor)
+			{
+				this->setVirtualLoopClosureColor(color);
+			}
+			else if(r == aChangeLocalPathColor)
+			{
+				this->setLocalPathColor(color);
+			}
+			else //if(r == aChangeNeighborColor)
+			{
+				this->setNeighborColor(color);
+			}
+		}
+		else
+		{
+			return; // without emitting configChanged
 		}
 	}
 	else if(r == aSetNodeSize)
@@ -593,16 +815,7 @@ void GraphViewer::contextMenuEvent(QContextMenuEvent * event)
 		double value = QInputDialog::getDouble(this, tr("Node radius"), tr("Radius (m)"), _nodeRadius, 0.01, 100, 2, &ok);
 		if(ok)
 		{
-			_nodeRadius = value;
-			QList<QGraphicsItem*> items = this->scene()->items();
-			for(int i=0; i<items.size(); ++i)
-			{
-				NodeItem * node = qgraphicsitem_cast<NodeItem *>(items[i]);
-				if(node)
-				{
-					node->setRect(-_nodeRadius, -_nodeRadius, _nodeRadius*2.0f, _nodeRadius*2.0f);
-				}
-			}
+			setNodeRadius(value);
 		}
 	}
 	else if(r == aSetLinkSize)
@@ -611,23 +824,20 @@ void GraphViewer::contextMenuEvent(QContextMenuEvent * event)
 		double value = QInputDialog::getDouble(this, tr("Link width"), tr("Width (m)"), _linkWidth, 0, 100, 2, &ok);
 		if(ok)
 		{
-			_linkWidth = value;
-			QList<QGraphicsItem*> items = this->scene()->items();
-			for(int i=0; i<items.size(); ++i)
-			{
-				QGraphicsLineItem * line = qgraphicsitem_cast<QGraphicsLineItem *>(items[i]);
-				if(line)
-				{
-					QPen pen = line->pen();
-					pen.setWidthF(_linkWidth);
-					line->setPen(pen);
-				}
-			}
+			setLinkWidth(value);
 		}
 	}
 	else if(r == aShowHideGridMap)
 	{
-		_gridMap->setVisible(!_gridMap->isVisible());
+		this->setGridMapVisible(!this->isGridMapVisible());
+	}
+	else if(r == aRestoreDefaults)
+	{
+		this->restoreDefaults();
+	}
+	if(r)
+	{
+		emit configChanged();
 	}
 }
 

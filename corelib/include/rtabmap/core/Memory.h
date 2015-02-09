@@ -80,8 +80,9 @@ public:
 	std::list<int> cleanup(const std::list<int> & ignoredIds = std::list<int>());
 	void emptyTrash();
 	void joinTrashThread();
-	bool addLoopClosureLink(int oldId, int newId, const Transform & transform, Link::Type type, float variance);
-	void updateNeighborLink(int fromId, int toId, const Transform & transform, float variance);
+	bool addLink(int to, int from, const Transform & transform, Link::Type type, float variance);
+	void updateLink(int fromId, int toId, const Transform & transform, float variance);
+	void removeAllVirtualLinks();
 	std::map<int, int> getNeighborsId(int signatureId,
 			int margin,
 			int maxCheckedInDatabase = -1,
@@ -89,7 +90,7 @@ public:
 			bool ignoreLoopIds = false,
 			double * dbAccessTime = 0) const;
 	void deleteLocation(int locationId, std::list<int> * deletedWords = 0);
-	void rejectLoopClosure(int oldId, int newId);
+	void removeLink(int idA, int idB);
 
 	//getters
 	const std::set<int> & getWorkingMem() const {return _workingMem;}
@@ -103,6 +104,7 @@ public:
 	std::map<int, Link> getLoopClosureLinks(int signatureId,
 			bool lookInDatabase = false) const;
 	bool isRawDataKept() const {return _rawDataKept;}
+	bool isBinDataKept() const {return _binDataKept;}
 	float getSimilarityThreshold() const {return _similarityThreshold;}
 	std::map<int, int> getWeights() const;
 	int getLastSignatureId() const;
@@ -183,7 +185,6 @@ private:
 	void copyData(const Signature * from, Signature * to);
 	Signature * createSignature(
 			const SensorData & data,
-			bool keepRawData=false,
 			Statistics * stats = 0);
 
 	//keypoint stuff
@@ -199,6 +200,7 @@ private:
 	// parameters
 	float _similarityThreshold;
 	bool _rawDataKept;
+	bool _binDataKept;
 	bool _keepRehearsedNodesInDb;
 	bool _incrementalMemory;
 	int _maxStMemSize;
@@ -212,7 +214,8 @@ private:
 	Signature * _lastSignature;
 	int _lastGlobalLoopClosureParentId;
 	int _lastGlobalLoopClosureChildId;
-	bool _memoryChanged; // False by default, become true when Memory::update() is called.
+	bool _memoryChanged; // False by default, become true only when Memory::update() is called.
+	bool _linksChanged; // False by default, become true when links are modified.
 	int _signaturesAdded;
 	bool _postInitClosingEvents;
 
