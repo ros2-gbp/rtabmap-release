@@ -31,6 +31,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <QtGui/QDialog>
 
 class Ui_PostProcessingDialog;
+class QAbstractButton;
 
 namespace rtabmap {
 
@@ -43,6 +44,7 @@ public:
 
 	virtual ~PostProcessingDialog();
 
+	//getters
 	bool isDetectMoreLoopClosures() const;
 	double clusterRadius() const;
 	double clusterAngle() const;
@@ -51,8 +53,24 @@ public:
 	bool isRefineNeighborLinks() const;
 	bool isRefineLoopClosureLinks() const;
 
+	//setters
+	void setDetectMoreLoopClosures(bool on);
+	void setClusterRadius(double radius);
+	void setClusterAngle(double angle);
+	void setIterations(int iterations);
+	void setReextractFeatures(bool on);
+	void setRefineNeighborLinks(bool on);
+	void setRefineLoopClosureLinks(bool on);
+
+signals:
+	void configChanged();
+
+public slots:
+	void restoreDefaults();
+
 private slots:
 	void updateButtonBox();
+
 
 private:
 	Ui_PostProcessingDialog * _ui;
