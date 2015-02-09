@@ -43,6 +43,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "DBDriverSqlite3.h"
 #include "rtabmap/core/util3d.h"
 #include "rtabmap/core/Statistics.h"
+#include "rtabmap/core/Compression.h"
 
 #include <pcl/io/pcd_io.h>
 #include <pcl/common/common.h>
@@ -57,6 +58,7 @@ Memory::Memory(const ParametersMap & parameters) :
 	_dbDriver(0),
 	_similarityThreshold(Parameters::defaultMemRehearsalSimilarity()),
 	_rawDataKept(Parameters::defaultMemImageKept()),
+	_binDataKept(Parameters::defaultMemBinDataKept()),
 	_keepRehearsedNodesInDb(Parameters::defaultMemRehearsedNodesKept()),
 	_incrementalMemory(Parameters::defaultMemIncrementalMemory()),
 	_maxStMemSize(Parameters::defaultMemSTMSize()),
@@ -70,6 +72,7 @@ Memory::Memory(const ParametersMap & parameters) :
 	_lastGlobalLoopClosureParentId(0),
 	_lastGlobalLoopClosureChildId(0),
 	_memoryChanged(false),
+	_linksChanged(false),
 	_signaturesAdded(0),
 	_postInitClosingEvents(false),
 
@@ -129,13 +132,17 @@ bool Memory::init(const std::string & dbUrl, bool dbOverwritten, const Parameter
 
 	if(_postInitClosingEvents) UEventsManager::post(new RtabmapEventInit("Clearing memory..."));
 	DBDriver * tmpDriver = 0;
-	if(!_memoryChanged)
+	if(!_memoryChanged && !_linksChanged)
 	{
 		if(_dbDriver)
 		{
 			tmpDriver = _dbDriver;
 			_dbDriver = 0; // HACK for the clear() below to think that there is no db
 		}
+	}
+	else if(!_memoryChanged && _linksChanged)
+	{
+		_dbDriver->setTimestampUpdateEnabled(false); // update links only
 	}
 	this->clear();
 	if(_postInitClosingEvents) UEventsManager::post(new RtabmapEventInit("Clearing memory, done!"));
@@ -160,6 +167,7 @@ bool Memory::init(const std::string & dbUrl, bool dbOverwritten, const Parameter
 	bool success = true;
 	if(_dbDriver)
 	{
+		_dbDriver->setTimestampUpdateEnabled(true); // make sure that timestamp update is enabled (may be disabled above)
 		success = false;
 		if(_postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(std::string("Connecting to database ") + dbUrl + "..."));
 		if(_dbDriver->openConnection(dbUrl, dbOverwritten))
@@ -310,7 +318,7 @@ Memory::~Memory()
 {
 	if(_postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(RtabmapEventInit::kClosing));
 	UDEBUG("");
-	if(!_memoryChanged)
+	if(!_memoryChanged && !_linksChanged)
 	{
 		UDEBUG("");
 		if(_dbDriver)
@@ -329,6 +337,11 @@ Memory::~Memory()
 	{
 		UDEBUG("");
 		if(_postInitClosingEvents) UEventsManager::post(new RtabmapEventInit("Saving memory..."));
+		if(!_memoryChanged && _linksChanged && _dbDriver)
+		{
+			// don't update the time stamps!
+			_dbDriver->setTimestampUpdateEnabled(false);
+		}
 		this->clear();
 		if(_dbDriver)
 		{
@@ -363,6 +376,7 @@ void Memory::parseParameters(const ParametersMap & parameters)
 	ParametersMap::const_iterator iter;
 
 	Parameters::parse(parameters, Parameters::kMemImageKept(), _rawDataKept);
+	Parameters::parse(parameters, Parameters::kMemBinDataKept(), _binDataKept);
 	Parameters::parse(parameters, Parameters::kMemRehearsedNodesKept(), _keepRehearsedNodesInDb);
 	Parameters::parse(parameters, Parameters::kMemRehearsalIdUpdatedToNewOne(), _idUpdatedToNewOneRehearsal);
 	Parameters::parse(parameters, Parameters::kMemGenerateIds(), _generateIds);
@@ -514,7 +528,7 @@ bool Memory::update(const SensorData & data, Statistics * stats)
 	//============================================================
 	// Create a signature with the image received.
 	//============================================================
-	Signature * signature = this->createSignature(data, this->isRawDataKept(), stats);
+	Signature * signature = this->createSignature(data, stats);
 	if (signature == 0)
 	{
 		UERROR("Failed to create a signature...");
@@ -597,7 +611,7 @@ void Memory::setRoi(const std::string & roi)
 		unsigned int i=0;
 		for(std::list<std::string>::iterator iter = strValues.begin(); iter!=strValues.end(); ++iter)
 		{
-			tmpValues[i] = std::atof((*iter).c_str());
+			tmpValues[i] = uStr2Float(*iter);
 			++i;
 		}
 
@@ -809,18 +823,6 @@ std::map<int, int> Memory::getNeighborsId(int signatureId,
 	{
 		curentMarginList = std::list<int>(nextMargin.begin(), nextMargin.end());
 		nextMargin.clear();
-		// first pass: count number of node in current margin in database
-		for(std::list<int>::iterator jter = curentMarginList.begin(); jter!=curentMarginList.end();++jter)
-		{
-			if(!uContains(ids, *jter))
-			{
-				const Signature * s = this->getSignature(*jter);
-				if(!s)
-				{
-					++nbLoadedFromDb;
-				}
-			}
-		}
 
 		for(std::list<int>::iterator jter = curentMarginList.begin(); jter!=curentMarginList.end(); ++jter)
 		{
@@ -839,6 +841,7 @@ std::map<int, int> Memory::getNeighborsId(int signatureId,
 				}
 				else if(maxCheckedInDatabase == -1 || (maxCheckedInDatabase > 0 && _dbDriver && nbLoadedFromDb < maxCheckedInDatabase))
 				{
+					++nbLoadedFromDb;
 					ids.insert(std::pair<int, int>(*jter, m));
 
 					UTimer timer;
@@ -869,12 +872,6 @@ std::map<int, int> Memory::getNeighborsId(int signatureId,
 							{
 								if(currentMargin.insert(iter->first).second)
 								{
-									const Signature * s = this->getSignature(iter->first);
-									if(!s)
-									{
-										// update db count because it's on current margin
-										++nbLoadedFromDb;
-									}
 									curentMarginList.push_back(iter->first);
 								}
 							}
@@ -960,11 +957,14 @@ void Memory::clear()
 						_workingMem.size(), _stMem.size(), _signatures.size()).c_str());
 
 		UDEBUG("Adding statistics after run...");
-		_dbDriver->addStatisticsAfterRun(memSize,
-				_lastSignature?_lastSignature->id():0,
-				UProcessInfo::getMemoryUsage(),
-				_dbDriver->getMemoryUsed(),
-				(int)_vwd->getVisualWords().size());
+		if(_memoryChanged)
+		{
+			_dbDriver->addStatisticsAfterRun(memSize,
+					_lastSignature?_lastSignature->id():0,
+					UProcessInfo::getMemoryUsage(),
+					_dbDriver->getMemoryUsed(),
+					(int)_vwd->getVisualWords().size());
+		}
 	}
 	UDEBUG("");
 
@@ -1008,6 +1008,7 @@ void Memory::clear()
 	_idCount = kIdStart;
 	_idMapCount = kIdStart;
 	_memoryChanged = false;
+	_linksChanged = false;
 
 	if(_dbDriver)
 	{
@@ -1541,43 +1542,63 @@ void Memory::deleteLocation(int locationId, std::list<int> * deletedWords)
 	}
 }
 
-void Memory::rejectLoopClosure(int oldId, int newId)
+void Memory::removeLink(int oldId, int newId)
 {
-	Signature * oldS = this->_getSignature(oldId);
-	Signature * newS = this->_getSignature(newId);
+	//this method assumes receiving oldId < newId, if not switch them
+	Signature * oldS = this->_getSignature(oldId<newId?oldId:newId);
+	Signature * newS = this->_getSignature(oldId<newId?newId:oldId);
 	if(oldS && newS)
 	{
-		UDEBUG("removing loop closure from location %d", newS->id());
-		oldS->removeLink(newS->id());
-		oldS->setWeight(oldS->getWeight()+1);
+		UINFO("removing link between location %d and %d", oldS->id(), newS->id());
 
-		newS->removeLink(oldS->id());
-		newS->setWeight(newS->getWeight()>0?newS->getWeight()-1:0);
-
-		bool noChildrenAnymore = true;
-		for(std::map<int, Link>::const_iterator iter=newS->getLinks().begin(); iter!=newS->getLinks().end(); ++iter)
+		if(oldS->hasLink(newS->id()) && newS->hasLink(oldS->id()))
 		{
-			if(iter->second.type() > Link::kNeighbor && iter->first < newS->id())
+			Link::Type type = oldS->getLinks().at(newS->id()).type();
+			if(type == Link::kGlobalClosure && newS->getWeight() > 0)
 			{
-				noChildrenAnymore = false;
-				break;
+				// adjust the weight
+				oldS->setWeight(oldS->getWeight()+1);
+				newS->setWeight(newS->getWeight()>0?newS->getWeight()-1:0);
+			}
+
+
+			oldS->removeLink(newS->id());
+			newS->removeLink(oldS->id());
+
+			if(type!=Link::kVirtualClosure)
+			{
+				_linksChanged = true;
+			}
+
+			bool noChildrenAnymore = true;
+			for(std::map<int, Link>::const_iterator iter=newS->getLinks().begin(); iter!=newS->getLinks().end(); ++iter)
+			{
+				if(iter->second.type() > Link::kNeighbor && iter->first < newS->id())
+				{
+					noChildrenAnymore = false;
+					break;
+				}
+			}
+			if(noChildrenAnymore && newS->id() == _lastGlobalLoopClosureParentId)
+			{
+				_lastGlobalLoopClosureParentId = 0;
+				_lastGlobalLoopClosureChildId = 0;
 			}
 		}
-		if(noChildrenAnymore && newId == _lastGlobalLoopClosureParentId)
+		else
 		{
-			_lastGlobalLoopClosureParentId = 0;
-			_lastGlobalLoopClosureChildId = 0;
+			UERROR("Signatures %d and %d don't have bidirectional link!", oldS->id(), newS->id());
 		}
 	}
 	else
 	{
 		if(!newS)
 		{
-			UERROR("Signature %d is not in working memory... cannot remove loop closure links.", newS->id());
+			UERROR("Signature %d is not in working memory... cannot remove link.", newS->id());
 		}
 		if(!oldS)
 		{
-			UERROR("Signature %d is not in working memory... cannot remove loop closure links.", oldS->id());
+			UERROR("Signature %d is not in working memory... cannot remove link.", oldS->id());
 		}
 	}
 }
@@ -1656,7 +1677,7 @@ Transform Memory::computeVisualTransform(
 					UDEBUG("Forcing 2D...");
 					float x,y,z,r,p,yaw;
 					transform.getTranslationAndEulerAngles(x,y,z, r,p,yaw);
-					transform = util3d::transformFromEigen3f(pcl::getTransformation(x,y,0, 0, 0, yaw));
+					transform = Transform::fromEigen3f(pcl::getTransformation(x,y,0, 0, 0, yaw));
 				}
 			}
 			else if(inliersCount < _bowMinInliers)
@@ -1921,7 +1942,7 @@ Transform Memory::computeIcpTransform(
 		// We are 2D here, make sure the guess has only YAW rotation
 		float x,y,z,r,p,yaw;
 		guess.getTranslationAndEulerAngles(x,y,z, r,p,yaw);
-		guess = util3d::transformFromEigen3f(pcl::getTransformation(x,y,0, 0, 0, yaw));
+		guess = Transform::fromEigen3f(pcl::getTransformation(x,y,0, 0, 0, yaw));
 		if(r!=0 || p!=0)
 		{
 			UINFO("2D ICP: Dropping z (%f), roll (%f) and pitch (%f) rotation!", z, r, p);
@@ -2038,7 +2059,7 @@ Transform Memory::computeScanMatchingTransform(
 			const Signature * s = this->getSignature(iter->first);
 			if(!s->getLaserScanCompressed().empty())
 			{
-				*assembledOldClouds += *util3d::cvMat2Cloud(util3d::uncompressData(s->getLaserScanCompressed()), iter->second);
+				*assembledOldClouds += *util3d::cvMat2Cloud(rtabmap::uncompressData(s->getLaserScanCompressed()), iter->second);
 			}
 			else
 			{
@@ -2057,7 +2078,7 @@ Transform Memory::computeScanMatchingTransform(
 	const Signature * newS = getSignature(newId);
 	pcl::PointCloud<pcl::PointXYZ>::Ptr newCloud;
 	UASSERT(uContains(poses, newId));
-	newCloud = util3d::cvMat2Cloud(util3d::uncompressData(newS->getLaserScanCompressed()), poses.at(newId));
+	newCloud = util3d::cvMat2Cloud(rtabmap::uncompressData(newS->getLaserScanCompressed()), poses.at(newId));
 
 	//voxelize
 	if(newCloud->size() && _icp2VoxelSize > 0.0f)
@@ -2132,7 +2153,7 @@ Transform Memory::computeScanMatchingTransform(
 }
 
 // Transform from new to old
-bool Memory::addLoopClosureLink(int oldId, int newId, const Transform & transform, Link::Type type, float variance)
+bool Memory::addLink(int oldId, int newId, const Transform & transform, Link::Type type, float variance)
 {
 	UASSERT(type > Link::kNeighbor && type != Link::kUndef);
 
@@ -2148,20 +2169,32 @@ bool Memory::addLoopClosureLink(int oldId, int newId, const Transform & transfor
 			return true;
 		}
 
-		_memoryChanged = true;
-		UDEBUG("Add loop closure link between %d and %d", oldS->id(), newS->id());
+		UDEBUG("Add link between %d and %d", oldS->id(), newS->id());
 
 		oldS->addLink(Link(oldS->id(), newS->id(), type, transform.inverse(), variance));
 		newS->addLink(Link(newS->id(), oldS->id(), type, transform, variance));
 
+		if(type!=Link::kVirtualClosure)
+		{
+			_linksChanged = true;
+		}
+
 		if(_incrementalMemory && type == Link::kGlobalClosure)
 		{
-			_lastGlobalLoopClosureParentId = newS->id();
-			_lastGlobalLoopClosureChildId = oldS->id();
+			_lastGlobalLoopClosureParentId = newS->id()>oldS->id()?newS->id():oldS->id();
+			_lastGlobalLoopClosureChildId = newS->id()>oldS->id()?oldS->id():newS->id();
 
 			// udpate weights only if the memory is incremental
-			newS->setWeight(newS->getWeight() + oldS->getWeight());
-			oldS->setWeight(0);
+			if(newS->id() > oldS->id())
+			{
+				newS->setWeight(newS->getWeight() + oldS->getWeight());
+				oldS->setWeight(0);
+			}
+			else
+			{
+				oldS->setWeight(oldS->getWeight() + newS->getWeight());
+				newS->setWeight(0);
+			}
 		}
 		return true;
 	}
@@ -2179,22 +2212,37 @@ bool Memory::addLoopClosureLink(int oldId, int newId, const Transform & transfor
 	return false;
 }
 
-void Memory::updateNeighborLink(int fromId, int toId, const Transform & transform, float variance)
+void Memory::updateLink(int fromId, int toId, const Transform & transform, float variance)
 {
 	Signature * fromS = this->_getSignature(fromId);
 	Signature * toS = this->_getSignature(toId);
 
 	if(fromS->hasLink(toId) && toS->hasLink(fromId))
 	{
+		Link::Type type = fromS->getLinks().at(toId).type();
 		fromS->removeLink(toId);
 		toS->removeLink(fromId);
 
-		fromS->addLink(Link(fromId, toId, Link::kNeighbor, transform, variance));
-		toS->addLink(Link(toId, fromId, Link::kNeighbor, transform.inverse(), variance));
+		fromS->addLink(Link(fromId, toId, type, transform, variance));
+		toS->addLink(Link(toId, fromId, type, transform.inverse(), variance));
+
+		if(type!=Link::kVirtualClosure)
+		{
+			_linksChanged = true;
+		}
 	}
 	else
 	{
-		UERROR("fromId=%d and toId=%d are not neighbors!", fromId, toId);
+		UERROR("fromId=%d and toId=%d are not linked!", fromId, toId);
+	}
+}
+
+void Memory::removeAllVirtualLinks()
+{
+	UDEBUG("");
+	for(std::map<int, Signature*>::iterator iter=_signatures.begin(); iter!=_signatures.end(); ++iter)
+	{
+		iter->second->removeVirtualLinks();
 	}
 }
 
@@ -2484,7 +2532,7 @@ cv::Mat Memory::getImageCompressed(int signatureId) const
 	{
 		image = s->getImageCompressed();
 	}
-	if(image.empty() && this->isRawDataKept() && _dbDriver)
+	if(image.empty() && this->isBinDataKept() && _dbDriver)
 	{
 		_dbDriver->getNodeData(signatureId, image);
 	}
@@ -2877,7 +2925,7 @@ private:
 	VWDictionary * _vwp;
 };
 
-Signature * Memory::createSignature(const SensorData & data, bool keepRawData, Statistics * stats)
+Signature * Memory::createSignature(const SensorData & data, Statistics * stats)
 {
 	UASSERT(data.image().empty() || data.image().type() == CV_8UC1 || data.image().type() == CV_8UC3);
 	UASSERT(data.depth().empty() || data.depth().type() == CV_16UC1 || data.depth().type() == CV_32FC1);
@@ -3283,7 +3331,7 @@ Signature * Memory::createSignature(const SensorData & data, bool keepRawData, S
 	}
 
 	Signature * s;
-	if(keepRawData)
+	if(this->isBinDataKept())
 	{
 		std::vector<unsigned char> imageBytes;
 		std::vector<unsigned char> depthBytes;
@@ -3300,9 +3348,9 @@ Signature * Memory::createSignature(const SensorData & data, bool keepRawData, S
 		{
 			depthOrRightImage = data.rightImage();
 		}
-		util3d::CompressionThread ctImage(data.image(), std::string(".jpg"));
-		util3d::CompressionThread ctDepth(depthOrRightImage, std::string(".png"));
-		util3d::CompressionThread ctDepth2d(data.laserScan());
+		rtabmap::CompressionThread ctImage(data.image(), std::string(".jpg"));
+		rtabmap::CompressionThread ctDepth(depthOrRightImage, std::string(".png"));
+		rtabmap::CompressionThread ctDepth2d(data.laserScan());
 		ctImage.start();
 		ctDepth.start();
 		ctDepth2d.start();
@@ -3323,9 +3371,6 @@ Signature * Memory::createSignature(const SensorData & data, bool keepRawData, S
 			data.cx(),
 			data.cy(),
 			data.localTransform());
-		s->setImageRaw(data.image());
-		s->setDepthRaw(depthOrRightImage);
-		s->setLaserScanRaw(data.laserScan());
 	}
 	else
 	{
@@ -3334,7 +3379,13 @@ Signature * Memory::createSignature(const SensorData & data, bool keepRawData, S
 			words,
 			words3D,
 			data.pose(),
-			util3d::compressData2(data.laserScan()));
+			rtabmap::compressData2(data.laserScan()));
+	}
+	if(this->isRawDataKept())
+	{
+		s->setImageRaw(data.image());
+		s->setDepthRaw(data.depth());
+		s->setLaserScanRaw(data.laserScan());
 	}
 
 

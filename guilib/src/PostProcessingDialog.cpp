@@ -41,11 +41,31 @@ PostProcessingDialog::PostProcessingDialog(QWidget * parent) :
 	connect(_ui->detectMoreLoopClosures, SIGNAL(clicked(bool)), this, SLOT(updateButtonBox()));
 	connect(_ui->refineNeighborLinks, SIGNAL(stateChanged(int)), this, SLOT(updateButtonBox()));
 	connect(_ui->refineLoopClosureLinks, SIGNAL(stateChanged(int)), this, SLOT(updateButtonBox()));
+	connect(_ui->buttonBox->button(QDialogButtonBox::RestoreDefaults), SIGNAL(clicked()), this, SLOT(restoreDefaults()));
+
+	connect(_ui->detectMoreLoopClosures, SIGNAL(clicked(bool)), this, SIGNAL(configChanged()));
+	connect(_ui->clusterRadius, SIGNAL(valueChanged(double)), this, SIGNAL(configChanged()));
+	connect(_ui->clusterAngle, SIGNAL(valueChanged(double)), this, SIGNAL(configChanged()));
+	connect(_ui->iterations, SIGNAL(valueChanged(int)), this, SIGNAL(configChanged()));
+	connect(_ui->reextractFeatures, SIGNAL(stateChanged(int)), this, SIGNAL(configChanged()));
+	connect(_ui->refineNeighborLinks, SIGNAL(stateChanged(int)), this, SIGNAL(configChanged()));
+	connect(_ui->refineLoopClosureLinks, SIGNAL(stateChanged(int)), this, SIGNAL(configChanged()));
 }
 
 PostProcessingDialog::~PostProcessingDialog()
 {
 	delete _ui;
+}
+
+void PostProcessingDialog::restoreDefaults()
+{
+	setDetectMoreLoopClosures(true);
+	setClusterRadius(0.3);
+	setClusterAngle(30);
+	setIterations(1);
+	setReextractFeatures(false);
+	setRefineNeighborLinks(false);
+	setRefineLoopClosureLinks(false);
 }
 
 void PostProcessingDialog::updateButtonBox()
@@ -87,6 +107,36 @@ bool PostProcessingDialog::isRefineNeighborLinks() const
 bool PostProcessingDialog::isRefineLoopClosureLinks() const
 {
 	return _ui->refineLoopClosureLinks->isChecked();
+}
+
+//setters
+void PostProcessingDialog::setDetectMoreLoopClosures(bool on)
+{
+	_ui->detectMoreLoopClosures->setChecked(on);
+}
+void PostProcessingDialog::setClusterRadius(double radius)
+{
+	_ui->clusterRadius->setValue(radius);
+}
+void PostProcessingDialog::setClusterAngle(double angle)
+{
+	_ui->clusterAngle->setValue(angle);
+}
+void PostProcessingDialog::setIterations(int iterations)
+{
+	_ui->iterations->setValue(iterations);
+}
+void PostProcessingDialog::setReextractFeatures(bool on)
+{
+	_ui->reextractFeatures->setChecked(on);
+}
+void PostProcessingDialog::setRefineNeighborLinks(bool on)
+{
+	_ui->refineNeighborLinks->setChecked(on);
+}
+void PostProcessingDialog::setRefineLoopClosureLinks(bool on)
+{
+	_ui->refineLoopClosureLinks->setChecked(on);
 }
 
 }

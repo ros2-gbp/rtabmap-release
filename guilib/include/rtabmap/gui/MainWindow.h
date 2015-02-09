@@ -102,6 +102,7 @@ public:
 
 	QString getWorkingDirectory() const;
 	void setMonitoringState(bool pauseChecked = false); // in monitoring state, only some actions are enabled
+	bool isSavedMaximized() const {return _savedMaximized;}
 
 public slots:
 	void processStats(const rtabmap::Statistics & stat);
@@ -109,11 +110,15 @@ public slots:
 protected:
 	virtual void closeEvent(QCloseEvent* event);
 	virtual void handleEvent(UEvent* anEvent);
+	virtual void showEvent(QShowEvent* anEvent);
+	virtual void moveEvent(QMoveEvent* anEvent);
 	virtual void resizeEvent(QResizeEvent* anEvent);
 
 private slots:
 	void changeState(MainWindow::State state);
 	void beep();
+	void configGUIModified();
+	void saveConfigGUI();
 	void newDatabase();
 	void openDatabase();
 	void closeDatabase();
@@ -200,7 +205,7 @@ private:
 	void createAndAddScanToMap(int nodeId, const Transform & pose, int mapId);
 	void drawKeypoints(const std::multimap<int, cv::KeyPoint> & refWords, const std::multimap<int, cv::KeyPoint> & loopWords);
 	void setupMainLayout(bool vertical);
-	void updateSelectSourceImageMenu(int type);
+	void updateSelectSourceImageMenu(bool used, PreferencesDialog::Src src);
 	void updateSelectSourceDatabase(bool used);
 	void updateSelectSourceRGBDMenu(bool used, PreferencesDialog::Src src);
 
@@ -260,6 +265,9 @@ private:
 	bool _odometryReceived;
 	QString _openedDatabasePath;
 	bool _emptyNewDatabase;
+	bool _odomImageShow;
+	bool _odomImageDepthShow;
+	bool _savedMaximized;
 
 	QMap<int, Signature> _cachedSignatures;
 	std::map<int, Transform> _currentPosesMap; // <nodeId, pose>
