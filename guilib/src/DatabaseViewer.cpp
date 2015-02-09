@@ -49,6 +49,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/core/util3d.h"
 #include "rtabmap/core/Signature.h"
 #include "rtabmap/core/Features2d.h"
+#include "rtabmap/core/Compression.h"
+#include "rtabmap/core/Graph.h"
 #include "rtabmap/gui/DataRecorder.h"
 #include "rtabmap/core/SensorData.h"
 #include "ExportDialog.h"
@@ -239,14 +241,14 @@ void DatabaseViewer::closeEvent(QCloseEvent* event)
 			// Added links
 			for(std::multimap<int, rtabmap::Link>::iterator iter=linksAdded_.begin(); iter!=linksAdded_.end(); ++iter)
 			{
-				std::multimap<int, rtabmap::Link>::iterator refinedIter = util3d::findLink(linksRefined_, iter->second.from(), iter->second.to());
+				std::multimap<int, rtabmap::Link>::iterator refinedIter = rtabmap::graph::findLink(linksRefined_, iter->second.from(), iter->second.to());
 				if(refinedIter != linksRefined_.end())
 				{
-					memory_->addLoopClosureLink(refinedIter->second.to(), refinedIter->second.from(), refinedIter->second.transform(), refinedIter->second.type(), refinedIter->second.variance());
+					memory_->addLink(refinedIter->second.to(), refinedIter->second.from(), refinedIter->second.transform(), refinedIter->second.type(), refinedIter->second.variance());
 				}
 				else
 				{
-					memory_->addLoopClosureLink(iter->second.to(), iter->second.from(), iter->second.transform(), iter->second.type(), iter->second.variance());
+					memory_->addLink(iter->second.to(), iter->second.from(), iter->second.transform(), iter->second.type(), iter->second.variance());
 				}
 			}
 
@@ -255,15 +257,14 @@ void DatabaseViewer::closeEvent(QCloseEvent* event)
 			{
 				if(!containsLink(linksAdded_, iter->second.from(), iter->second.to()))
 				{
-					memory_->rejectLoopClosure(iter->second.to(), iter->second.from());
-					memory_->addLoopClosureLink(iter->second.to(), iter->second.from(), iter->second.transform(), iter->second.type(), iter->second.variance());
+					memory_->updateLink(iter->second.from(), iter->second.to(), iter->second.transform(), iter->second.variance());
 				}
 			}
 
 			// Rejected links
 			for(std::multimap<int, rtabmap::Link>::iterator iter=linksRemoved_.begin(); iter!=linksRemoved_.end(); ++iter)
 			{
-				memory_->rejectLoopClosure(iter->second.to(), iter->second.from());
+				memory_->removeLink(iter->second.to(), iter->second.from());
 			}
 		}
 
@@ -373,7 +374,7 @@ void DatabaseViewer::extractImages()
 			cv::Mat compressedRgb = memory_->getImageCompressed(id);
 			if(!compressedRgb.empty())
 			{
-				cv::Mat imageMat = rtabmap::util3d::uncompressImage(compressedRgb);
+				cv::Mat imageMat = rtabmap::uncompressImage(compressedRgb);
 				cv::imwrite(QString("%1/%2.png").arg(path).arg(id).toStdString(), imageMat);
 				UINFO(QString("Saved %1/%2.png").arg(path).arg(id).toStdString().c_str());
 			}
@@ -414,6 +415,10 @@ void DatabaseViewer::updateIds()
 				if((!iter->second.isNull() && nullPoses) ||
 					(iter->second.isNull() && !nullPoses))
 				{
+					if(iter->second.isNull())
+					{
+						UWARN("Pose %d is null!", iter->first);
+					}
 					UWARN("Mixed valid and null poses! Ignoring graph...");
 					poses_.clear();
 					links_.clear();
@@ -569,7 +574,7 @@ void DatabaseViewer::generateTOROGraph()
 		QString path = QFileDialog::getSaveFileName(this, tr("Save File"), pathDatabase_+"/constraints" + QString::number(id) + ".graph", tr("TORO file (*.graph)"));
 		if(!path.isEmpty())
 		{
-			rtabmap::util3d::saveTOROGraph(path.toStdString(), uValueAt(graphes_, id), links);
+			rtabmap::graph::saveTOROGraph(path.toStdString(), uValueAt(graphes_, id), links);
 		}
 	}
 }
@@ -801,7 +806,7 @@ void DatabaseViewer::detectMoreLoopClosures()
 	for(int n=0; n<iterations; ++n)
 	{
 		UINFO("iteration %d/%d", n+1, iterations);
-		std::multimap<int, int> clusters = util3d::radiusPosesClustering(
+		std::multimap<int, int> clusters = rtabmap::graph::radiusPosesClustering(
 				optimizedPoses,
 				ui_->doubleSpinBox_detectMore_radius->value(),
 				ui_->doubleSpinBox_detectMore_angle->value()*CV_PI/180.0);
@@ -1129,7 +1134,7 @@ void DatabaseViewer::update(int value,
 			ui_->horizontalSlider_loops->setValue(0);
 			ui_->horizontalSlider_neighbors->setValue(0);
 			ui_->constraintsViewer->removeAllClouds();
-			ui_->constraintsViewer->render();
+			ui_->constraintsViewer->update();
 			ui_->horizontalSlider_loops->blockSignals(false);
 			ui_->horizontalSlider_neighbors->blockSignals(false);
 		}
@@ -1216,7 +1221,7 @@ void DatabaseViewer::updateStereo(const Signature * data)
 
 						if(pcl::isFinite(tmpPt))
 						{
-							pt = pcl::transformPoint(tmpPt, util3d::transformToEigen3f(data->getLocalTransform()));
+							pt = pcl::transformPoint(tmpPt, data->getLocalTransform().toEigen3f());
 							if(fabs(pt.x) > 2 || fabs(pt.y) > 2 || fabs(pt.z) > 2)
 							{
 								status[i] = 100; //blue
@@ -1240,9 +1245,9 @@ void DatabaseViewer::updateStereo(const Signature * data)
 		UINFO("correspondences = %d/%d (%f) (time kpt=%fs flow=%fs)",
 				(int)cloud->size(), (int)leftCorners.size(), float(cloud->size())/float(leftCorners.size()), timeKpt, timeFlow);
 
-		ui_->stereoViewer->updateCameraPosition(Transform::getIdentity());
+		ui_->stereoViewer->updateCameraTargetPosition(Transform::getIdentity());
 		ui_->stereoViewer->addOrUpdateCloud("stereo", cloud);
-		ui_->stereoViewer->render();
+		ui_->stereoViewer->update();
 
 		std::vector<cv::KeyPoint> rightKpts;
 		cv::KeyPoint::convert(rightCorners, rightKpts);
@@ -1413,7 +1418,7 @@ void DatabaseViewer::updateConstraintView(const rtabmap::Link & linkIn,
 		const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloudTo,
 		bool updateImageSliders)
 {
-	std::multimap<int, Link>::iterator iter = util3d::findLink(linksRefined_, linkIn.from(), linkIn.to());
+	std::multimap<int, Link>::iterator iter = rtabmap::graph::findLink(linksRefined_, linkIn.from(), linkIn.to());
 	rtabmap::Link link = linkIn;
 	if(iter != linksRefined_.end())
 	{
@@ -1655,10 +1660,10 @@ void DatabaseViewer::updateConstraintView(const rtabmap::Link & linkIn,
 		}
 
 		//update cordinate
-		ui_->constraintsViewer->updateCameraPosition(t);
+		ui_->constraintsViewer->updateCameraTargetPosition(t);
 		ui_->constraintsViewer->clearTrajectory();
 
-		ui_->constraintsViewer->render();
+		ui_->constraintsViewer->update();
 	}
 
 	// update buttons
@@ -1696,7 +1701,7 @@ void DatabaseViewer::updateConstraintButtons()
 
 		//check for modified link
 		bool modified = false;
-		std::multimap<int, Link>::iterator iter = util3d::findLink(linksRefined_, currentLink.from(), currentLink.to());
+		std::multimap<int, Link>::iterator iter = rtabmap::graph::findLink(linksRefined_, currentLink.from(), currentLink.to());
 		if(iter != linksRefined_.end())
 		{
 			currentLink = iter->second;
@@ -1726,7 +1731,7 @@ void DatabaseViewer::sliderIterationsValueChanged(int value)
 				if(!data.getLaserScanCompressed().empty())
 				{
 					pcl::PointCloud<pcl::PointXYZ>::Ptr cloud;
-					cv::Mat laserScan = rtabmap::util3d::uncompressData(data.getLaserScanCompressed());
+					cv::Mat laserScan = rtabmap::uncompressData(data.getLaserScanCompressed());
 					cloud = rtabmap::util3d::laserScanToPointCloud(laserScan);
 					scans_.insert(std::make_pair(ids_.at(i), cloud));
 				}
@@ -1786,8 +1791,8 @@ void DatabaseViewer::updateGraphView()
 		graphes_.push_back(poses_);
 		ui_->actionGenerate_TORO_graph_graph->setEnabled(true);
 		std::multimap<int, rtabmap::Link> links = updateLinksWithModifications(links_);
-		std::map<int, int> depthGraph = util3d::generateDepthGraph(links, ui_->spinBox_optimizationsFrom->value(), 0);
-		util3d::optimizeTOROGraph(
+		std::map<int, int> depthGraph = rtabmap::graph::generateDepthGraph(links, ui_->spinBox_optimizationsFrom->value(), 0);
+		rtabmap::graph::optimizeTOROGraph(
 				depthGraph,
 				poses_,
 				links, finalPoses,
@@ -1813,21 +1818,21 @@ void DatabaseViewer::updateGraphView()
 Link DatabaseViewer::findActiveLink(int from, int to)
 {
 	Link link;
-	std::multimap<int, Link>::iterator findIter = util3d::findLink(linksRefined_, from ,to);
+	std::multimap<int, Link>::iterator findIter = rtabmap::graph::findLink(linksRefined_, from ,to);
 	if(findIter != linksRefined_.end())
 	{
 		link = findIter->second;
 	}
 	else
 	{
-		findIter = util3d::findLink(linksAdded_, from ,to);
+		findIter = rtabmap::graph::findLink(linksAdded_, from ,to);
 		if(findIter != linksAdded_.end())
 		{
 			link = findIter->second;
 		}
 		else if(!containsLink(linksRemoved_, from ,to))
 		{
-			findIter = util3d::findLink(links_, from ,to);
+			findIter = rtabmap::graph::findLink(links_, from ,to);
 			if(findIter != links_.end())
 			{
 				link = findIter->second;
@@ -1839,7 +1844,7 @@ Link DatabaseViewer::findActiveLink(int from, int to)
 
 bool DatabaseViewer::containsLink(std::multimap<int, Link> & links, int from, int to)
 {
-	return util3d::findLink(links, from, to) != links.end();
+	return rtabmap::graph::findLink(links, from, to) != links.end();
 }
 
 void DatabaseViewer::refineConstraint()
@@ -1897,8 +1902,8 @@ void DatabaseViewer::refineConstraint(int from, int to, bool updateGraph)
 	if(ui_->checkBox_icp_2d->isChecked())
 	{
 		//2D
-		cv::Mat oldLaserScan = util3d::uncompressData(dataFrom.getLaserScanCompressed());
-		cv::Mat newLaserScan = util3d::uncompressData(dataTo.getLaserScanCompressed());
+		cv::Mat oldLaserScan = rtabmap::uncompressData(dataFrom.getLaserScanCompressed());
+		cv::Mat newLaserScan = rtabmap::uncompressData(dataTo.getLaserScanCompressed());
 
 		if(!oldLaserScan.empty() && !newLaserScan.empty())
 		{
@@ -1928,13 +1933,13 @@ void DatabaseViewer::refineConstraint(int from, int to, bool updateGraph)
 	else
 	{
 		//3D
-		cv::Mat depthA = rtabmap::util3d::uncompressImage(dataFrom.getDepthCompressed());
-		cv::Mat depthB = rtabmap::util3d::uncompressImage(dataTo.getDepthCompressed());
+		cv::Mat depthA = rtabmap::uncompressImage(dataFrom.getDepthCompressed());
+		cv::Mat depthB = rtabmap::uncompressImage(dataTo.getDepthCompressed());
 
 		if(depthA.type() == CV_8UC1)
 		{
 			cv::Mat leftMono;
-			cv::Mat left = rtabmap::util3d::uncompressImage(dataFrom.getImageCompressed());
+			cv::Mat left = rtabmap::uncompressImage(dataFrom.getImageCompressed());
 			if(left.channels() > 1)
 			{
 				cv::cvtColor(left, leftMono, CV_BGR2GRAY);
@@ -1967,7 +1972,7 @@ void DatabaseViewer::refineConstraint(int from, int to, bool updateGraph)
 		if(depthB.type() == CV_8UC1)
 		{
 			cv::Mat leftMono;
-			cv::Mat left = rtabmap::util3d::uncompressImage(dataTo.getImageCompressed());
+			cv::Mat left = rtabmap::uncompressImage(dataTo.getImageCompressed());
 			if(left.channels() > 1)
 			{
 				cv::cvtColor(left, leftMono, CV_BGR2GRAY);
@@ -2266,7 +2271,7 @@ bool DatabaseViewer::addConstraint(int from, int to, bool silent, bool updateGra
 				// We are 2D here, make sure the guess has only YAW rotation
 				float x,y,z,r,p,yaw;
 				t.getTranslationAndEulerAngles(x,y,z, r,p,yaw);
-				t = util3d::transformFromEigen3f(pcl::getTransformation(x,y,0, 0, 0, yaw));
+				t = Transform::fromEigen3f(pcl::getTransformation(x,y,0, 0, 0, yaw));
 			}
 
 			// transform is valid, make a link
@@ -2277,7 +2282,7 @@ bool DatabaseViewer::addConstraint(int from, int to, bool silent, bool updateGra
 	else if(containsLink(linksRemoved_, from, to))
 	{
 		//simply remove from linksRemoved
-		linksRemoved_.erase(util3d::findLink(linksRemoved_, from, to));
+		linksRemoved_.erase(rtabmap::graph::findLink(linksRemoved_, from, to));
 		updateSlider = true;
 	}
 
@@ -2310,19 +2315,19 @@ void DatabaseViewer::resetConstraint()
 	}
 
 
-	std::multimap<int, Link>::iterator iter = util3d::findLink(linksRefined_, from, to);
+	std::multimap<int, Link>::iterator iter = rtabmap::graph::findLink(linksRefined_, from, to);
 	if(iter != linksRefined_.end())
 	{
 		linksRefined_.erase(iter);
 		this->updateGraphView();
 	}
 
-	iter = util3d::findLink(links_, from, to);
+	iter = rtabmap::graph::findLink(links_, from, to);
 	if(iter != links_.end())
 	{
 		this->updateConstraintView(iter->second);
 	}
-	iter = util3d::findLink(linksAdded_, from, to);
+	iter = rtabmap::graph::findLink(linksAdded_, from, to);
 	if(iter != linksAdded_.end())
 	{
 		this->updateConstraintView(iter->second);
@@ -2350,7 +2355,7 @@ void DatabaseViewer::rejectConstraint()
 
 	// find the original one
 	std::multimap<int, Link>::iterator iter;
-	iter = util3d::findLink(links_, from, to);
+	iter = rtabmap::graph::findLink(links_, from, to);
 	if(iter != links_.end())
 	{
 		if(iter->second.type() == Link::kNeighbor)
@@ -2363,13 +2368,13 @@ void DatabaseViewer::rejectConstraint()
 	}
 
 	// remove from refined and added
-	iter = util3d::findLink(linksRefined_, from, to);
+	iter = rtabmap::graph::findLink(linksRefined_, from, to);
 	if(iter != linksRefined_.end())
 	{
 		linksRefined_.erase(iter);
 		removed = true;
 	}
-	iter = util3d::findLink(linksAdded_, from, to);
+	iter = rtabmap::graph::findLink(linksAdded_, from, to);
 	if(iter != linksAdded_.end())
 	{
 		linksAdded_.erase(iter);
@@ -2392,7 +2397,7 @@ std::multimap<int, rtabmap::Link> DatabaseViewer::updateLinksWithModifications(
 	{
 		std::multimap<int, rtabmap::Link>::iterator findIter;
 
-		findIter = util3d::findLink(linksRemoved_, iter->second.from(), iter->second.to());
+		findIter = rtabmap::graph::findLink(linksRemoved_, iter->second.from(), iter->second.to());
 		if(findIter != linksRemoved_.end())
 		{
 			if(!(iter->second.from() == findIter->second.from() &&
@@ -2410,7 +2415,7 @@ std::multimap<int, rtabmap::Link> DatabaseViewer::updateLinksWithModifications(
 			}
 		}
 
-		findIter = util3d::findLink(linksRefined_, iter->second.from(), iter->second.to());
+		findIter = rtabmap::graph::findLink(linksRefined_, iter->second.from(), iter->second.to());
 		if(findIter!=linksRefined_.end())
 		{
 			if(iter->second.from() == findIter->second.from() &&
@@ -2488,7 +2493,7 @@ void DatabaseViewer::updateLoopClosuresSlider(int from, int to)
 	{
 		ui_->horizontalSlider_loops->setEnabled(false);
 		ui_->constraintsViewer->removeAllClouds();
-		ui_->constraintsViewer->render();
+		ui_->constraintsViewer->update();
 		updateConstraintButtons();
 	}
 }

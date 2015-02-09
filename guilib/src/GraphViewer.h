@@ -44,6 +44,9 @@ class NodeItem;
 class LinkItem;
 
 class GraphViewer : public QGraphicsView {
+
+	Q_OBJECT;
+
 public:
 	GraphViewer(QWidget * parent = 0);
 	virtual ~GraphViewer();
@@ -52,12 +55,43 @@ public:
 					 const std::multimap<int, Link> & constraints);
 	void updateMap(const cv::Mat & map8U, float resolution, float xMin, float yMin);
 	void updatePosterior(const std::map<int, float> & posterior);
+	void updateLocalPath(const std::vector<int> & localPath);
 	void clearGraph();
 	void clearMap();
 	void clearPosterior();
 	void clearAll();
 
-	void setWorkingDirectory(const QString & path) {_workingDirectory = path;}
+	//getters
+	const QString & getWorkingDirectory() const {return _workingDirectory;}
+	float getNodeRadius() const {return _nodeRadius;}
+	float getLinkWidth() const {return _linkWidth;}
+	const QColor & getNodeColor() const {return _nodeColor;}
+	const QColor & getNeighborColor() const {return _neighborColor;}
+	const QColor & getGlobalLoopClosureColor() const {return _loopClosureColor;}
+	const QColor & getLocalLoopClosureColor() const {return _loopClosureLocalColor;}
+	const QColor & getUserLoopClosureColor() const {return _loopClosureUserColor;}
+	const QColor & getVirtualLoopClosureColor() const {return _loopClosureVirtualColor;}
+	const QColor & getLocalPathColor() const {return _pathColor;}
+	bool isGridMapVisible() const;
+
+	// setters
+	void setWorkingDirectory(const QString & path);
+	void setNodeRadius(float radius);
+	void setLinkWidth(float width);
+	void setNodeColor(const QColor & color);
+	void setNeighborColor(const QColor & color);
+	void setGlobalLoopClosureColor(const QColor & color);
+	void setLocalLoopClosureColor(const QColor & color);
+	void setUserLoopClosureColor(const QColor & color);
+	void setVirtualLoopClosureColor(const QColor & color);
+	void setLocalPathColor(const QColor & color);
+	void setGridMapVisible(bool visible);
+
+signals:
+	void configChanged();
+
+public slots:
+	void restoreDefaults();
 
 protected:
 	virtual void wheelEvent ( QWheelEvent * event );
@@ -68,10 +102,13 @@ private:
 	QColor _nodeColor;
 	QColor _neighborColor;
 	QColor _loopClosureColor;
+	QColor _loopClosureLocalColor;
+	QColor _loopClosureUserColor;
+	QColor _loopClosureVirtualColor;
+	QColor _pathColor;
 	QGraphicsItem * _root;
 	QMap<int, NodeItem*> _nodeItems;
-	QMultiMap<int, LinkItem*> _neighborLinkItems;
-	QMultiMap<int, LinkItem*> _loopLinkItems;
+	QMultiMap<int, LinkItem*> _linkItems;
 	float _nodeRadius;
 	float _linkWidth;
 	QGraphicsPixmapItem * _gridMap;
