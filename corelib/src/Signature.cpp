@@ -28,7 +28,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/core/Signature.h"
 #include "rtabmap/core/EpipolarGeometry.h"
 #include "rtabmap/core/Memory.h"
-#include "rtabmap/core/util3d.h"
+#include "rtabmap/core/Compression.h"
 #include <opencv2/highgui/highgui.hpp>
 
 #include <rtabmap/utilite/UtiLite.h>
@@ -146,6 +146,21 @@ void Signature::removeLink(int idTo)
 	if(count)
 	{
 		_linksModified = true;
+	}
+}
+
+void Signature::removeVirtualLinks()
+{
+	for(std::map<int, Link>::iterator iter=_links.begin(); iter!=_links.end();)
+	{
+		if(iter->second.type() == Link::kVirtualClosure)
+		{
+			_links.erase(iter++);
+		}
+		else
+		{
+			++iter;
+		}
 	}
 }
 
@@ -283,9 +298,9 @@ void Signature::uncompressDataConst(cv::Mat * imageRaw, cv::Mat * depthRaw, cv::
 		(depthRaw && depthRaw->empty()) ||
 		(laserScanRaw && laserScanRaw->empty()))
 	{
-		util3d::CompressionThread ctImage(_imageCompressed, true);
-		util3d::CompressionThread ctDepth(_depthCompressed, true);
-		util3d::CompressionThread ctLaserScan(_laserScanCompressed, false);
+		rtabmap::CompressionThread ctImage(_imageCompressed, true);
+		rtabmap::CompressionThread ctDepth(_depthCompressed, true);
+		rtabmap::CompressionThread ctLaserScan(_laserScanCompressed, false);
 		if(imageRaw && imageRaw->empty())
 		{
 			ctImage.start();
