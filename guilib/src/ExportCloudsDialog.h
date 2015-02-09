@@ -31,6 +31,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <QtGui/QDialog>
 
 class Ui_ExportCloudsDialog;
+class QAbstractButton;
 
 namespace rtabmap {
 
@@ -45,7 +46,9 @@ public:
 
 	void setSaveButton();
 	void setOkButton();
+	void enableRegeneration(bool enabled);
 
+	//getters
 	bool getAssemble() const;
 	double getAssembleVoxel() const;
 	bool getGenerate() const;
@@ -58,6 +61,26 @@ public:
 	bool getMesh() const;
 	int getMeshNormalKSearch() const;
 	double getMeshGp3Radius() const;
+
+	//setters
+	void setAssemble(bool on);
+	void setAssembleVoxel(double voxel);
+	void setGenerate(bool on);
+	void setGenerateDecimation(int decimation);
+	void setGenerateVoxel(double voxel);
+	void setGenerateMaxDepth(double maxDepth);
+	void setBinaryFile(bool on);
+	void setMLS(bool on);
+	void setMLSRadius(double radius);
+	void setMesh(bool on);
+	void setMeshNormalKSearch(int k);
+	void setMeshGp3Radius(double radius);
+
+signals:
+	void configChanged();
+
+public slots:
+	void restoreDefaults();
 
 private:
 	Ui_ExportCloudsDialog * _ui;

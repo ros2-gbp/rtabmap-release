@@ -53,10 +53,11 @@ public:
 
 	void resetZoom();
 
-	bool isImageShown();
-	bool isImageDepthShown();
-	bool isFeaturesShown();
-	bool isLinesShown();
+	bool isImageShown() const;
+	bool isImageDepthShown() const;
+	bool isFeaturesShown() const;
+	bool isLinesShown() const;
+	int getAlpha() const {return _alpha;}
 
 	void setFeaturesShown(bool shown);
 	void setImageShown(bool shown);
@@ -69,11 +70,15 @@ public:
 	void setImageDepth(const QImage & image);
 	void setFeatureColor(int id, const QColor & color);
 	void setFeaturesColor(const QColor & color);
+	void setAlpha(int alpha);
 
 	const QMultiMap<int, rtabmap::KeypointItem *> & getFeatures() const {return _features;}
 
 	void clearLines();
 	void clear();
+
+signals:
+	void configChanged();
 
 protected:
 	virtual void contextMenuEvent(QContextMenuEvent * e);
@@ -89,6 +94,7 @@ private:
 	int _zoom;
 	int _minZoom;
 	QString _savedFileName;
+	int _alpha;
 
 	QMenu * _menu;
 	QAction * _showImage;
@@ -96,6 +102,7 @@ private:
 	QAction * _showFeatures;
 	QAction * _showLines;
 	QAction * _saveImage;
+	QAction * _setAlpha;
 
 	QMultiMap<int, rtabmap::KeypointItem *> _features;
 	QGraphicsPixmapItem * _image;

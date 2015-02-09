@@ -34,6 +34,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <QtCore/QDir>
 #include <QtCore/QTimer>
 
+#include <QtGui/QVector3D>
 #include <QtGui/QFileDialog>
 #include <QtGui/QMessageBox>
 #include <QtGui/QStandardItemModel>
@@ -56,6 +57,11 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "rtabmap/gui/LoopClosureViewer.h"
 #include "rtabmap/gui/DataRecorder.h"
+#include "rtabmap/gui/CloudViewer.h"
+#include "rtabmap/gui/ImageView.h"
+#include "GraphViewer.h"
+#include "ExportCloudsDialog.h"
+#include "PostProcessingDialog.h"
 
 #include <rtabmap/utilite/ULogger.h>
 #include <rtabmap/utilite/UConversion.h>
@@ -147,11 +153,9 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	// General panel
 	connect(_ui->general_checkBox_imagesKept, SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteGeneralPanel()));
 	connect(_ui->checkBox_verticalLayoutUsed, SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteGeneralPanel()));
-	connect(_ui->checkBox_imageFlipped, SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteGeneralPanel()));
 	connect(_ui->checkBox_imageRejectedShown, SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteGeneralPanel()));
 	connect(_ui->checkBox_imageHighestHypShown, SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteGeneralPanel()));
 	connect(_ui->checkBox_beep, SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteGeneralPanel()));
-	connect(_ui->horizontalSlider_keypointsOpacity, SIGNAL(valueChanged(int)), this, SLOT(makeObsoleteGeneralPanel()));
 	connect(_ui->spinBox_odomQualityWarnThr, SIGNAL(valueChanged(int)), this, SLOT(makeObsoleteGeneralPanel()));
 	connect(_ui->checkBox_posteriorGraphView, SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteGeneralPanel()));
 
@@ -327,6 +331,7 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 
 	// Memory
 	_ui->general_checkBox_keepRawData->setObjectName(Parameters::kMemImageKept().c_str());
+	_ui->general_checkBox_keepBinaryData->setObjectName(Parameters::kMemBinDataKept().c_str());
 	_ui->general_checkBox_keepRehearsedNodes->setObjectName(Parameters::kMemRehearsedNodesKept().c_str());
 	_ui->general_spinBox_maxStMemSize->setObjectName(Parameters::kMemSTMSize().c_str());
 	_ui->doubleSpinBox_similarityThreshold->setObjectName(Parameters::kMemRehearsalSimilarity().c_str());
@@ -444,6 +449,9 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_ui->globalDetection_toroIgnoreVariance->setObjectName(Parameters::kRGBDToroIgnoreVariance().c_str());
 	_ui->globalDetection_optimizeFromGraphEnd->setObjectName(Parameters::kRGBDOptimizeFromGraphEnd().c_str());
 
+	_ui->graphPlan_goalReachedRadius->setObjectName(Parameters::kRGBDGoalReachedRadius().c_str());
+	_ui->graphPlan_maxAnticipatedNodes->setObjectName(Parameters::kRGBDMaxAnticipatedNodes().c_str());
+
 	_ui->groupBox_localDetection_time->setObjectName(Parameters::kRGBDLocalLoopDetectionTime().c_str());
 	_ui->groupBox_localDetection_space->setObjectName(Parameters::kRGBDLocalLoopDetectionSpace().c_str());
 	_ui->localDetection_radius->setObjectName(Parameters::kRGBDLocalLoopDetectionRadius().c_str());
@@ -537,7 +545,6 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 }
 
 PreferencesDialog::~PreferencesDialog() {
-	this->saveWindowGeometry("PreferencesDialog", this);
 	delete _ui;
 }
 
@@ -552,8 +559,6 @@ void PreferencesDialog::init()
 
 	this->readSettings();
 	this->writeSettings();// This will create the ini file if not exist
-
-	this->loadWindowGeometry("PreferencesDialog", this);
 
 	_initialized = true;
 }
@@ -814,10 +819,8 @@ void PreferencesDialog::resetSettings(QGroupBox * groupBox)
 		_ui->general_checkBox_imagesKept->setChecked(true);
 		_ui->checkBox_beep->setChecked(false);
 		_ui->checkBox_verticalLayoutUsed->setChecked(true);
-		_ui->checkBox_imageFlipped->setChecked(false);
 		_ui->checkBox_imageRejectedShown->setChecked(true);
 		_ui->checkBox_imageHighestHypShown->setChecked(false);
-		_ui->horizontalSlider_keypointsOpacity->setSliderPosition(20);
 		_ui->spinBox_odomQualityWarnThr->setValue(50);
 		_ui->checkBox_posteriorGraphView->setChecked(true);
 	}
@@ -853,7 +856,7 @@ void PreferencesDialog::resetSettings(QGroupBox * groupBox)
 		_ui->doubleSpinBox_map_resolution->setValue(0.05);
 		_ui->checkBox_map_fillEmptySpace->setChecked(true);
 		_ui->checkBox_map_occupancyFrom3DCloud->setChecked(false);
-		_ui->spinbox_map_fillEmptyRadius->setValue(0);
+		_ui->spinbox_map_fillEmptyRadius->setValue(1);
 		_ui->doubleSpinBox_map_opacity->setValue(0.75);
 	}
 	else if(groupBox->objectName() == _ui->groupBox_logging1->objectName())
@@ -1058,11 +1061,9 @@ void PreferencesDialog::readGuiSettings(const QString & filePath)
 	_ui->comboBox_loggerType->setCurrentIndex(settings.value("loggerType", _ui->comboBox_loggerType->currentIndex()).toInt());
 	_ui->checkBox_logger_printTime->setChecked(settings.value("loggerPrintTime", _ui->checkBox_logger_printTime->isChecked()).toBool());
 	_ui->checkBox_verticalLayoutUsed->setChecked(settings.value("verticalLayoutUsed", _ui->checkBox_verticalLayoutUsed->isChecked()).toBool());
-	_ui->checkBox_imageFlipped->setChecked(settings.value("imageFlipped", _ui->checkBox_imageFlipped->isChecked()).toBool());
 	_ui->checkBox_imageRejectedShown->setChecked(settings.value("imageRejectedShown", _ui->checkBox_imageRejectedShown->isChecked()).toBool());
 	_ui->checkBox_imageHighestHypShown->setChecked(settings.value("imageHighestHypShown", _ui->checkBox_imageHighestHypShown->isChecked()).toBool());
 	_ui->checkBox_beep->setChecked(settings.value("beep", _ui->checkBox_beep->isChecked()).toBool());
-	_ui->horizontalSlider_keypointsOpacity->setValue(settings.value("keypointsOpacity", _ui->horizontalSlider_keypointsOpacity->value()).toInt());
 	_ui->spinBox_odomQualityWarnThr->setValue(settings.value("odomQualityThr", _ui->spinBox_odomQualityWarnThr->value()).toInt());
 	_ui->checkBox_posteriorGraphView->setChecked(settings.value("posteriorGraphView", _ui->checkBox_posteriorGraphView->isChecked()).toBool());
 
@@ -1309,11 +1310,9 @@ void PreferencesDialog::writeGuiSettings(const QString & filePath)
 	settings.setValue("loggerType", _ui->comboBox_loggerType->currentIndex());
 	settings.setValue("loggerPrintTime", _ui->checkBox_logger_printTime->isChecked());
 	settings.setValue("verticalLayoutUsed", _ui->checkBox_verticalLayoutUsed->isChecked());
-	settings.setValue("imageFlipped", _ui->checkBox_imageFlipped->isChecked());
 	settings.setValue("imageRejectedShown", _ui->checkBox_imageRejectedShown->isChecked());
 	settings.setValue("imageHighestHypShown", _ui->checkBox_imageHighestHypShown->isChecked());
 	settings.setValue("beep", _ui->checkBox_beep->isChecked());
-	settings.setValue("keypointsOpacity", _ui->horizontalSlider_keypointsOpacity->value());
 	settings.setValue("odomQualityThr", _ui->spinBox_odomQualityWarnThr->value());
 	settings.setValue("posteriorGraphView", _ui->checkBox_posteriorGraphView->isChecked());
 
@@ -1632,59 +1631,281 @@ void PreferencesDialog::readSettingsEnd()
 	_progressDialog->setValue(2); // this will make closing...
 }
 
-void PreferencesDialog::saveWindowGeometry(const QString & windowName, const QWidget * window)
+void PreferencesDialog::saveWindowGeometry(const QWidget * window)
 {
-	QSettings settings(getIniFilePath(), QSettings::IniFormat);
-	settings.beginGroup("Gui");
-	settings.beginGroup(windowName);
-	settings.setValue("geometry", window->saveGeometry());
-	settings.endGroup(); // "windowName"
-	settings.endGroup(); // rtabmap
+	if(!window->objectName().isNull() && !window->isMaximized())
+	{
+		QSettings settings(getIniFilePath(), QSettings::IniFormat);
+		settings.beginGroup("Gui");
+		settings.beginGroup(window->objectName());
+		settings.setValue("geometry", window->saveGeometry());
+		settings.endGroup(); // "windowName"
+		settings.endGroup(); // rtabmap
+	}
 }
 
-void PreferencesDialog::loadWindowGeometry(const QString & windowName, QWidget * window)
+void PreferencesDialog::loadWindowGeometry(QWidget * window)
 {
-	QByteArray bytes;
-	QSettings settings(getIniFilePath(), QSettings::IniFormat);
-	settings.beginGroup("Gui");
-	settings.beginGroup(windowName);
-	bytes = settings.value("geometry", QByteArray()).toByteArray();
-	if(!bytes.isEmpty())
+	if(!window->objectName().isNull())
 	{
-		window->restoreGeometry(bytes);
+		QByteArray bytes;
+		QSettings settings(getIniFilePath(), QSettings::IniFormat);
+		settings.beginGroup("Gui");
+		settings.beginGroup(window->objectName());
+		bytes = settings.value("geometry", QByteArray()).toByteArray();
+		if(!bytes.isEmpty())
+		{
+			window->restoreGeometry(bytes);
+		}
+		settings.endGroup(); // "windowName"
+		settings.endGroup(); // rtabmap
 	}
-	settings.endGroup(); // "windowName"
-	settings.endGroup(); // rtabmap
 }
 
 void PreferencesDialog::saveMainWindowState(const QMainWindow * mainWindow)
 {
-	QSettings settings(getIniFilePath(), QSettings::IniFormat);
-	settings.beginGroup("Gui");
-	settings.beginGroup("MainWindow");
-	settings.setValue("state", mainWindow->saveState());
-	settings.endGroup(); // "MainWindow"
-	settings.endGroup(); // rtabmap
-
-	saveWindowGeometry("MainWindow", mainWindow);
-}
-
-void PreferencesDialog::loadMainWindowState(QMainWindow * mainWindow)
-{
-	QByteArray bytes;
-	QSettings settings(getIniFilePath(), QSettings::IniFormat);
-	settings.beginGroup("Gui");
-	settings.beginGroup("MainWindow");
-	bytes = settings.value("state", QByteArray()).toByteArray();
-	if(!bytes.isEmpty())
+	if(!mainWindow->objectName().isNull())
 	{
-		mainWindow->restoreState(bytes);
-	}
-	settings.endGroup(); // "MainWindow"
-	settings.endGroup(); // rtabmap
+		saveWindowGeometry(mainWindow);
 
-	loadWindowGeometry("MainWindow", mainWindow);
+		QSettings settings(getIniFilePath(), QSettings::IniFormat);
+		settings.beginGroup("Gui");
+		settings.beginGroup(mainWindow->objectName());
+		settings.setValue("state", mainWindow->saveState());
+		settings.setValue("maximized", mainWindow->isMaximized());
+		settings.endGroup(); // "MainWindow"
+		settings.endGroup(); // rtabmap
+	}
 }
+
+void PreferencesDialog::loadMainWindowState(QMainWindow * mainWindow,  bool & maximized)
+{
+	if(!mainWindow->objectName().isNull())
+	{
+		loadWindowGeometry(mainWindow);
+
+		QByteArray bytes;
+		QSettings settings(getIniFilePath(), QSettings::IniFormat);
+		settings.beginGroup("Gui");
+		settings.beginGroup(mainWindow->objectName());
+		bytes = settings.value("state", QByteArray()).toByteArray();
+		if(!bytes.isEmpty())
+		{
+			mainWindow->restoreState(bytes);
+		}
+		maximized = settings.value("maximized", false).toBool();
+		settings.endGroup(); // "MainWindow"
+		settings.endGroup(); // rtabmap
+	}
+}
+
+void PreferencesDialog::saveWidgetState(const QWidget * widget)
+{
+	if(!widget->objectName().isNull())
+	{
+		QSettings settings(getIniFilePath(), QSettings::IniFormat);
+		settings.beginGroup("Gui");
+		settings.beginGroup(widget->objectName());
+
+		const CloudViewer * cloudViewer = qobject_cast<const CloudViewer*>(widget);
+		const ImageView * imageView = qobject_cast<const ImageView*>(widget);
+		const ExportCloudsDialog * exportCloudsDialog = qobject_cast<const ExportCloudsDialog*>(widget);
+		const PostProcessingDialog * postProcessingDialog = qobject_cast<const PostProcessingDialog *>(widget);
+		const GraphViewer * graphViewer = qobject_cast<const GraphViewer *>(widget);
+
+		if(cloudViewer)
+		{
+			float poseX, poseY, poseZ, focalX, focalY, focalZ, upX, upY, upZ;
+			cloudViewer->getCameraPosition(poseX, poseY, poseZ, focalX, focalY, focalZ, upX, upY, upZ);
+			QVector3D pose(poseX, poseY, poseZ);
+			QVector3D focal(focalX, focalY, focalZ);
+			if(!cloudViewer->isCameraFree())
+			{
+				// make camera position relative to target
+				Transform T = cloudViewer->getTargetPose();
+				if(cloudViewer->isCameraTargetLocked())
+				{
+					T = Transform(T.x(), T.y(), T.z(), 0,0,0);
+				}
+				Transform F(focalX, focalY, focalZ, 0,0,0);
+				Transform P(poseX, poseY, poseZ, 0,0,0);
+				Transform newFocal = T.inverse() * F;
+				Transform newPose = newFocal * F.inverse() * P;
+				pose = QVector3D(newPose.x(), newPose.y(), newPose.z());
+				focal = QVector3D(newFocal.x(), newFocal.y(), newFocal.z());
+			}
+			settings.setValue("camera_pose", pose);
+			settings.setValue("camera_focal", focal);
+			settings.setValue("camera_up", QVector3D(upX, upY, upZ));
+
+			settings.setValue("grid", cloudViewer->isGridShown());
+			settings.setValue("grid_cell_count", cloudViewer->getGridCellCount());
+			settings.setValue("grid_cell_size", cloudViewer->getGridCellSize());
+
+			settings.setValue("trajectory_shown", cloudViewer->isTrajectoryShown());
+			settings.setValue("trajectory_size", cloudViewer->getTrajectorySize());
+
+			settings.setValue("camera_target_locked", cloudViewer->isCameraTargetLocked());
+			settings.setValue("camera_target_follow", cloudViewer->isCameraTargetFollow());
+			settings.setValue("camera_free", cloudViewer->isCameraFree());
+			settings.setValue("camera_lockZ", cloudViewer->isCameraLockZ());
+
+			settings.setValue("bg_color", cloudViewer->getBackgroundColor());
+		}
+		else if(imageView)
+		{
+			settings.setValue("image_shown", imageView->isImageShown());
+			settings.setValue("depth_shown", imageView->isImageDepthShown());
+			settings.setValue("features_shown", imageView->isFeaturesShown());
+			settings.setValue("lines_shown", imageView->isLinesShown());
+			settings.setValue("alpha", imageView->getAlpha());
+		}
+		else if(exportCloudsDialog)
+		{
+			settings.setValue("assemble", exportCloudsDialog->getAssemble());
+			settings.setValue("assemble_voxel", exportCloudsDialog->getAssembleVoxel());
+			settings.setValue("regenerate", exportCloudsDialog->getGenerate());
+			settings.setValue("regenerate_decimation", exportCloudsDialog->getGenerateDecimation());
+			settings.setValue("regenerate_voxel", exportCloudsDialog->getGenerateVoxel());
+			settings.setValue("regenerate_max_depth", exportCloudsDialog->getGenerateMaxDepth());
+			settings.setValue("binary", exportCloudsDialog->getBinaryFile());
+			settings.setValue("mls", exportCloudsDialog->getMLS());
+			settings.setValue("mls_radius", exportCloudsDialog->getMLSRadius());
+			settings.setValue("mesh", exportCloudsDialog->getMesh());
+			settings.setValue("mesh_k", exportCloudsDialog->getMeshNormalKSearch());
+			settings.setValue("mesh_radius", exportCloudsDialog->getMeshGp3Radius());
+		}
+		else if(postProcessingDialog)
+		{
+			settings.setValue("detect_more_lc", postProcessingDialog->isDetectMoreLoopClosures());
+			settings.setValue("cluster_radius", postProcessingDialog->clusterRadius());
+			settings.setValue("cluster_angle", postProcessingDialog->clusterAngle());
+			settings.setValue("iterations", postProcessingDialog->iterations());
+			settings.setValue("reextract_features", postProcessingDialog->isReextractFeatures());
+			settings.setValue("refine_neigbors", postProcessingDialog->isRefineNeighborLinks());
+			settings.setValue("refine_lc", postProcessingDialog->isRefineLoopClosureLinks());
+		}
+		else if(graphViewer)
+		{
+			settings.setValue("node_radius", graphViewer->getNodeRadius());
+			settings.setValue("link_width", graphViewer->getLinkWidth());
+			settings.setValue("node_color", graphViewer->getNodeColor());
+			settings.setValue("neighbor_color", graphViewer->getNeighborColor());
+			settings.setValue("global_color", graphViewer->getGlobalLoopClosureColor());
+			settings.setValue("local_color", graphViewer->getLocalLoopClosureColor());
+			settings.setValue("user_color", graphViewer->getUserLoopClosureColor());
+			settings.setValue("virtual_color", graphViewer->getVirtualLoopClosureColor());
+			settings.setValue("local_path_color", graphViewer->getLocalPathColor());
+			settings.setValue("grid_visible", graphViewer->isGridMapVisible());
+		}
+		else
+		{
+			UERROR("Widget \"%s\" cannot be exported in config file.", widget->objectName().toStdString().c_str());
+		}
+
+		settings.endGroup(); // "name"
+		settings.endGroup(); // Gui
+	}
+}
+
+void PreferencesDialog::loadWidgetState(QWidget * widget)
+{
+	if(!widget->objectName().isNull())
+	{
+		QByteArray bytes;
+		QSettings settings(getIniFilePath(), QSettings::IniFormat);
+		settings.beginGroup("Gui");
+		settings.beginGroup(widget->objectName());
+
+		CloudViewer * cloudViewer = qobject_cast<CloudViewer*>(widget);
+		ImageView * imageView = qobject_cast<ImageView*>(widget);
+		ExportCloudsDialog * exportCloudsDialog = qobject_cast<ExportCloudsDialog*>(widget);
+		PostProcessingDialog * postProcessingDialog = qobject_cast<PostProcessingDialog *>(widget);
+		GraphViewer * graphViewer = qobject_cast<GraphViewer *>(widget);
+
+		if(cloudViewer)
+		{
+			float poseX, poseY, poseZ, focalX, focalY, focalZ, upX, upY, upZ;
+			cloudViewer->getCameraPosition(poseX, poseY, poseZ, focalX, focalY, focalZ, upX, upY, upZ);
+			QVector3D pose(poseX, poseY, poseZ), focal(focalX, focalY, focalZ), up(upX, upY, upZ);
+			pose = settings.value("camera_pose", pose).value<QVector3D>();
+			focal = settings.value("camera_focal", focal).value<QVector3D>();
+			up = settings.value("camera_up", up).value<QVector3D>();
+			cloudViewer->setCameraPosition(pose.x(),pose.y(),pose.z(), focal.x(),focal.y(),focal.z(), up.x(),up.y(),up.z());
+
+			cloudViewer->setGridShown(settings.value("grid", cloudViewer->isGridShown()).toBool());
+			cloudViewer->setGridCellCount(settings.value("grid_cell_count", cloudViewer->getGridCellCount()).toUInt());
+			cloudViewer->setGridCellSize(settings.value("grid_cell_size", cloudViewer->getGridCellSize()).toFloat());
+
+			cloudViewer->setTrajectoryShown(settings.value("trajectory_shown", cloudViewer->isTrajectoryShown()).toBool());
+			cloudViewer->setTrajectorySize(settings.value("trajectory_size", cloudViewer->getTrajectorySize()).toUInt());
+
+			cloudViewer->setCameraTargetLocked(settings.value("camera_target_locked", cloudViewer->isCameraTargetLocked()).toBool());
+			cloudViewer->setCameraTargetFollow(settings.value("camera_target_follow", cloudViewer->isCameraTargetFollow()).toBool());
+			if(settings.value("camera_free", cloudViewer->isCameraFree()).toBool())
+			{
+				cloudViewer->setCameraFree();
+			}
+			cloudViewer->setCameraLockZ(settings.value("camera_lockZ", cloudViewer->isCameraLockZ()).toBool());
+
+			cloudViewer->setBackgroundColor(settings.value("bg_color", cloudViewer->getBackgroundColor()).value<QColor>());
+		}
+		else if(imageView)
+		{
+			imageView->setImageShown(settings.value("image_shown", imageView->isImageShown()).toBool());
+			imageView->setImageDepthShown(settings.value("depth_shown", imageView->isImageDepthShown()).toBool());
+			imageView->setFeaturesShown(settings.value("features_shown", imageView->isFeaturesShown()).toBool());
+			imageView->setLinesShown(settings.value("lines_shown", imageView->isLinesShown()).toBool());
+			imageView->setAlpha(settings.value("alpha", imageView->getAlpha()).toInt());
+		}
+		else if(exportCloudsDialog)
+		{
+			exportCloudsDialog->setAssemble(settings.value("assemble", exportCloudsDialog->getAssemble()).toBool());
+			exportCloudsDialog->setAssembleVoxel(settings.value("assemble_voxel", exportCloudsDialog->getAssembleVoxel()).toDouble());
+			exportCloudsDialog->setGenerate(settings.value("regenerate", exportCloudsDialog->getGenerate()).toBool());
+			exportCloudsDialog->setGenerateDecimation(settings.value("regenerate_decimation", exportCloudsDialog->getGenerateDecimation()).toInt());
+			exportCloudsDialog->setGenerateVoxel(settings.value("regenerate_voxel", exportCloudsDialog->getGenerateVoxel()).toDouble());
+			exportCloudsDialog->setGenerateMaxDepth(settings.value("regenerate_max_depth", exportCloudsDialog->getGenerateMaxDepth()).toDouble());
+			exportCloudsDialog->setBinaryFile(settings.value("binary", exportCloudsDialog->getBinaryFile()).toBool());
+			exportCloudsDialog->setMLS(settings.value("mls", exportCloudsDialog->getMLS()).toBool());
+			exportCloudsDialog->setMLSRadius(settings.value("mls_radius", exportCloudsDialog->getMLSRadius()).toDouble());
+			exportCloudsDialog->setMesh(settings.value("mesh", exportCloudsDialog->getMesh()).toBool());
+			exportCloudsDialog->setMeshNormalKSearch(settings.value("mesh_k", exportCloudsDialog->getMeshNormalKSearch()).toInt());
+			exportCloudsDialog->setMeshGp3Radius(settings.value("mesh_radius", exportCloudsDialog->getMeshGp3Radius()).toDouble());
+		}
+		else if(postProcessingDialog)
+		{
+			postProcessingDialog->setDetectMoreLoopClosures(settings.value("detect_more_lc", postProcessingDialog->isDetectMoreLoopClosures()).toBool());
+			postProcessingDialog->setClusterRadius(settings.value("cluster_radius", postProcessingDialog->clusterRadius()).toDouble());
+			postProcessingDialog->setClusterAngle(settings.value("cluster_angle", postProcessingDialog->clusterAngle()).toDouble());
+			postProcessingDialog->setIterations(settings.value("iterations", postProcessingDialog->iterations()).toInt());
+			postProcessingDialog->setReextractFeatures(settings.value("reextract_features", postProcessingDialog->isReextractFeatures()).toBool());
+			postProcessingDialog->setRefineNeighborLinks(settings.value("refine_neigbors", postProcessingDialog->isRefineNeighborLinks()).toBool());
+			postProcessingDialog->setRefineLoopClosureLinks(settings.value("refine_lc", postProcessingDialog->isRefineLoopClosureLinks()).toBool());
+		}
+		else if(graphViewer)
+		{
+			graphViewer->setNodeRadius(settings.value("node_radius", graphViewer->getNodeRadius()).toDouble());
+			graphViewer->setLinkWidth(settings.value("link_width", graphViewer->getLinkWidth()).toDouble());
+			graphViewer->setNodeColor(settings.value("node_color", graphViewer->getNodeColor()).value<QColor>());
+			graphViewer->setNeighborColor(settings.value("neighbor_color", graphViewer->getNeighborColor()).value<QColor>());
+			graphViewer->setGlobalLoopClosureColor(settings.value("global_color", graphViewer->getGlobalLoopClosureColor()).value<QColor>());
+			graphViewer->setLocalLoopClosureColor(settings.value("local_color", graphViewer->getLocalLoopClosureColor()).value<QColor>());
+			graphViewer->setUserLoopClosureColor(settings.value("user_color", graphViewer->getUserLoopClosureColor()).value<QColor>());
+			graphViewer->setVirtualLoopClosureColor(settings.value("virtual_color", graphViewer->getVirtualLoopClosureColor()).value<QColor>());
+			graphViewer->setLocalPathColor(settings.value("local_path_color", graphViewer->getLocalPathColor()).value<QColor>());
+			graphViewer->setGridMapVisible(settings.value("grid_visible", graphViewer->isGridMapVisible()).toBool());
+		}
+		else
+		{
+			UERROR("Widget \"%s\" cannot be loaded from config file.", widget->objectName().toStdString().c_str());
+		}
+
+		settings.endGroup(); //"name"
+		settings.endGroup(); // Gui
+	}
+}
+
 
 void PreferencesDialog::saveCustomConfig(const QString & section, const QString & key, const QString & value)
 {
@@ -1708,22 +1929,9 @@ QString PreferencesDialog::loadCustomConfig(const QString & section, const QStri
 	return value;
 }
 
-void PreferencesDialog::selectSourceImage(Src src)
+void PreferencesDialog::selectSourceImage(Src src, bool ckecked)
 {
 	ULOGGER_DEBUG("");
-
-	if(_ui->general_checkBox_activateRGBD->isChecked())
-	{
-		int button = QMessageBox::information(this,
-				tr("Desactivate RGB-D SLAM?"),
-				tr("You've selected source input as images only and RGB-D SLAM mode is activated. "
-				   "RGB-D SLAM cannot work with images only so do you want to desactivate it?"),
-				QMessageBox::Yes | QMessageBox::No);
-		if(button & QMessageBox::Yes)
-		{
-			_ui->general_checkBox_activateRGBD->setChecked(false);
-		}
-	}
 
 	bool fromPrefDialog = false;
 	//bool modified = false;
@@ -1743,56 +1951,85 @@ void PreferencesDialog::selectSourceImage(Src src)
 			src = kSrcUsbDevice;
 		}
 	}
-	else
-	{
-		// from user
-		_ui->groupBox_sourceImage->setChecked(true);
-	}
 
-	if(src == kSrcImages)
+	if(!fromPrefDialog)
 	{
-		QString path = QFileDialog::getExistingDirectory(this, QString(), _ui->source_images_lineEdit_path->text());
-		QDir dir(path);
-		if(!path.isEmpty() && dir.exists())
+		if(ckecked)
 		{
-			QStringList filters;
-			filters << "*.jpg" << "*.ppm" << "*.bmp" << "*.png" << "*.pnm" << "*.tiff";
-			dir.setNameFilters(filters);
-			QFileInfoList files = dir.entryInfoList();
-			if(!files.empty())
+			if(_ui->general_checkBox_activateRGBD->isChecked())
 			{
-				_ui->source_comboBox_image_type->setCurrentIndex(1);
-				_ui->source_images_lineEdit_path->setText(path);
-				_ui->source_images_spinBox_startPos->setValue(1);
-				_ui->source_images_refreshDir->setChecked(false);
-			}
-			else
-			{
-				QMessageBox::information(this,
-										   tr("RTAB-Map"),
-										   tr("Images must be one of these formats: ") + filters.join(" "));
+				int button = QMessageBox::information(this,
+						tr("Desactivate RGB-D SLAM?"),
+						tr("You've selected source input as images only and RGB-D SLAM mode is activated. "
+						   "RGB-D SLAM cannot work with images only so do you want to desactivate it?"),
+						QMessageBox::Yes | QMessageBox::No);
+				if(button & QMessageBox::Yes)
+				{
+					_ui->general_checkBox_activateRGBD->setChecked(false);
+				}
 			}
 		}
-	}
-	else if(src == kSrcVideo)
-	{
-		QString path = QFileDialog::getOpenFileName(this, tr("Select file"), _ui->source_video_lineEdit_path->text(), tr("Videos (*.avi *.mpg *.mp4)"));
-		QFile file(path);
-		if(!path.isEmpty() && file.exists())
-		{
-			_ui->source_comboBox_image_type->setCurrentIndex(2);
-			_ui->source_video_lineEdit_path->setText(path);
-		}
-	}
-	else // kSrcUsbDevice
-	{
-		_ui->source_comboBox_image_type->setCurrentIndex(0);
+
+		_ui->groupBox_sourceImage->setChecked(false);
 	}
 
-	if(!fromPrefDialog && _obsoletePanels)
+	if(ckecked)
+	{
+		if(src == kSrcImages)
+		{
+			QString path = QFileDialog::getExistingDirectory(this, QString(), _ui->source_images_lineEdit_path->text());
+			QDir dir(path);
+			if(!path.isEmpty() && dir.exists())
+			{
+				QStringList filters;
+				filters << "*.jpg" << "*.ppm" << "*.bmp" << "*.png" << "*.pnm" << "*.tiff";
+				dir.setNameFilters(filters);
+				QFileInfoList files = dir.entryInfoList();
+				if(!files.empty())
+				{
+					_ui->source_comboBox_image_type->setCurrentIndex(1);
+					_ui->source_images_lineEdit_path->setText(path);
+					_ui->source_images_spinBox_startPos->setValue(1);
+					_ui->source_images_refreshDir->setChecked(false);
+					_ui->groupBox_sourceImage->setChecked(true);
+				}
+				else
+				{
+					QMessageBox::information(this,
+											   tr("RTAB-Map"),
+											   tr("Images must be one of these formats: ") + filters.join(" "));
+				}
+			}
+		}
+		else if(src == kSrcVideo)
+		{
+			QString path = QFileDialog::getOpenFileName(this, tr("Select file"), _ui->source_video_lineEdit_path->text(), tr("Videos (*.avi *.mpg *.mp4)"));
+			QFile file(path);
+			if(!path.isEmpty() && file.exists())
+			{
+				_ui->source_comboBox_image_type->setCurrentIndex(2);
+				_ui->source_video_lineEdit_path->setText(path);
+				_ui->groupBox_sourceImage->setChecked(true);
+			}
+		}
+		else // kSrcUsbDevice
+		{
+			_ui->source_comboBox_image_type->setCurrentIndex(0);
+			_ui->groupBox_sourceImage->setChecked(true);
+		}
+	}
+
+	if(_ui->groupBox_sourceImage->isChecked())
 	{
 		_ui->groupBox_sourceDatabase->setChecked(false);
 		_ui->groupBox_sourceOpenni->setChecked(false);
+	}
+
+	if(!fromPrefDialog)
+	{
+		// Even if there is no change, MainWindow should be notified
+		makeObsoleteSourcePanel();
+
 		if(validateForm())
 		{
 			this->writeSettings();
@@ -1804,72 +2041,85 @@ void PreferencesDialog::selectSourceImage(Src src)
 	}
 }
 
-void PreferencesDialog::selectSourceDatabase(bool user)
+void PreferencesDialog::selectSourceDatabase(bool user, bool ckecked)
 {
 	ULOGGER_DEBUG("");
 
-	QString dir = _ui->source_database_lineEdit_path->text();
-	if(dir.isEmpty())
+	if(user)
 	{
-		dir = getWorkingDirectory();
+		_ui->groupBox_sourceDatabase->setChecked(false);
 	}
-	QString path = QFileDialog::getOpenFileName(this, tr("Select file"), dir, tr("RTAB-Map database files (*.db)"));
-	QFile file(path);
-	if(!path.isEmpty() && file.exists())
+
+	if(ckecked)
 	{
-		int r = QMessageBox::question(this, tr("Odometry in database..."), tr("Use odometry saved in database (if some saved)?"), QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
-
-		if(user)
+		QString dir = _ui->source_database_lineEdit_path->text();
+		if(dir.isEmpty())
 		{
-			// from user
-			_ui->groupBox_sourceDatabase->setChecked(true);
+			dir = getWorkingDirectory();
 		}
-
-		_ui->source_checkBox_ignoreOdometry->setChecked(r != QMessageBox::Yes);
-		_ui->source_database_lineEdit_path->setText(path);
-		_ui->source_spinBox_databaseStartPos->setValue(0);
-
-		if(user && _obsoletePanels)
+		QString path = QFileDialog::getOpenFileName(this, tr("Select file"), dir, tr("RTAB-Map database files (*.db)"));
+		QFile file(path);
+		if(!path.isEmpty() && file.exists())
 		{
-			_ui->groupBox_sourceImage->setChecked(false);
-			_ui->groupBox_sourceOpenni->setChecked(false);
-			if(validateForm())
-			{
-				this->writeSettings();
-			}
-			else
-			{
-				this->readSettingsBegin();
-			}
+			int r = QMessageBox::question(this, tr("Odometry in database..."), tr("Use odometry saved in database (if some saved)?"), QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+
+			_ui->groupBox_sourceDatabase->setChecked(true);
+			_ui->source_checkBox_ignoreOdometry->setChecked(r != QMessageBox::Yes);
+			_ui->source_database_lineEdit_path->setText(path);
+			_ui->source_spinBox_databaseStartPos->setValue(0);
+		}
+	}
+
+	if(_ui->groupBox_sourceDatabase->isChecked())
+	{
+		_ui->groupBox_sourceImage->setChecked(false);
+		_ui->groupBox_sourceOpenni->setChecked(false);
+	}
+
+	if(user)
+	{
+		// Even if there is no change, MainWindow should be notified
+		makeObsoleteSourcePanel();
+
+		if(validateForm())
+		{
+			this->writeSettings();
+		}
+		else
+		{
+			this->readSettingsBegin();
 		}
 	}
 }
 
-void PreferencesDialog::selectSourceRGBD(Src src)
+void PreferencesDialog::selectSourceRGBD(Src src, bool ckecked)
 {
 	ULOGGER_DEBUG("");
 
-	if(!_ui->general_checkBox_activateRGBD->isChecked())
+	if(ckecked)
 	{
-		int button = QMessageBox::information(this,
-				tr("Activate RGB-D SLAM?"),
-				tr("You've selected RGB-D camera as source input, "
-				   "would you want to activate RGB-D SLAM mode?"),
-				QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
-		if(button & QMessageBox::Yes)
+		if(!_ui->general_checkBox_activateRGBD->isChecked())
 		{
-			_ui->general_checkBox_activateRGBD->setChecked(true);
+			int button = QMessageBox::information(this,
+					tr("Activate RGB-D SLAM?"),
+					tr("You've selected RGB-D camera as source input, "
+					   "would you want to activate RGB-D SLAM mode?"),
+					QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+			if(button & QMessageBox::Yes)
+			{
+				_ui->general_checkBox_activateRGBD->setChecked(true);
+			}
 		}
 	}
 
-	_ui->groupBox_sourceOpenni->setChecked(true);
+	_ui->groupBox_sourceOpenni->setChecked(ckecked);
 	_ui->radioButton_opennipcl->setChecked(src == kSrcOpenNI_PCL);
 	_ui->radioButton_freenect->setChecked(src == kSrcFreenect);
 	_ui->radioButton_opennicv->setChecked(src == kSrcOpenNI_CV);
 	_ui->radioButton_opennicvasus->setChecked(src == kSrcOpenNI_CV_ASUS);
 	_ui->radioButton_openni2->setChecked(src == kSrcOpenNI2);
 
-	if(_obsoletePanels)
+	if(_ui->groupBox_sourceOpenni->isChecked())
 	{
 		_ui->groupBox_sourceImage->setChecked(false);
 		_ui->groupBox_sourceDatabase->setChecked(false);
@@ -1893,15 +2143,18 @@ void PreferencesDialog::selectSourceRGBD(Src src)
 				this->resetCalibration();
 			}
 		}
+	}
 
-		if(validateForm())
-		{
-			this->writeSettings();
-		}
-		else
-		{
-			this->readSettingsBegin();
-		}
+	if(validateForm())
+	{
+		// Even if there is no change, MainWindow should be notified
+		makeObsoleteSourcePanel();
+
+		this->writeSettings();
+	}
+	else
+	{
+		this->readSettingsBegin();
 	}
 }
 
@@ -2636,10 +2889,6 @@ bool PreferencesDialog::isVerticalLayoutUsed() const
 {
 	return _ui->checkBox_verticalLayoutUsed->isChecked();
 }
-bool PreferencesDialog::isImageFlipped() const
-{
-	return _ui->checkBox_imageFlipped->isChecked();
-}
 bool PreferencesDialog::imageRejectedShown() const
 {
 	return _ui->checkBox_imageRejectedShown->isChecked();
@@ -2651,10 +2900,6 @@ bool PreferencesDialog::imageHighestHypShown() const
 bool PreferencesDialog::beepOnPause() const
 {
 	return _ui->checkBox_beep->isChecked();
-}
-int PreferencesDialog::getKeypointsOpacity() const
-{
-	return _ui->horizontalSlider_keypointsOpacity->value();
 }
 int PreferencesDialog::getOdomQualityWarnThr() const
 {
@@ -2792,9 +3037,20 @@ bool PreferencesDialog::isSourceOpenniUsed() const
 }
 
 
-int PreferencesDialog::getSourceImageType() const
+PreferencesDialog::Src PreferencesDialog::getSourceImageType() const
 {
-	return _ui->source_comboBox_image_type->currentIndex();
+	if(_ui->source_comboBox_image_type->currentIndex() == 1)
+	{
+		return kSrcImages;
+	}
+	else if(_ui->source_comboBox_image_type->currentIndex() == 2)
+	{
+		return kSrcVideo;
+	}
+	else
+	{
+		return kSrcUsbDevice;
+	}
 }
 QString PreferencesDialog::getSourceImageTypeStr() const
 {
