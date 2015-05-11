@@ -57,10 +57,11 @@ public:
 	std::multimap<int, cv::KeyPoint> words;
 	std::vector<int> wordMatches;
 	std::vector<int> wordInliers;
+	std::multimap<int, cv::Point3f> localMap;
 
 	// Optical Flow odometry
-	std::vector<cv::KeyPoint> refCorners;
-	std::vector<cv::KeyPoint> newCorners;
+	std::vector<cv::Point2f> refCorners;
+	std::vector<cv::Point2f> newCorners;
 	std::vector<int> cornerInliers;
 };
 

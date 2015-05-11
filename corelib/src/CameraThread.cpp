@@ -125,20 +125,17 @@ void CameraThread::mainLoop()
 	{
 		if(_cameraRGBD)
 		{
-			this->post(new CameraEvent(rgb, depth, fx, fy, cx, cy, _cameraRGBD->getLocalTransform(), ++_seq));
+			SensorData data(rgb, depth, fx, fy, cx, cy, _cameraRGBD->getLocalTransform(), Transform(), 1, 1, ++_seq, UTimer::now());
+			this->post(new CameraEvent(data, _cameraRGBD->getSerial()));
 		}
 		else
 		{
-			this->post(new CameraEvent(rgb, ++_seq));
+			this->post(new CameraEvent(rgb, ++_seq, UTimer::now()));
 		}
 	}
 	else if(!this->isKilled())
 	{
 		if(_cameraRGBD)
-		{
-			UERROR("Retrieved data is empty! Stopping the camera...");
-		}
-		else
 		{
 			UWARN("no more images...");
 		}

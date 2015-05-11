@@ -30,8 +30,11 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "rtabmap/gui/RtabmapGuiExp.h" // DLL export/import defines
 
-#include <QtGui/QDialog>
+#include <QDialog>
+#include <QSettings>
 #include <opencv2/opencv.hpp>
+
+#include <rtabmap/core/CameraModel.h>
 
 #include <rtabmap/utilite/UEventsHandler.h>
 
@@ -44,16 +47,20 @@ class RTABMAPGUI_EXP CalibrationDialog  : public QDialog, public UEventsHandler
 	Q_OBJECT;
 
 public:
-	CalibrationDialog(QWidget * parent = 0);
+	CalibrationDialog(bool stereo = false, const QString & savingDirectory = ".", bool switchImages = false, QWidget * parent = 0);
 	virtual ~CalibrationDialog();
 
-	bool isCalibrated() const {return calibrated_;}
-	const cv::Mat & cameraMatrix() const {return cameraMatrix_;} // Matrix K
-	const cv::Mat & distCoeffs() const {return distCoeffs_;} // Matrix D
-	float fx() const {return cameraMatrix_.at<double>(0,0);} // K(0)
-	float fy() const {return cameraMatrix_.at<double>(1,1);} // K(4)
-	float cx() const {return cameraMatrix_.at<double>(0,2);} // K(2)
-	float cy() const {return cameraMatrix_.at<double>(1,2);} // K(5)
+	bool isCalibrated() const {return models_[0].isValid() && (stereo_?models_[1].isValid():true);}
+	const rtabmap::CameraModel & getLeftCameraModel() const {return models_[0];}
+	const rtabmap::CameraModel & getRightCameraModel() const {return models_[1];}
+	const rtabmap::StereoCameraModel & getStereoCameraModel() const {return stereoModel_;}
+
+	void saveSettings(QSettings & settings, const QString & group = "") const;
+	void loadSettings(QSettings & settings, const QString & group = "");
+
+	void setSwitchedImages(bool switched);
+	void setStereoMode(bool stereo);
+	void setSavingDirectory(const QString & savingDirectory) {savingDirectory_ = savingDirectory;}
 
 public slots:
 	void setBoardWidth(int width);
@@ -61,10 +68,10 @@ public slots:
 	void setSquareSize(double size);
 
 private slots:
-	void processImage(const cv::Mat & image);
+	void processImages(const cv::Mat & imageLeft, const cv::Mat & imageRight, const QString & cameraName);
 	void restart();
 	void calibrate();
-	void save();
+	bool save();
 
 protected:
 	virtual void closeEvent(QCloseEvent* event);
@@ -83,15 +90,21 @@ private:
 
 private:
 	// parameters
-	cv::Size boardSize_; // innner squares
-	float squareSize_; // m
+	bool stereo_;
+	QString savingDirectory_;
 
-	std::vector<std::vector<cv::Point2f> > imagePoints_;
-	std::vector<std::vector<float> > imageParams_;
-	cv::Size imageSize_;
-	bool calibrated_;
-	cv::Mat cameraMatrix_;
-	cv::Mat distCoeffs_;
+	QString cameraName_;
+	bool processingData_;
+	bool savedCalibration_;
+
+	std::vector<std::vector<std::vector<cv::Point2f> > > imagePoints_;
+	std::vector<std::vector<std::vector<float> > > imageParams_;
+	std::vector<std::vector<std::vector<cv::Point2f> > > stereoImagePoints_;
+	std::vector<cv::Size > imageSize_;
+	std::vector<rtabmap::CameraModel> models_;
+	rtabmap::StereoCameraModel stereoModel_;
+	std::vector<unsigned short> minIrs_;
+	std::vector<unsigned short> maxIrs_;
 
 	Ui_calibrationDialog * ui_;
 };
