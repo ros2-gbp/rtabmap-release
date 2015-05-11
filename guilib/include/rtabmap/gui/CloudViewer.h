@@ -39,6 +39,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <QtCore/QMap>
 #include <QtCore/QSet>
 #include <QtCore/qnamespace.h>
+#include <QtCore/QSettings>
 
 #include <opencv2/opencv.hpp>
 
@@ -63,6 +64,9 @@ public:
 	CloudViewer(QWidget * parent = 0);
 	virtual ~CloudViewer();
 
+	void saveSettings(QSettings & settings, const QString & group = "") const;
+	void loadSettings(QSettings & settings, const QString & group = "");
+
 	bool updateCloudPose(
 		const std::string & id,
 		const Transform & pose); //including mesh
@@ -70,43 +74,45 @@ public:
 	bool updateCloud(
 		const std::string & id,
 		const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud,
-		const Transform & pose = Transform::getIdentity());
+		const Transform & pose = Transform::getIdentity(),
+		const QColor & color = QColor());
 
 	bool updateCloud(
 		const std::string & id,
 		const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud,
-		const Transform & pose = Transform::getIdentity());
+		const Transform & pose = Transform::getIdentity(),
+		const QColor & color = QColor());
 
 	bool addOrUpdateCloud(
 		const std::string & id,
 		const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud,
 		const Transform & pose = Transform::getIdentity(),
-		const QColor & color = Qt::gray);
+		const QColor & color = QColor());
 
 	bool addOrUpdateCloud(
 			const std::string & id,
 			const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud,
 			const Transform & pose = Transform::getIdentity(),
-			const QColor & color = Qt::gray);
+			const QColor & color = QColor());
 
 	bool addCloud(
 			const std::string & id,
 			const pcl::PCLPointCloud2Ptr & binaryCloud,
 			const Transform & pose,
 			bool rgb,
-			const QColor & color = Qt::gray);
+			const QColor & color = QColor());
 
 	bool addCloud(
 		const std::string & id,
 		const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud,
 		const Transform & pose = Transform::getIdentity(),
-		const QColor & color = Qt::gray);
+		const QColor & color = QColor());
 
 	bool addCloud(
 		const std::string & id,
 		const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud,
 		const Transform & pose = Transform::getIdentity(),
-		const QColor & color = Qt::gray);
+		const QColor & color = QColor());
 
 	bool addCloudMesh(
 		const std::string & id,
@@ -150,6 +156,7 @@ public:
 	bool getCloudVisibility(const std::string & id);
 
 	const QMap<std::string, Transform> & getAddedClouds() const {return _addedClouds;} //including meshes
+	const QColor & getDefaultBackgroundColor() const;
 	const QColor & getBackgroundColor() const;
 	Transform getTargetPose() const;
 	void getCameraPosition(
@@ -178,6 +185,7 @@ public:
 	void setWorkingDirectory(const QString & path) {_workingDirectory = path;}
 
 public slots:
+	void setDefaultBackgroundColor(const QColor & color);
 	void setBackgroundColor(const QColor & color);
 	void setCloudVisibility(const std::string & id, bool isVisible);
 	void setCloudOpacity(const std::string & id, double opacity = 1.0);
@@ -216,7 +224,7 @@ private:
     QAction * _aSetGridCellSize;
     QAction * _aSetBackgroundColor;
     QMenu * _menu;
-    std::map<std::string, pcl::PointCloud<pcl::PointXYZ>::Ptr > _graphes;
+    std::set<std::string> _graphes;
     pcl::PointCloud<pcl::PointXYZ>::Ptr _trajectory;
     unsigned int _maxTrajectorySize;
     unsigned int _gridCellCount;
@@ -226,7 +234,8 @@ private:
     std::list<std::string> _gridLines;
     QSet<Qt::Key> _keysPressed;
     QString _workingDirectory;
-    QColor _backgroundColor;
+    QColor _defaultBgColor;
+    QColor _currentBgColor;
 };
 
 } /* namespace rtabmap */

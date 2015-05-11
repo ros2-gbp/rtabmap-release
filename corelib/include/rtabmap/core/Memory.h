@@ -73,6 +73,7 @@ public:
 	std::map<int, float> computeLikelihood(const Signature * signature,
 			const std::list<int> & ids);
 	int incrementMapId();
+	void updateAge(int signatureId);
 
 	std::list<int> forget(const std::set<int> & ignoredIds = std::set<int>());
 	std::set<int> reactivateSignatures(const std::list<int> & ids, unsigned int maxLoaded, double & timeDbAccess);
@@ -80,25 +81,28 @@ public:
 	std::list<int> cleanup(const std::list<int> & ignoredIds = std::list<int>());
 	void emptyTrash();
 	void joinTrashThread();
-	bool addLink(int to, int from, const Transform & transform, Link::Type type, float variance);
-	void updateLink(int fromId, int toId, const Transform & transform, float variance);
+	bool addLink(int to, int from, const Transform & transform, Link::Type type, float rotVariance, float transVariance);
+	void updateLink(int fromId, int toId, const Transform & transform, float rotVariance, float transVariance);
 	void removeAllVirtualLinks();
-	std::map<int, int> getNeighborsId(int signatureId,
-			int margin,
+	std::map<int, int> getNeighborsId(
+			int signatureId,
+			int maxGraphDepth,
 			int maxCheckedInDatabase = -1,
 			bool incrementMarginOnLoop = false,
 			bool ignoreLoopIds = false,
 			double * dbAccessTime = 0) const;
+	std::map<int, float> getNeighborsIdRadius(
+			int signatureId,
+			float radius,
+			const std::map<int, Transform> & optimizedPoses,
+			int maxGraphDepth) const;
 	void deleteLocation(int locationId, std::list<int> * deletedWords = 0);
 	void removeLink(int idA, int idB);
 
 	//getters
-	const std::set<int> & getWorkingMem() const {return _workingMem;}
+	const std::map<int, double> & getWorkingMem() const {return _workingMem;}
 	const std::set<int> & getStMem() const {return _stMem;}
 	int getMaxStMemSize() const {return _maxStMemSize;}
-	void getPose(int locationId,
-			Transform & pose,
-			bool lookInDatabase = false) const;
 	std::map<int, Link> getNeighborLinks(int signatureId,
 			bool lookInDatabase = false) const;
 	std::map<int, Link> getLoopClosureLinks(int signatureId,
@@ -109,11 +113,24 @@ public:
 	std::map<int, int> getWeights() const;
 	int getLastSignatureId() const;
 	const Signature * getLastWorkingSignature() const;
+	int getSignatureIdByLabel(const std::string & label, bool lookInDatabase = true) const;
+	bool labelSignature(int id, const std::string & label);
+	std::map<int, std::string> getAllLabels() const;
+	bool setUserData(int id, const std::vector<unsigned char> & data);
 	int getDatabaseMemoryUsed() const; // in bytes
 	double getDbSavingTime() const;
-	int getMapId(int signatureId) const;
+	Transform getOdomPose(int signatureId, bool lookInDatabase = false) const;
+	bool getNodeInfo(int signatureId,
+			Transform & odomPose,
+			int & mapId,
+			int & weight,
+			std::string & label,
+			double & stamp,
+			std::vector<unsigned char> & userData,
+			bool lookInDatabase = false) const;
 	cv::Mat getImageCompressed(int signatureId) const;
 	Signature getSignatureData(int locationId, bool uncompressedData = false);
+	Signature getSignatureDataConst(int locationId) const;
 	std::set<int> getAllSignatureIds() const;
 	bool memoryChanged() const {return _memoryChanged;}
 	bool isIncremental() const {return _incrementalMemory;}
@@ -122,8 +139,7 @@ public:
 	bool isInWM(int signatureId) const {return _workingMem.find(signatureId) != _workingMem.end();}
 	bool isInLTM(int signatureId) const {return !this->isInSTM(signatureId) && !this->isInWM(signatureId);}
 	bool isIDsGenerated() const {return _generateIds;}
-	int getLastGlobalLoopClosureParentId() const {return _lastGlobalLoopClosureParentId;}
-	int getLastGlobalLoopClosureChildId() const {return _lastGlobalLoopClosureChildId;}
+	int getLastGlobalLoopClosureId() const {return _lastGlobalLoopClosureId;}
 	const Feature2D * getFeature2D() const {return _feature2D;}
 
 	void setRoi(const std::string & roi);
@@ -144,7 +160,7 @@ public:
 
 	// RGB-D stuff
 	void getMetricConstraints(
-			const std::vector<int> & ids,
+			const std::set<int> & ids,
 			std::map<int, Transform> & poses,
 			std::multimap<int, Link> & links,
 			bool lookInDatabase = false);
@@ -155,8 +171,8 @@ public:
 	bool getBowForce2D() const {return _bowForce2D;}
 	Transform computeVisualTransform(int oldId, int newId, std::string * rejectedMsg = 0, int * inliers = 0, double * variance = 0) const;
 	Transform computeVisualTransform(const Signature & oldS, const Signature & newS, std::string * rejectedMsg = 0, int * inliers = 0, double * variance = 0) const;
-	Transform computeIcpTransform(int oldId, int newId, Transform guess, bool icp3D, std::string * rejectedMsg = 0, int * inliers = 0, double * variance = 0);
-	Transform computeIcpTransform(const Signature & oldS, const Signature & newS, Transform guess, bool icp3D, std::string * rejectedMsg = 0, int * inliers = 0, double * variance = 0) const;
+	Transform computeIcpTransform(int oldId, int newId, Transform guess, bool icp3D, std::string * rejectedMsg = 0, int * correspondences = 0, double * variance = 0, float * correspondencesRatio = 0);
+	Transform computeIcpTransform(const Signature & oldS, const Signature & newS, Transform guess, bool icp3D, std::string * rejectedMsg = 0, int * correspondences = 0, double * variance = 0, float * correspondencesRatio = 0) const;
 	Transform computeScanMatchingTransform(
 			int newId,
 			int oldId,
@@ -167,9 +183,9 @@ public:
 
 private:
 	void preUpdate();
-	void addSignatureToStm(Signature * signature, float odomVariance);
+	void addSignatureToStm(Signature * signature, float poseRotVariance, float poseTransVariance);
 	void clear();
-	void moveToTrash(Signature * s, bool saveToDatabase = true, std::list<int> * deletedWords = 0);
+	void moveToTrash(Signature * s, bool keepLinkedToGraph = true, std::list<int> * deletedWords = 0);
 
 	void addSignatureToWm(Signature * signature);
 	Signature * _getSignature(int id) const;
@@ -201,19 +217,25 @@ private:
 	float _similarityThreshold;
 	bool _rawDataKept;
 	bool _binDataKept;
-	bool _keepRehearsedNodesInDb;
+	bool _notLinkedNodesKeptInDb;
 	bool _incrementalMemory;
 	int _maxStMemSize;
 	float _recentWmRatio;
+	bool _transferSortingByWeightId;
 	bool _idUpdatedToNewOneRehearsal;
 	bool _generateIds;
 	bool _badSignaturesIgnored;
+	int _imageDecimation;
+	float _laserScanVoxelSize;
+	bool _localSpaceLinksKeptInWM;
+	float _rehearsalMaxDistance;
+	float _rehearsalMaxAngle;
+	bool _rehearsalWeightIgnoredWhileMoving;
 
 	int _idCount;
 	int _idMapCount;
 	Signature * _lastSignature;
-	int _lastGlobalLoopClosureParentId;
-	int _lastGlobalLoopClosureChildId;
+	int _lastGlobalLoopClosureId;
 	bool _memoryChanged; // False by default, become true only when Memory::update() is called.
 	bool _linksChanged; // False by default, become true when links are modified.
 	int _signaturesAdded;
@@ -221,7 +243,7 @@ private:
 
 	std::map<int, Signature *> _signatures; // TODO : check if a signature is already added? although it is not supposed to occur...
 	std::set<int> _stMem; // id
-	std::set<int> _workingMem; // id,age
+	std::map<int, double> _workingMem; // id,age
 
 	//Keypoint stuff
 	VWDictionary * _vwd;
@@ -231,7 +253,6 @@ private:
 	bool _tfIdfLikelihoodUsed;
 	bool _parallelized;
 	float _wordsMaxDepth; // 0=inf
-	int _wordsPerImageTarget; // <0=none, 0=inf
 	std::vector<float> _roiRatios; // size 4
 
 	// RGBD-SLAM stuff
@@ -240,6 +261,10 @@ private:
 	int _bowIterations;
 	float _bowMaxDepth;
 	bool _bowForce2D;
+	bool _bowEpipolarGeometry;
+	float _bowEpipolarGeometryVar;
+	float _icpMaxTranslation;
+	float _icpMaxRotation;
 	int _icpDecimation;
 	float _icpMaxDepth;
 	float _icpVoxelSize;
