@@ -37,13 +37,13 @@
     <addaction name="actionNew_database"/>
     <addaction name="actionOpen_database"/>
     <addaction name="separator"/>
+    <addaction name="actionSave_GUI_config"/>
+    <addaction name="separator"/>
     <addaction name="actionSave_point_cloud"/>
     <addaction name="actionExport_2D_scans_ply_pcd"/>
     <addaction name="actionExport_2D_Grid_map_bmp_png"/>
     <addaction name="separator"/>
     <addaction name="actionClose_database"/>
-    <addaction name="separator"/>
-    <addaction name="actionEdit_database"/>
     <addaction name="separator"/>
     <addaction name="actionExit"/>
    </widget>
@@ -51,27 +51,29 @@
     <property name="title">
      <string>Edit</string>
     </property>
+    <widget class="QMenu" name="menuAdvanced">
+     <property name="title">
+      <string>Advanced</string>
+     </property>
+     <addaction name="actionDump_the_memory"/>
+     <addaction name="actionDump_the_prediction_matrix"/>
+     <addaction name="actionGenerate_map"/>
+     <addaction name="actionGenerate_local_map"/>
+     <addaction name="actionGenerate_TORO_graph_graph"/>
+     <addaction name="actionPrint_loop_closure_IDs_to_console"/>
+     <addaction name="actionSend_goal"/>
+    </widget>
     <addaction name="actionDownload_all_clouds"/>
     <addaction name="actionDownload_graph"/>
     <addaction name="actionClear_cache"/>
     <addaction name="separator"/>
-    <addaction name="actionOpen_working_directory"/>
+    <addaction name="actionView_high_res_point_cloud"/>
+    <addaction name="actionView_scans"/>
     <addaction name="separator"/>
     <addaction name="actionDelete_memory"/>
     <addaction name="separator"/>
-    <addaction name="actionDump_the_memory"/>
-    <addaction name="actionDump_the_prediction_matrix"/>
-    <addaction name="actionGenerate_map"/>
-    <addaction name="actionGenerate_local_map"/>
-    <addaction name="actionGenerate_TORO_graph_graph"/>
-    <addaction name="actionPrint_loop_closure_IDs_to_console"/>
-    <addaction name="separator"/>
-    <addaction name="actionData_recorder"/>
-    <addaction name="separator"/>
-    <addaction name="actionPost_processing"/>
-    <addaction name="separator"/>
-    <addaction name="actionView_high_res_point_cloud"/>
-    <addaction name="actionView_scans"/>
+    <addaction name="actionOpen_working_directory"/>
+    <addaction name="menuAdvanced"/>
    </widget>
    <widget class="QMenu" name="menu6">
     <property name="title">
@@ -103,29 +105,65 @@
       </property>
       <widget class="QMenu" name="menuKinect_for_Xbox_360">
        <property name="title">
-        <string>Kinect for Xbox 360</string>
+        <string>Kinect</string>
        </property>
-       <addaction name="actionOpenNI_PCL"/>
+       <property name="icon">
+        <iconset resource="../GuiLib.qrc">
+         <normaloff>:/images/kinect_xbox_360.png</normaloff>:/images/kinect_xbox_360.png</iconset>
+       </property>
        <addaction name="actionFreenect"/>
+       <addaction name="actionOpenNI2_kinect"/>
+       <addaction name="actionOpenNI_PCL"/>
        <addaction name="actionOpenNI_CV"/>
       </widget>
       <widget class="QMenu" name="menuXtion_PRO_LIVE">
        <property name="title">
         <string>Xtion PRO LIVE</string>
        </property>
-       <addaction name="actionOpenNI_PCL_ASUS"/>
+       <property name="icon">
+        <iconset resource="../GuiLib.qrc">
+         <normaloff>:/images/xtion_pro_live.png</normaloff>:/images/xtion_pro_live.png</iconset>
+       </property>
        <addaction name="actionOpenNI2"/>
+       <addaction name="actionOpenNI_PCL_ASUS"/>
        <addaction name="actionOpenNI_CV_ASUS"/>
       </widget>
       <widget class="QMenu" name="menuSense_3D_scanner">
        <property name="title">
         <string>Sense 3D scanner</string>
        </property>
-       <addaction name="actionOpenNI2_Sense"/>
+       <property name="icon">
+        <iconset resource="../GuiLib.qrc">
+         <normaloff>:/images/sense.png</normaloff>:/images/sense.png</iconset>
+       </property>
+       <addaction name="actionOpenNI2_sense"/>
+      </widget>
+      <widget class="QMenu" name="menuKinect_v2">
+       <property name="title">
+        <string>Kinect v2</string>
+       </property>
+       <property name="icon">
+        <iconset resource="../GuiLib.qrc">
+         <normaloff>:/images/kinect_xbox_one.png</normaloff>:/images/kinect_xbox_one.png</iconset>
+       </property>
+       <addaction name="actionFreenect2"/>
+      </widget>
+      <widget class="QMenu" name="menuBumblebee2">
+       <property name="title">
+        <string>Bumblebee2</string>
+       </property>
+       <property name="icon">
+        <iconset resource="../GuiLib.qrc">
+         <normaloff>:/images/bumblebee2.png</normaloff>:/images/bumblebee2.png</iconset>
+       </property>
+       <addaction name="actionStereoDC1394"/>
+       <addaction name="actionStereoFlyCapture2"/>
       </widget>
       <addaction name="menuKinect_for_Xbox_360"/>
       <addaction name="menuXtion_PRO_LIVE"/>
       <addaction name="menuSense_3D_scanner"/>
+      <addaction name="menuKinect_v2"/>
+      <addaction name="menuBumblebee2"/>
      </widget>
      <addaction name="menuRGB_D_camera"/>
      <addaction name="menuImage"/>
@@ -157,13 +195,6 @@
      </property>
      <addaction name="separator"/>
     </widget>
-    <widget class="QMenu" name="menuFigures">
-     <property name="title">
-      <string>Figures</string>
-     </property>
-     <addaction name="actionSave_state"/>
-     <addaction name="actionLoad_state"/>
-    </widget>
     <widget class="QMenu" name="menuAspect_ratio_2">
      <property name="title">
       <string>Aspect ratio</string>
@@ -178,18 +209,27 @@
      <addaction name="action360p"/>
      <addaction name="action240p"/>
     </widget>
-    <addaction name="actionSave_GUI_config"/>
     <addaction name="menuShow_view"/>
-    <addaction name="menuFigures"/>
     <addaction name="actionScreenshot"/>
     <addaction name="actionAuto_screen_capture"/>
     <addaction name="menuAspect_ratio_2"/>
     <addaction name="separator"/>
     <addaction name="actionPreferences"/>
    </widget>
+   <widget class="QMenu" name="menuTools">
+    <property name="title">
+     <string>Tools</string>
+    </property>
+    <addaction name="actionEdit_database"/>
+    <addaction name="separator"/>
+    <addaction name="actionData_recorder"/>
+    <addaction name="separator"/>
+    <addaction name="actionPost_processing"/>
+   </widget>
    <addaction name="menuFile"/>
    <addaction name="menuEdit"/>
    <addaction name="menuProcess"/>
+   <addaction name="menuTools"/>
    <addaction name="menuWindow"/>
    <addaction name="menu6"/>
   </widget>
@@ -228,21 +268,13 @@
    <attribute name="toolBarBreak">
     <bool>false</bool>
    </attribute>
-   <addaction name="actionStart"/>
-   <addaction name="actionPause"/>
-   <addaction name="actionStop"/>
-   <addaction name="separator"/>
-   <addaction name="actionPause_on_match"/>
-   <addaction name="actionPause_when_a_loop_hypothesis_is_rejected"/>
-   <addaction name="actionPause_on_local_loop_detection"/>
-   <addaction name="separator"/>
-   <addaction name="actionSLAM_mode"/>
-   <addaction name="actionLocalization_mode"/>
-   <addaction name="separator"/>
+   <addaction name="actionClose_database"/>
+   <addaction name="actionNew_database"/>
+   <addaction name="actionOpen_database"/>
   </widget>
   <widget class="QDockWidget" name="dockWidget_statsV2">
    <property name="floating">
-    <bool>false</bool>
+    <bool>true</bool>
    </property>
    <property name="windowTitle">
     <string>Statistics</string>
@@ -575,7 +607,7 @@
     <string>3D Loop closure</string>
    </property>
    <attribute name="dockWidgetArea">
-    <number>8</number>
+    <number>2</number>
    </attribute>
    <widget class="QWidget" name="dockWidgetContents_7">
     <layout class="QVBoxLayout" name="verticalLayout_7">
@@ -592,6 +624,9 @@
    </widget>
   </widget>
   <widget class="QDockWidget" name="dockWidget_mapVisibility">
+   <property name="floating">
+    <bool>true</bool>
+   </property>
    <property name="windowTitle">
     <string>Map visibility</string>
    </property>
@@ -617,7 +652,7 @@
     <string>Graph view</string>
    </property>
    <attribute name="dockWidgetArea">
-    <number>8</number>
+    <number>2</number>
    </attribute>
    <widget class="QWidget" name="dockWidgetContents_9">
     <layout class="QVBoxLayout" name="verticalLayout_10">
@@ -634,6 +669,9 @@
    </widget>
   </widget>
   <widget class="QDockWidget" name="dockWidget_imageView">
+   <property name="allowedAreas">
+    <set>Qt::AllDockWidgetAreas</set>
+   </property>
    <property name="windowTitle">
     <string>Loop closure detection</string>
    </property>
@@ -641,7 +679,7 @@
     <number>1</number>
    </attribute>
    <widget class="QWidget" name="layout_imageview">
-    <layout class="QHBoxLayout" name="horizontalLayout_2">
+    <layout class="QHBoxLayout" name="horizontalLayout_2" stretch="1,1">
      <property name="spacing">
       <number>0</number>
      </property>
@@ -649,7 +687,7 @@
       <number>0</number>
      </property>
      <item>
-      <layout class="QVBoxLayout" name="verticalLayout_2">
+      <layout class="QVBoxLayout" name="verticalLayout_2" stretch="0,1">
        <property name="spacing">
         <number>0</number>
        </property>
@@ -670,19 +708,12 @@
         </widget>
        </item>
        <item>
-        <widget class="rtabmap::ImageView" name="imageView_source">
-         <property name="verticalScrollBarPolicy">
-          <enum>Qt::ScrollBarAlwaysOff</enum>
-         </property>
-         <property name="horizontalScrollBarPolicy">
-          <enum>Qt::ScrollBarAlwaysOff</enum>
-         </property>
-        </widget>
+        <widget class="rtabmap::ImageView" name="imageView_source" native="true"/>
        </item>
       </layout>
      </item>
      <item>
-      <layout class="QVBoxLayout" name="verticalLayout">
+      <layout class="QVBoxLayout" name="verticalLayout" stretch="0,1">
        <property name="spacing">
         <number>0</number>
        </property>
@@ -703,14 +734,7 @@
         </widget>
        </item>
        <item>
-        <widget class="rtabmap::ImageView" name="imageView_loopClosure">
-         <property name="verticalScrollBarPolicy">
-          <enum>Qt::ScrollBarAlwaysOff</enum>
-         </property>
-         <property name="horizontalScrollBarPolicy">
-          <enum>Qt::ScrollBarAlwaysOff</enum>
-         </property>
-        </widget>
+        <widget class="rtabmap::ImageView" name="imageView_loopClosure" native="true"/>
        </item>
       </layout>
      </item>
@@ -733,12 +757,30 @@
       <number>0</number>
      </property>
      <item>
-      <widget class="rtabmap::ImageView" name="imageView_odometry"/>
+      <widget class="rtabmap::ImageView" name="imageView_odometry" native="true"/>
      </item>
     </layout>
    </widget>
   </widget>
+  <widget class="QToolBar" name="toolBar_2">
+   <property name="windowTitle">
+    <string>toolBar_2</string>
+   </property>
+   <attribute name="toolBarArea">
+    <enum>TopToolBarArea</enum>
+   </attribute>
+   <attribute name="toolBarBreak">
+    <bool>false</bool>
+   </attribute>
+   <addaction name="actionStart"/>
+   <addaction name="actionPause"/>
+   <addaction name="actionStop"/>
+  </widget>
   <action name="actionExit">
+   <property name="icon">
+    <iconset resource="../GuiLib.qrc">
+     <normaloff>:/images/system-log-out.png</normaloff>:/images/system-log-out.png</iconset>
+   </property>
    <property name="text">
     <string>Exit</string>
    </property>
@@ -826,16 +868,6 @@
   <action name="actionClear_cache">
    <property name="text">
     <string>Clear the cache</string>
-   </property>
-  </action>
-  <action name="actionSave_state">
-   <property name="text">
-    <string>Save state</string>
-   </property>
-  </action>
-  <action name="actionLoad_state">
-   <property name="text">
-    <string>Load state</string>
    </property>
   </action>
   <action name="actionAuto_screen_capture">
@@ -1087,22 +1119,29 @@
     <string>View scans...</string>
    </property>
   </action>
-  <action name="actionOpenNI2_Sense">
-   <property name="text">
-    <string>OpenNI2</string>
-   </property>
-  </action>
   <action name="actionOpen_database">
+   <property name="icon">
+    <iconset resource="../GuiLib.qrc">
+     <normaloff>:/images/document-open.png</normaloff>:/images/document-open.png</iconset>
+   </property>
    <property name="text">
     <string>Open database...</string>
    </property>
   </action>
   <action name="actionNew_database">
+   <property name="icon">
+    <iconset resource="../GuiLib.qrc">
+     <normaloff>:/images/document-new.png</normaloff>:/images/document-new.png</iconset>
+   </property>
    <property name="text">
     <string>New database...</string>
    </property>
   </action>
   <action name="actionClose_database">
+   <property name="icon">
+    <iconset resource="../GuiLib.qrc">
+     <normaloff>:/images/document-save.png</normaloff>:/images/document-save.png</iconset>
+   </property>
    <property name="text">
     <string>Close database</string>
    </property>
@@ -1119,7 +1158,49 @@
   </action>
   <action name="actionSave_GUI_config">
    <property name="text">
-    <string>Save GUI config</string>
+    <string>Save config</string>
+   </property>
+  </action>
+  <action name="actionFreenect2">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Freenect2</string>
+   </property>
+  </action>
+  <action name="actionStereoDC1394">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>StereoDC1394</string>
+   </property>
+  </action>
+  <action name="actionOpenNI2_kinect">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>OpenNI2</string>
+   </property>
+  </action>
+  <action name="actionOpenNI2_sense">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>OpenNI2</string>
+   </property>
+  </action>
+  <action name="actionStereoFlyCapture2">
+   <property name="text">
+    <string>StereoFlyCapture2</string>
+   </property>
+  </action>
+  <action name="actionSend_goal">
+   <property name="text">
+    <string>Send a goal...</string>
    </property>
   </action>
  </widget>
@@ -1132,7 +1213,7 @@
   </customwidget>
   <customwidget>
    <class>rtabmap::ImageView</class>
-   <extends>QGraphicsView</extends>
+   <extends>QWidget</extends>
    <header>../include/rtabmap/gui/ImageView.h</header>
   </customwidget>
   <customwidget>

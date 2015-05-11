@@ -30,6 +30,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "rtabmap/core/RtabmapExp.h"
 #include <opencv2/core/core.hpp>
+#include <opencv2/calib3d/calib3d.hpp>
 #include <opencv2/features2d/features2d.hpp>
 #include <list>
 #include <string>
@@ -99,9 +100,32 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr RTABMAP_EXP generateKeypoints3DStereo(
 		int flowIterations = 20,
 		double flowEps = 0.02);
 
+std::multimap<int, pcl::PointXYZ> RTABMAP_EXP generateWords3DMono(
+		const std::multimap<int, cv::KeyPoint> & kpts,
+		const std::multimap<int, cv::KeyPoint> & previousKpts,
+		float fx,
+		float fy,
+		float cx,
+		float cy,
+		const Transform & localTransform,
+		Transform & cameraTransform,
+		int pnpIterations = 100,
+		float pnpReprojError = 8.0f,
+		int pnpFlags = cv::ITERATIVE,
+		float ransacParam1 = 3.0f,
+		float ransacParam2 = 0.99f,
+		const std::multimap<int, pcl::PointXYZ> & refGuess3D = std::multimap<int, pcl::PointXYZ>(),
+		double * variance = 0);
+
 std::multimap<int, cv::KeyPoint> RTABMAP_EXP aggregate(
 		const std::list<int> & wordIds,
 		const std::vector<cv::KeyPoint> & keypoints);
+
+float RTABMAP_EXP getDepth(
+		const cv::Mat & depthImage,
+		float x, float y,
+		bool smoothing,
+		float maxZError = 0.02f);
 
 pcl::PointXYZ RTABMAP_EXP projectDepthTo3D(
 		const cv::Mat & depthImage,
@@ -128,21 +152,21 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr RTABMAP_EXP cloudFromDisparity(
 		const cv::Mat & imageDisparity,
 		float cx, float cy,
 		float fx, float baseline,
-		int decimation);
+		int decimation = 1);
 
 pcl::PointCloud<pcl::PointXYZRGB>::Ptr RTABMAP_EXP cloudFromDisparityRGB(
 		const cv::Mat & imageRgb,
 		const cv::Mat & imageDisparity,
 		float cx, float cy,
 		float fx, float baseline,
-		int decimation);
+		int decimation = 1);
 
 pcl::PointCloud<pcl::PointXYZRGB>::Ptr RTABMAP_EXP cloudFromStereoImages(
 		const cv::Mat & imageLeft,
 		const cv::Mat & imageRight,
 		float cx, float cy,
 		float fx, float baseline,
-		int decimation);
+		int decimation = 1);
 
 cv::Mat RTABMAP_EXP disparityFromStereoImages(
 		const cv::Mat & leftImage,
@@ -196,6 +220,14 @@ pcl::PointXYZ RTABMAP_EXP projectDisparityTo3D(
 cv::Mat RTABMAP_EXP depthFromDisparity(const cv::Mat & disparity,
 		float fx, float baseline,
 		int type = CV_32FC1);
+
+cv::Mat RTABMAP_EXP registerDepth(
+		const cv::Mat & depth,
+		const cv::Mat & depthK,
+		const cv::Mat & colorK,
+		const rtabmap::Transform & transform);
+
+void RTABMAP_EXP fillRegisteredDepthHoles(cv::Mat & depth, bool vertical, bool horizontal, bool fillDoubleHoles = false);
 
 cv::Mat RTABMAP_EXP laserScanFromPointCloud(const pcl::PointCloud<pcl::PointXYZ> & cloud);
 pcl::PointCloud<pcl::PointXYZ>::Ptr RTABMAP_EXP laserScanToPointCloud(const cv::Mat & laserScan);
@@ -260,7 +292,7 @@ Transform RTABMAP_EXP icp(
 		int maximumIterations,
 		bool * hasConverged = 0,
 		double * variance = 0,
-		int * inliers = 0);
+		int * correspondences = 0);
 
 Transform RTABMAP_EXP icpPointToPlane(
 		const pcl::PointCloud<pcl::PointNormal>::ConstPtr & cloud_source,
@@ -269,7 +301,7 @@ Transform RTABMAP_EXP icpPointToPlane(
 		int maximumIterations,
 		bool * hasConverged = 0,
 		double * variance = 0,
-		int * inliers = 0);
+		int * correspondences = 0);
 
 Transform RTABMAP_EXP icp2D(
 		const pcl::PointCloud<pcl::PointXYZ>::ConstPtr & cloud_source,
@@ -278,7 +310,7 @@ Transform RTABMAP_EXP icp2D(
 		int maximumIterations,
 		bool * hasConverged = 0,
 		double * variance = 0,
-		int * inliers = 0);
+		int * correspondences = 0);
 
 pcl::PointCloud<pcl::PointNormal>::Ptr RTABMAP_EXP computeNormals(
 		const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud,
@@ -346,13 +378,11 @@ pcl::PolygonMesh::Ptr RTABMAP_EXP createMesh(
 		float gp3MaximumAngle = 2*M_PI/3,
 		bool gp3NormalConsistency = false);
 
-bool RTABMAP_EXP occupancy2DFromCloud3D(
-		const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud,
+void RTABMAP_EXP occupancy2DFromLaserScan(
+		const cv::Mat & scan,
 		cv::Mat & ground,
 		cv::Mat & obstacles,
-		float cellSize = 0.05f,
-		float groundNormalAngle = M_PI_4,
-		int minClusterSize = 20);
+		float cellSize);
 
 cv::Mat RTABMAP_EXP create2DMapFromOccupancyLocalMaps(
 		const std::map<int, Transform> & poses,
@@ -360,8 +390,8 @@ cv::Mat RTABMAP_EXP create2DMapFromOccupancyLocalMaps(
 		float cellSize,
 		float & xMin,
 		float & yMin,
-		int fillEmptyRadius = 0,
-		float minMapSize = 0.0f);
+		float minMapSize = 0.0f,
+		bool erode = false);
 
 cv::Mat RTABMAP_EXP create2DMap(const std::map<int, Transform> & poses,
 		const std::map<int, pcl::PointCloud<pcl::PointXYZ>::Ptr > & scans,
@@ -403,6 +433,13 @@ pcl::IndicesPtr RTABMAP_EXP concatenate(
 pcl::IndicesPtr RTABMAP_EXP concatenate(
 		const pcl::IndicesPtr & indicesA,
 		const pcl::IndicesPtr & indicesB);
+
+cv::Mat RTABMAP_EXP decimate(const cv::Mat & image, int d);
+
+void RTABMAP_EXP savePCDWords(
+		const std::string & fileName,
+		const std::multimap<int, pcl::PointXYZ> & words,
+		const Transform & transform = Transform::getIdentity());
 
 ///////////////////
 // Templated PCL methods
@@ -556,6 +593,15 @@ template<typename PointT>
 pcl::IndicesPtr extractNegativeIndices(
 		const typename pcl::PointCloud<PointT>::Ptr & cloud,
 		const pcl::IndicesPtr & indices);
+
+template<typename PointT>
+void occupancy2DFromCloud3D(
+		const typename pcl::PointCloud<PointT>::Ptr & cloud,
+		cv::Mat & ground,
+		cv::Mat & obstacles,
+		float cellSize = 0.05f,
+		float groundNormalAngle = M_PI_4,
+		int minClusterSize = 20);
 
 } // namespace util3d
 } // namespace rtabmap
