@@ -32,6 +32,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/core/CameraEvent.h"
 #include "rtabmap/core/ParamEvent.h"
 #include "rtabmap/core/OdometryEvent.h"
+#include "rtabmap/core/UserDataEvent.h"
+#include "rtabmap/core/Memory.h"
 
 #include <rtabmap/utilite/ULogger.h>
 #include <rtabmap/utilite/UEventsManager.h>
@@ -48,7 +50,8 @@ RtabmapThread::RtabmapThread(Rtabmap * rtabmap) :
 		_rtabmap(rtabmap),
 		_paused(false),
 		lastPose_(Transform::getIdentity()),
-		_variance(0)
+		_rotVariance(0),
+		_transVariance(0)
 
 {
 	UASSERT(rtabmap != 0);
@@ -85,9 +88,16 @@ void RtabmapThread::clearBufferedData()
 	{
 		_dataBuffer.clear();
 		lastPose_.setIdentity();
-		_variance = 0;
+		_rotVariance = 0;
+		_transVariance = 0;
 	}
 	_dataMutex.unlock();
+
+	_userDataMutex.lock();
+	{
+		_userData = cv::Mat();
+	}
+	_userDataMutex.unlock();
 }
 
 void RtabmapThread::setDetectorRate(float rate)
@@ -108,18 +118,27 @@ void RtabmapThread::publishMap(bool optimized, bool full) const
 	std::map<int, Transform> poses;
 	std::multimap<int, Link> constraints;
 	std::map<int, int> mapIds;
+	std::map<int, double> stamps;
+	std::map<int, std::string> labels;
+	std::map<int, std::vector<unsigned char> > userDatas;
 
 	_rtabmap->get3DMap(signatures,
 			poses,
 			constraints,
 			mapIds,
+			stamps,
+			labels,
+			userDatas,
 			optimized,
 			full);
 
 	this->post(new RtabmapEvent3DMap(signatures,
 			poses,
 			constraints,
-			mapIds));
+			mapIds,
+			stamps,
+			labels,
+			userDatas));
 }
 
 void RtabmapThread::publishTOROGraph(bool optimized, bool full) const
@@ -128,17 +147,26 @@ void RtabmapThread::publishTOROGraph(bool optimized, bool full) const
 	std::map<int, Transform> poses;
 	std::multimap<int, Link> constraints;
 	std::map<int, int> mapIds;
+	std::map<int, double> stamps;
+	std::map<int, std::string> labels;
+	std::map<int, std::vector<unsigned char> > userDatas;
 
 	_rtabmap->getGraph(poses,
 			constraints,
 			mapIds,
+			stamps,
+			labels,
+			userDatas,
 			optimized,
 			full);
 
 	this->post(new RtabmapEvent3DMap(signatures,
 			poses,
 			constraints,
-			mapIds));
+			mapIds,
+			stamps,
+			labels,
+			userDatas));
 }
 
 
@@ -167,6 +195,8 @@ void RtabmapThread::mainLoop()
 	}
 	_stateMutex.unlock();
 
+	int id = 0;
+	std::vector<unsigned char> userData;
 	switch(state)
 	{
 	case kStateDetecting:
@@ -235,6 +265,27 @@ void RtabmapThread::mainLoop()
 	case kStateTriggeringMap:
 		_rtabmap->triggerNewMap();
 		break;
+	case kStateAddingUserData:
+		_userDataMutex.lock();
+		{
+			userData = _userData;
+			_userData.clear();
+		}
+		_userDataMutex.unlock();
+		_rtabmap->setUserData(0, userData);
+		break;
+	case kStateSettingGoal:
+		id = atoi(parameters.at("goal_id").c_str());
+		if(id == 0 && !parameters.at("goal_label").empty() && _rtabmap->getMemory())
+		{
+			id = _rtabmap->getMemory()->getSignatureIdByLabel(parameters.at("goal_label"));
+		}
+		if(id <= 0 || !_rtabmap->computePath(id, true))
+		{
+			UERROR("Failed to set a goal to location=%d.", id);
+		}
+		this->post(new RtabmapGlobalPathEvent(id, _rtabmap->getPath()));
+		break;
 	default:
 		UFATAL("Invalid state !?!?");
 		break;
@@ -264,6 +315,32 @@ void RtabmapThread::handleEvent(UEvent* event)
 		else
 		{
 			lastPose_.setNull();
+		}
+	}
+	else if(event->getClassName().compare("UserDataEvent") == 0)
+	{
+		if(!_paused)
+		{
+			UDEBUG("UserDataEvent");
+			bool updated = false;
+			UserDataEvent * e = (UserDataEvent*)event;
+			_userDataMutex.lock();
+			if(!e->data().empty())
+			{
+				updated = !_userData.empty();
+				_userData = e->data();
+			}
+			_userDataMutex.unlock();
+			if(updated)
+			{
+				UWARN("New user data received before the last one was processed... replacing "
+					"user data with this new one. Note that UserDataEvent should be used only "
+					"if the rate of UserDataEvent is lower than RTAB-Map's detection rate (%f Hz).", _rate);
+			}
+			else
+			{
+				pushNewState(kStateAddingUserData);
+			}
 		}
 	}
 	else if(event->getClassName().compare("RtabmapEventCmd") == 0)
@@ -385,6 +462,14 @@ void RtabmapThread::handleEvent(UEvent* event)
 			ULOGGER_DEBUG("CMD_PAUSE");
 			_paused = !_paused;
 		}
+		else if(cmd == RtabmapEventCmd::kCmdGoal)
+		{
+			ULOGGER_DEBUG("CMD_GOAL");
+			ParametersMap param;
+			param.insert(ParametersPair("goal_label", rtabmapEvent->getStr()));
+			param.insert(ParametersPair("goal_id", uNumber2Str(rtabmapEvent->getInt())));
+			pushNewState(kStateSettingGoal, param);
+		}
 		else
 		{
 			UWARN("Cmd %d unknown!", cmd);
@@ -437,13 +522,18 @@ void RtabmapThread::addData(const SensorData & sensorData)
 		{
 			UWARN("Odometry is reset (identity pose detected). Increment map id!");
 			pushNewState(kStateTriggeringMap);
-			_variance = 0;
+			_rotVariance = 0;
+			_transVariance = 0;
 		}
 
 		lastPose_ = sensorData.pose();
-		if(sensorData.poseVariance() > _variance)
+		if(sensorData.poseRotVariance() > _rotVariance)
 		{
-			_variance = sensorData.poseVariance();
+			_rotVariance = sensorData.poseRotVariance();
+		}
+		if(sensorData.poseTransVariance() > _transVariance)
+		{
+			_transVariance = sensorData.poseTransVariance();
 		}
 
 		if(_rate>0.0f)
@@ -459,12 +549,17 @@ void RtabmapThread::addData(const SensorData & sensorData)
 		_dataMutex.lock();
 		{
 			_dataBuffer.push_back(sensorData);
-			if(_variance <= 0)
+			if(_rotVariance <= 0)
 			{
-				_variance = 1.0f;
+				_rotVariance = 1.0f;
 			}
-			_dataBuffer.back().setPose(_dataBuffer.back().pose(), _variance);
-			_variance = 0;
+			if(_transVariance <= 0)
+			{
+				_transVariance = 1.0f;
+			}
+			_dataBuffer.back().setPose(_dataBuffer.back().pose(), _rotVariance, _transVariance);
+			_rotVariance = 0;
+			_transVariance = 0;
 			while(_dataBufferMaxSize > 0 && _dataBuffer.size() > (unsigned int)_dataBufferMaxSize)
 			{
 				ULOGGER_WARN("Data buffer is full, the oldest data is removed to add the new one.");

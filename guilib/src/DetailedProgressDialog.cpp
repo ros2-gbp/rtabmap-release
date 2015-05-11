@@ -26,15 +26,16 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include "DetailedProgressDialog.h"
-#include <QtGui/QLayout>
-#include <QtGui/QProgressBar>
-#include <QtGui/QTextEdit>
-#include <QtGui/QLabel>
-#include <QtGui/QPushButton>
+#include <QLayout>
+#include <QProgressBar>
+#include <QTextEdit>
+#include <QLabel>
+#include <QPushButton>
 #include <QtGui/QCloseEvent>
-#include <QtGui/QCheckBox>
+#include <QCheckBox>
 #include <QtCore/QTimer>
 #include <QtCore/QTime>
+#include <QScrollBar>
 #include "rtabmap/utilite/ULogger.h"
 
 namespace rtabmap {
@@ -88,6 +89,7 @@ void DetailedProgressDialog::appendText(const QString & text, const QColor & col
 	QString html = tr("<html><font color=\"#999999\">%1 </font><font color=\"%2\">%3</font></html>").arg(QTime::currentTime().toString("HH:mm:ss")).arg(color.name()).arg(text);
 	_detailedText->append(html);
 	_detailedText->ensureCursorVisible();
+	_detailedText->horizontalScrollBar()->setSliderPosition(0);
 }
 void DetailedProgressDialog::setValue(int value)
 {
