@@ -29,29 +29,34 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <QtGui/QWheelEvent>
 #include <QtCore/qmath.h>
-#include <QtGui/QMenu>
-#include <QtGui/QFileDialog>
+#include <QMenu>
+#include <QFileDialog>
 #include <QtCore/QDir>
-#include <QtGui/QAction>
-#include <QtGui/QGraphicsEffect>
-#include <QtGui/QInputDialog>
+#include <QAction>
+#include <QGraphicsEffect>
+#include <QInputDialog>
+#include <QVBoxLayout>
 #include "rtabmap/utilite/ULogger.h"
 #include "rtabmap/gui/KeypointItem.h"
+#include "rtabmap/core/util3d.h"
 
 namespace rtabmap {
 
 ImageView::ImageView(QWidget * parent) :
-		QGraphicsView(parent),
-		_zoom(250),
-		_minZoom(250),
+		QWidget(parent),
 		_savedFileName((QDir::homePath()+ "/") + "picture" + ".png"),
-		_alpha(100),
-		_image(0),
-		_imageDepth(0)
+		_alpha(50),
+		_imageItem(0),
+		_imageDepthItem(0)
 {
-	this->setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
-	this->setScene(new QGraphicsScene(this));
-	connect(this->scene(), SIGNAL(sceneRectChanged(const QRectF &)), this, SLOT(updateZoom()));
+	_graphicsView = new QGraphicsView(this);
+	_graphicsView->setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
+	_graphicsView->setScene(new QGraphicsScene(this));
+	_graphicsView->setVisible(false);
+
+	this->setLayout(new QVBoxLayout(this));
+	this->layout()->addWidget(_graphicsView);
+	this->layout()->setContentsMargins(0,0,0,0);
 
 	_menu = new QMenu(tr(""), this);
 	_showImage = _menu->addAction(tr("Show image"));
@@ -66,18 +71,60 @@ ImageView::ImageView(QWidget * parent) :
 	_showLines = _menu->addAction(tr("Show lines"));
 	_showLines->setCheckable(true);
 	_showLines->setChecked(true);
-	_setAlpha = _menu->addAction(tr("Set alpha..."));
+	_graphicsViewMode = _menu->addAction(tr("Graphics view"));
+	_graphicsViewMode->setCheckable(true);
+	_graphicsViewMode->setChecked(false);
+	_graphicsViewScaled = _menu->addAction(tr("Scale image"));
+	_graphicsViewScaled->setCheckable(true);
+	_graphicsViewScaled->setChecked(true);
+	_graphicsViewScaled->setEnabled(false);
+	_setAlpha = _menu->addAction(tr("Set transparency..."));
 	_saveImage = _menu->addAction(tr("Save picture..."));
+	_saveImage->setEnabled(false);
+
+	connect(_graphicsView->scene(), SIGNAL(sceneRectChanged(const QRectF &)), this, SLOT(sceneRectChanged(const QRectF &)));
 }
 
 ImageView::~ImageView() {
 	clear();
 }
 
-void ImageView::resetZoom()
+void ImageView::saveSettings(QSettings & settings, const QString & group) const
 {
-	_zoom = _minZoom;
-	this->setDragMode(QGraphicsView::NoDrag);
+	if(!group.isEmpty())
+	{
+		settings.beginGroup(group);
+	}
+	settings.setValue("image_shown", this->isImageShown());
+	settings.setValue("depth_shown", this->isImageDepthShown());
+	settings.setValue("features_shown", this->isFeaturesShown());
+	settings.setValue("lines_shown", this->isLinesShown());
+	settings.setValue("alpha", this->getAlpha());
+	settings.setValue("graphics_view", this->isGraphicsViewMode());
+	settings.setValue("graphics_view_scale", this->isGraphicsViewScaled());
+	if(!group.isEmpty())
+	{
+		settings.endGroup();
+	}
+}
+
+void ImageView::loadSettings(QSettings & settings, const QString & group)
+{
+	if(!group.isEmpty())
+	{
+		settings.beginGroup(group);
+	}
+	this->setImageShown(settings.value("image_shown", this->isImageShown()).toBool());
+	this->setImageDepthShown(settings.value("depth_shown", this->isImageDepthShown()).toBool());
+	this->setFeaturesShown(settings.value("features_shown", this->isFeaturesShown()).toBool());
+	this->setLinesShown(settings.value("lines_shown", this->isLinesShown()).toBool());
+	this->setAlpha(settings.value("alpha", this->getAlpha()).toInt());
+	this->setGraphicsViewMode(settings.value("graphics_view", this->isGraphicsViewMode()).toBool());
+	this->setGraphicsViewScaled(settings.value("graphics_view_scale", this->isGraphicsViewScaled()).toBool());
+	if(!group.isEmpty())
+	{
+		settings.endGroup();
+	}
 }
 
 bool ImageView::isImageShown() const
@@ -95,6 +142,22 @@ bool ImageView::isFeaturesShown() const
 	return _showFeatures->isChecked();
 }
 
+bool ImageView::isGraphicsViewMode() const
+{
+	return _graphicsViewMode->isChecked();
+}
+
+bool ImageView::isGraphicsViewScaled() const
+{
+	return _graphicsViewScaled->isChecked();
+}
+
+const QColor & ImageView::getBackgroundColor() const
+{
+	return _graphicsView->backgroundBrush().color();
+}
+
+
 void ImageView::setFeaturesShown(bool shown)
 {
 	_showFeatures->setChecked(shown);
@@ -102,25 +165,40 @@ void ImageView::setFeaturesShown(bool shown)
 	{
 		iter.value()->setVisible(_showFeatures->isChecked());
 	}
+
+	if(!_graphicsView->isVisible())
+	{
+		this->update();
+	}
 }
 
 void ImageView::setImageShown(bool shown)
 {
 	_showImage->setChecked(shown);
-	if(_image)
+	if(_imageItem)
 	{
-		_image->setVisible(_showImage->isChecked());
+		_imageItem->setVisible(_showImage->isChecked());
 		this->updateOpacity();
+	}
+
+	if(!_graphicsView->isVisible())
+	{
+		this->update();
 	}
 }
 
 void ImageView::setImageDepthShown(bool shown)
 {
 	_showImageDepth->setChecked(shown);
-	if(_imageDepth)
+	if(_imageDepthItem)
 	{
-		_imageDepth->setVisible(_showImageDepth->isChecked());
+		_imageDepthItem->setVisible(_showImageDepth->isChecked());
 		this->updateOpacity();
+	}
+
+	if(!_graphicsView->isVisible())
+	{
+		this->update();
 	}
 }
 
@@ -132,13 +210,238 @@ bool ImageView::isLinesShown() const
 void ImageView::setLinesShown(bool shown)
 {
 	_showLines->setChecked(shown);
-	QList<QGraphicsItem*> items = this->scene()->items();
-	for(int i=0; i<items.size(); ++i)
+	for(int i=0; i<_lines.size(); ++i)
 	{
-		if( qgraphicsitem_cast<QGraphicsLineItem*>(items.at(i)))
+		_lines.at(i)->setVisible(_showLines->isChecked());
+	}
+
+	if(!_graphicsView->isVisible())
+	{
+		this->update();
+	}
+}
+
+float ImageView::viewScale() const
+{
+	if(_graphicsView->isVisible())
+	{
+		return _graphicsView->transform().m11();
+	}
+	else
+	{
+		float scale, offsetX, offsetY;
+		computeScaleOffsets(this->rect(), scale, offsetX, offsetY);
+		return scale;
+	}
+}
+
+void ImageView::setGraphicsViewMode(bool on)
+{
+	_graphicsViewMode->setChecked(on);
+	_graphicsView->setVisible(on);
+	_graphicsViewScaled->setEnabled(on);
+
+	if(on)
+	{
+		for(QMultiMap<int, KeypointItem*>::iterator iter=_features.begin(); iter!=_features.end(); ++iter)
 		{
-			items.at(i)->setVisible(_showLines->isChecked());
+			_graphicsView->scene()->addItem(iter.value());
 		}
+
+		for(QList<QGraphicsLineItem*>::iterator iter=_lines.begin(); iter!=_lines.end(); ++iter)
+		{
+			_graphicsView->scene()->addItem(*iter);
+		}
+
+		//update images
+		if(_imageItem)
+		{
+			_imageItem->setPixmap(_image);
+		}
+		else
+		{
+			_imageItem = _graphicsView->scene()->addPixmap(_image);
+			_imageItem->setVisible(_showImage->isChecked());
+			_showImage->setEnabled(true);
+		}
+
+		if(_imageDepthItem)
+		{
+			_imageDepthItem->setPixmap(_imageDepth);
+		}
+		else
+		{
+			_imageDepthItem = _graphicsView->scene()->addPixmap(_imageDepth);
+			_imageDepthItem->setVisible(_showImageDepth->isChecked());
+			_showImageDepth->setEnabled(true);
+		}
+		this->updateOpacity();
+
+		if(_graphicsViewScaled->isChecked())
+		{
+			_graphicsView->fitInView(_graphicsView->sceneRect(), Qt::KeepAspectRatio);
+		}
+		else
+		{
+			_graphicsView->resetTransform();
+		}
+	}
+	else
+	{
+		this->update();
+	}
+}
+
+void ImageView::setGraphicsViewScaled(bool scaled)
+{
+	_graphicsViewScaled->setChecked(scaled);
+
+	if(scaled)
+	{
+		_graphicsView->fitInView(_graphicsView->sceneRect(), Qt::KeepAspectRatio);
+	}
+	else
+	{
+		_graphicsView->resetTransform();
+	}
+
+	if(!_graphicsView->isVisible())
+	{
+		this->update();
+	}
+}
+
+void ImageView::setBackgroundColor(const QColor & color)
+{
+	_graphicsView->setBackgroundBrush(QBrush(color));
+
+	if(!_graphicsView->isVisible())
+	{
+		this->update();
+	}
+}
+
+void ImageView::computeScaleOffsets(const QRect & targetRect, float & scale, float & offsetX, float & offsetY) const
+{
+	scale = 1.0f;
+	offsetX = 0.0f;
+	offsetY = 0.0f;
+
+	if(!_graphicsView->scene()->sceneRect().isNull())
+	{
+		float w = _graphicsView->scene()->width();
+		float h = _graphicsView->scene()->height();
+		float widthRatio = float(targetRect.width()) / w;
+		float heightRatio = float(targetRect.height()) / h;
+
+		//printf("w=%f, h=%f, wR=%f, hR=%f, sW=%d, sH=%d\n", w, h, widthRatio, heightRatio, this->rect().width(), this->rect().height());
+		if(widthRatio < heightRatio)
+		{
+			scale = widthRatio;
+		}
+		else
+		{
+			scale = heightRatio;
+		}
+
+		//printf("ratio=%f\n",ratio);
+
+		w *= scale;
+		h *= scale;
+
+		if(w < targetRect.width())
+		{
+			offsetX = (targetRect.width() - w)/2.0f;
+		}
+		if(h < targetRect.height())
+		{
+			offsetY = (targetRect.height() - h)/2.0f;
+		}
+		//printf("offsetX=%f, offsetY=%f\n",offsetX, offsetY);
+	}
+}
+
+void ImageView::sceneRectChanged(const QRectF & rect)
+{
+	_saveImage->setEnabled(rect.isValid());
+}
+
+void ImageView::paintEvent(QPaintEvent *event)
+{
+	if(_graphicsViewMode->isChecked())
+	{
+		QWidget::paintEvent(event);
+	}
+	else
+	{
+		if(!_graphicsView->scene()->sceneRect().isNull())
+		{
+			//Scale
+			float ratio, offsetX, offsetY;
+			this->computeScaleOffsets(event->rect(), ratio, offsetX, offsetY);
+			QPainter painter(this);
+
+			//Background
+			painter.save();
+			painter.setBrush(_graphicsView->backgroundBrush());
+			painter.drawRect(event->rect());
+			painter.restore();
+
+			painter.translate(offsetX, offsetY);
+			painter.scale(ratio, ratio);
+
+			painter.save();
+			if(_showImage->isChecked() && !_image.isNull() &&
+			   _showImageDepth->isChecked() && !_imageDepth.isNull())
+			{
+				painter.setOpacity(0.5);
+			}
+
+			if(_showImage->isChecked() && !_image.isNull())
+			{
+				painter.drawPixmap(QPoint(0,0), _image);
+			}
+
+			if(_showImageDepth->isChecked() && !_imageDepth.isNull())
+			{
+				painter.drawPixmap(QPoint(0,0), _imageDepth);
+			}
+			painter.restore();
+
+			if(_showFeatures->isChecked())
+			{
+				for(QMultiMap<int, rtabmap::KeypointItem *>::iterator iter = _features.begin(); iter != _features.end(); ++iter)
+				{
+					QColor color = iter.value()->pen().color();
+					painter.save();
+					painter.setPen(color);
+					painter.setBrush(color);
+					painter.drawEllipse(iter.value()->rect());
+					painter.restore();
+				}
+			}
+
+			if(_showLines->isChecked())
+			{
+				for(QList<QGraphicsLineItem*>::iterator iter = _lines.begin(); iter != _lines.end(); ++iter)
+				{
+					QColor color = (*iter)->pen().color();
+					painter.save();
+					painter.setPen(color);
+					painter.drawLine((*iter)->line());
+					painter.restore();
+				}
+			}
+		}
+	}
+}
+
+void ImageView::resizeEvent(QResizeEvent* event)
+{
+	QWidget::resizeEvent(event);
+	if(_graphicsView->isVisible() && _graphicsViewScaled->isChecked())
+	{
+		_graphicsView->fitInView(_graphicsView->sceneRect(), Qt::KeepAspectRatio);
 	}
 }
 
@@ -147,19 +450,29 @@ void ImageView::contextMenuEvent(QContextMenuEvent * e)
 	QAction * action = _menu->exec(e->globalPos());
 	if(action == _saveImage)
 	{
-		QString text;
-#ifdef QT_SVG_LIB
-		text = QFileDialog::getSaveFileName(this, tr("Save figure to ..."), _savedFileName, "*.png *.xpm *.jpg *.pdf *.svg");
-#else
-		text = QFileDialog::getSaveFileName(this, tr("Save figure to ..."), _savedFileName, "*.png *.xpm *.jpg *.pdf");
-#endif
-		if(!text.isEmpty())
+		if(!_graphicsView->scene()->sceneRect().isNull())
 		{
-			_savedFileName = text;
-			QImage img(this->sceneRect().width(), this->sceneRect().height(),QImage::Format_ARGB32_Premultiplied);
-			QPainter p(&img);
-			this->scene()->render(&p, this->sceneRect(), this->sceneRect());
-			img.save(text);
+			QString text;
+#ifdef QT_SVG_LIB
+			text = QFileDialog::getSaveFileName(this, tr("Save figure to ..."), _savedFileName, "*.png *.xpm *.jpg *.pdf *.svg");
+#else
+			text = QFileDialog::getSaveFileName(this, tr("Save figure to ..."), _savedFileName, "*.png *.xpm *.jpg *.pdf");
+#endif
+			if(!text.isEmpty())
+			{
+				_savedFileName = text;
+				QImage img(_graphicsView->sceneRect().width(), _graphicsView->sceneRect().height(), QImage::Format_ARGB32_Premultiplied);
+				QPainter p(&img);
+				if(_graphicsView->isVisible())
+				{
+					_graphicsView->scene()->render(&p, _graphicsView->sceneRect(), _graphicsView->sceneRect());
+				}
+				else
+				{
+					this->render(&p, QPoint(), _graphicsView->sceneRect().toRect());
+				}
+				img.save(text);
+			}
 		}
 	}
 	else if(action == _showFeatures)
@@ -182,10 +495,20 @@ void ImageView::contextMenuEvent(QContextMenuEvent * e)
 		this->setLinesShown(_showLines->isChecked());
 		emit configChanged();
 	}
+	else if(action == _graphicsViewMode)
+	{
+		this->setGraphicsViewMode(_graphicsViewMode->isChecked());
+		emit configChanged();
+	}
+	else if(action == _graphicsViewScaled)
+	{
+		this->setGraphicsViewScaled(_graphicsViewScaled->isChecked());
+		emit configChanged();
+	}
 	else if(action == _setAlpha)
 	{
 		bool ok = false;
-		int value = QInputDialog::getInt(this, tr("Set features and lines alpha"), tr("alpha (0-255)"), _alpha, 0, 255, 10, &ok);
+		int value = QInputDialog::getInt(this, tr("Set features and lines transparency"), tr("alpha (0-255)"), _alpha, 0, 255, 10, &ok);
 		if(ok)
 		{
 			this->setAlpha(value);
@@ -202,158 +525,137 @@ void ImageView::contextMenuEvent(QContextMenuEvent * e)
 
 void ImageView::updateOpacity()
 {
-	if(_image && _imageDepth)
+	if(_imageItem && _imageDepthItem)
 	{
-		if(_image->isVisible() && _imageDepth->isVisible())
+		if(_imageItem->isVisible() && _imageDepthItem->isVisible())
 		{
 			QGraphicsOpacityEffect * effect = new QGraphicsOpacityEffect();
-			QGraphicsOpacityEffect * effect2 = new QGraphicsOpacityEffect();
 			effect->setOpacity(0.5);
-			effect2->setOpacity(0.5);
-			_image->setGraphicsEffect(effect);
-			_imageDepth->setGraphicsEffect(effect2);
+			_imageDepthItem->setGraphicsEffect(effect);
 		}
 		else
 		{
-			_image->setGraphicsEffect(0);
-			_imageDepth->setGraphicsEffect(0);
+			_imageDepthItem->setGraphicsEffect(0);
 		}
 	}
-	else if(_image)
+	else if(_imageDepthItem)
 	{
-		_image->setGraphicsEffect(0);
-	}
-	else if(_imageDepth)
-	{
-		_imageDepth->setGraphicsEffect(0);
+		_imageDepthItem->setGraphicsEffect(0);
 	}
 }
 
-void ImageView::updateZoom()
-{
-	qreal scaleRatio = 1;
-	if(this->scene())
-	{
-		scaleRatio = this->geometry().width()/this->sceneRect().width();
-	}
-	_minZoom = log(scaleRatio)/log(2.0)*50+250;
-}
-
-void ImageView::wheelEvent(QWheelEvent * e)
-{
-	if(e->delta() > 0)
-	{
-		_zoom += 20;
-		this->setDragMode(QGraphicsView::ScrollHandDrag);
-		if(_zoom>=500)
-		{
-			_zoom = 500;
-		}
-	}
-	else
-	{
-		_zoom -= 20;
-		if(_zoom<=_minZoom)
-		{
-			this->setDragMode(QGraphicsView::NoDrag);
-			_zoom = _minZoom;
-			this->fitInView(this->sceneRect(), Qt::KeepAspectRatio);
-			return;
-		}
-	}
-
-	qreal scale = qPow(qreal(2), (_zoom - 250) / qreal(50));
-	QMatrix matrix;
-	matrix.scale(scale, scale);
-	this->setMatrix(matrix);
-}
-
-void ImageView::setFeatures(const std::multimap<int, cv::KeyPoint> & refWords, const QColor & color)
+void ImageView::setFeatures(const std::multimap<int, cv::KeyPoint> & refWords, const cv::Mat & depth, const QColor & color)
 {
 	qDeleteAll(_features);
 	_features.clear();
 
-	rtabmap::KeypointItem * item = 0;
-	for(std::multimap<int, cv::KeyPoint>::const_iterator i = refWords.begin(); i != refWords.end(); ++i )
+	for(std::multimap<int, cv::KeyPoint>::const_iterator iter = refWords.begin(); iter != refWords.end(); ++iter )
 	{
-		const cv::KeyPoint & r = (*i).second;
-		int id = (*i).first;
-		QString info = QString( "WordRef = %1\n"
-								"Laplacian = %2\n"
-								"Dir = %3\n"
-								"Hessian = %4\n"
-								"X = %5\n"
-								"Y = %6\n"
-								"Size = %7").arg(id).arg(1).arg(r.angle).arg(r.response).arg(r.pt.x).arg(r.pt.y).arg(r.size);
-		float radius = r.size/2.0f;
-		item = new rtabmap::KeypointItem(r.pt.x-radius, r.pt.y-radius, radius*2, info, color);
+		addFeature(iter->first, iter->second, depth.empty()?0:util3d::getDepth(depth, iter->second.pt.x, iter->second.pt.y, false), color);
+	}
 
-		scene()->addItem(item);
-		_features.insert(id, item);
-		item->setVisible(_showFeatures->isChecked());
-		item->setZValue(1);
+	if(!_graphicsView->isVisible())
+	{
+		this->update();
 	}
 }
 
-void ImageView::setFeatures(const std::vector<cv::KeyPoint> & features, const QColor & color)
+void ImageView::setFeatures(const std::vector<cv::KeyPoint> & features, const cv::Mat & depth, const QColor & color)
 {
 	qDeleteAll(_features);
 	_features.clear();
 
-	rtabmap::KeypointItem * item = 0;
 	for(unsigned int i = 0; i< features.size(); ++i )
 	{
-		const cv::KeyPoint & r = features[i];
-		int id = i;
-		QString info = QString( "WordRef = %1\n"
-								"Laplacian = %2\n"
-								"Dir = %3\n"
-								"Hessian = %4\n"
-								"X = %5\n"
-								"Y = %6\n"
-								"Size = %7").arg(id).arg(1).arg(r.angle).arg(r.response).arg(r.pt.x).arg(r.pt.y).arg(r.size);
-		float radius = (r.size==0?3:r.size)/2.0f;
-		item = new rtabmap::KeypointItem(r.pt.x-radius, r.pt.y-radius, radius*2, info, color);
+		addFeature(i, features[i], depth.empty()?0:util3d::getDepth(depth, features[i].pt.x, features[i].pt.y, false), color);
+	}
 
-		scene()->addItem(item);
-		_features.insert(id, item);
-		item->setVisible(_showFeatures->isChecked());
-		item->setZValue(1);
+	if(!_graphicsView->isVisible())
+	{
+		this->update();
+	}
+}
+
+void ImageView::addFeature(int id, const cv::KeyPoint & kpt, float depth, QColor color)
+{
+	color.setAlpha(this->getAlpha());
+	rtabmap::KeypointItem * item = new rtabmap::KeypointItem(id, kpt, depth, color);
+	_features.insert(id, item);
+	item->setVisible(isFeaturesShown());
+	item->setZValue(1);
+
+	if(_graphicsView->isVisible())
+	{
+		_graphicsView->scene()->addItem(item);
+	}
+}
+
+void ImageView::addLine(float x1, float y1, float x2, float y2, QColor color)
+{
+	color.setAlpha(this->getAlpha());
+	QGraphicsLineItem * item  = new QGraphicsLineItem(x1, y1, x2, y2);
+	item->setPen(QPen(color));
+	_lines.push_back(item);
+	item->setVisible(isLinesShown());
+	item->setZValue(1);
+
+	if(_graphicsView->isVisible())
+	{
+		_graphicsView->scene()->addItem(item);
 	}
 }
 
 void ImageView::setImage(const QImage & image)
 {
-	if(_image)
+	_image = QPixmap::fromImage(image);
+	if(_graphicsView->isVisible())
 	{
-		_image->setPixmap(QPixmap::fromImage(image));
+		if(_imageItem)
+		{
+			_imageItem->setPixmap(_image);
+		}
+		else
+		{
+			_imageItem = _graphicsView->scene()->addPixmap(_image);
+			_imageItem->setVisible(_showImage->isChecked());
+			_showImage->setEnabled(true);
+			this->updateOpacity();
+		}
 	}
 	else
 	{
-		_image = scene()->addPixmap(QPixmap::fromImage(image));
-		_image->setVisible(_showImage->isChecked());
-		_showImage->setEnabled(true);
-		this->updateOpacity();
+		this->setSceneRect(image.rect());
+		this->update();
 	}
 }
 
 void ImageView::setImageDepth(const QImage & imageDepth)
 {
-	if(_imageDepth)
+	_imageDepth = QPixmap::fromImage(imageDepth);
+	if(_graphicsView->isVisible())
 	{
-		_imageDepth->setPixmap(QPixmap::fromImage(imageDepth));
+		if(_imageDepthItem)
+		{
+			_imageDepthItem->setPixmap(_imageDepth);
+		}
+		else
+		{
+			_imageDepthItem = _graphicsView->scene()->addPixmap(_imageDepth);
+			_imageDepthItem->setVisible(_showImageDepth->isChecked());
+			_showImageDepth->setEnabled(true);
+			this->updateOpacity();
+		}
 	}
 	else
 	{
-		_imageDepth = scene()->addPixmap(QPixmap::fromImage(imageDepth));
-		_imageDepth->setVisible(_showImageDepth->isChecked());
-		_showImageDepth->setEnabled(true);
-		this->updateOpacity();
+		this->setSceneRect(imageDepth.rect());
+		this->update();
 	}
 }
 
-void ImageView::setFeatureColor(int id, const QColor & color)
+void ImageView::setFeatureColor(int id, QColor color)
 {
+	color.setAlpha(getAlpha());
 	QList<KeypointItem*> items = _features.values(id);
 	if(items.size())
 	{
@@ -366,14 +668,24 @@ void ImageView::setFeatureColor(int id, const QColor & color)
 	{
 		UWARN("Not found feature %d", id);
 	}
+
+	if(!_graphicsView->isVisible())
+	{
+		this->update();
+	}
 }
 
-void ImageView::setFeaturesColor(const QColor & color)
+void ImageView::setFeaturesColor(QColor color)
 {
+	color.setAlpha(getAlpha());
 	for(QMultiMap<int, KeypointItem*>::iterator iter=_features.begin(); iter!=_features.end(); ++iter)
 	{
-		iter.value()->setPen(QPen(color));
-		iter.value()->setBrush(QBrush(color));
+		iter.value()->setColor(color);
+	}
+
+	if(!_graphicsView->isVisible())
+	{
+		this->update();
 	}
 }
 
@@ -388,21 +700,47 @@ void ImageView::setAlpha(int alpha)
 		iter.value()->setPen(QPen(c));
 		iter.value()->setBrush(QBrush(c));
 	}
+
+	for(QList<QGraphicsLineItem*>::iterator iter=_lines.begin(); iter!=_lines.end(); ++iter)
+	{
+		QColor c = (*iter)->pen().color();
+		c.setAlpha(_alpha);
+		(*iter)->setPen(QPen(c));
+	}
+
+	if(!_graphicsView->isVisible())
+	{
+		this->update();
+	}
+}
+
+void ImageView::setSceneRect(const QRectF & rect)
+{
+	_graphicsView->scene()->setSceneRect(rect);
+
+	if(_graphicsViewScaled->isChecked())
+	{
+		_graphicsView->fitInView(_graphicsView->sceneRect(), Qt::KeepAspectRatio);
+	}
+	else
+	{
+		_graphicsView->resetTransform();
+	}
+
+	if(!_graphicsView->isVisible())
+	{
+		this->update();
+	}
 }
 
 void ImageView::clearLines()
 {
-	if(this->scene())
+	qDeleteAll(_lines);
+	_lines.clear();
+
+	if(!_graphicsView->isVisible())
 	{
-		QList<QGraphicsItem*> items = this->scene()->items();
-		for(int i=0; i<items.size(); ++i)
-		{
-			QGraphicsLineItem * line = qgraphicsitem_cast<QGraphicsLineItem*>(items[i]);
-			if(line)
-			{
-				delete line;
-			}
-		}
+		this->update();
 	}
 }
 
@@ -411,22 +749,36 @@ void ImageView::clear()
 	qDeleteAll(_features);
 	_features.clear();
 
-	if(_image)
+	qDeleteAll(_lines);
+	_lines.clear();
+
+	if(_imageItem)
 	{
-		scene()->removeItem(_image);
-		delete _image;
-		_image = 0;
+		_graphicsView->scene()->removeItem(_imageItem);
+		delete _imageItem;
+		_imageItem = 0;
 		_showImage->setEnabled(false);
 	}
+	_image = QPixmap();
 
-	if(_imageDepth)
+	if(_imageDepthItem)
 	{
-		scene()->removeItem(_imageDepth);
-		delete _imageDepth;
-		_imageDepth = 0;
+		_graphicsView->scene()->removeItem(_imageDepthItem);
+		delete _imageDepthItem;
+		_imageDepthItem = 0;
 		_showImageDepth->setEnabled(false);
 	}
-	scene()->clear();
+	_imageDepth = QPixmap();
+
+	if(!_graphicsView->isVisible())
+	{
+		this->update();
+	}
+}
+
+QSize ImageView::sizeHint() const
+{
+	return _graphicsView->sizeHint();
 }
 
 }

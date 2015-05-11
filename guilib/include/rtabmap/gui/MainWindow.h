@@ -31,7 +31,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/gui/RtabmapGuiExp.h" // DLL export/import defines
 
 #include "rtabmap/utilite/UEventsHandler.h"
-#include <QtGui/QMainWindow>
+#include <QMainWindow>
 #include <QtCore/QSet>
 #include "rtabmap/core/RtabmapEvent.h"
 #include "rtabmap/core/SensorData.h"
@@ -66,6 +66,7 @@ class DetailedProgressDialog;
 class TwistGridWidget;
 class ExportCloudsDialog;
 class PostProcessingDialog;
+class DataRecorder;
 
 class RTABMAPGUI_EXP MainWindow : public QMainWindow, public UEventsHandler
 {
@@ -104,6 +105,9 @@ public:
 	void setMonitoringState(bool pauseChecked = false); // in monitoring state, only some actions are enabled
 	bool isSavedMaximized() const {return _savedMaximized;}
 
+	bool isProcessingStatistics() const {return _processingStatistics;}
+	bool isProcessingOdometry() const {return _processingOdometry;}
+
 public slots:
 	void processStats(const rtabmap::Statistics & stat);
 
@@ -113,6 +117,7 @@ protected:
 	virtual void showEvent(QShowEvent* anEvent);
 	virtual void moveEvent(QMoveEvent* anEvent);
 	virtual void resizeEvent(QResizeEvent* anEvent);
+	virtual bool eventFilter(QObject *obj, QEvent *event);
 
 private slots:
 	void changeState(MainWindow::State state);
@@ -121,7 +126,7 @@ private slots:
 	void saveConfigGUI();
 	void newDatabase();
 	void openDatabase();
-	void closeDatabase();
+	bool closeDatabase();
 	void editDatabase();
 	void startDetection();
 	void pauseDetection();
@@ -143,13 +148,15 @@ private slots:
 	void selectOpenniCv();
 	void selectOpenniCvAsus();
 	void selectOpenni2();
+	void selectFreenect2();
+	void selectStereoDC1394();
+	void selectStereoFlyCapture2();
 	void dumpTheMemory();
 	void dumpThePrediction();
+	void sendGoal();
 	void downloadAllClouds();
 	void downloadPoseGraph();
 	void clearTheCache();
-	void saveFigures();
-	void loadFigures();
 	void openPreferences();
 	void selectScreenCaptureFormat(bool checked);
 	void takeScreenshot();
@@ -159,6 +166,7 @@ private slots:
 	void applyPrefSettings(const rtabmap::ParametersMap & parameters);
 	void processRtabmapEventInit(int status, const QString & info);
 	void processRtabmapEvent3DMap(const rtabmap::RtabmapEvent3DMap & event);
+	void processRtabmapGlobalPathEvent(const rtabmap::RtabmapGlobalPathEvent & event);
 	void changeImgRateSetting();
 	void changeDetectionRateSetting();
 	void changeTimeLimitSetting();
@@ -181,6 +189,7 @@ private slots:
 	void resetOdometry();
 	void triggerNewMap();
 	void dataRecorder();
+	void dataRecorderDestroyed();
 	void updateNodeVisibility(int, bool);
 
 signals:
@@ -190,6 +199,7 @@ signals:
 	void stateChanged(MainWindow::State);
 	void rtabmapEventInitReceived(int status, const QString & info);
 	void rtabmapEvent3DMapReceived(const rtabmap::RtabmapEvent3DMap & event);
+	void rtabmapGlobalPathEventReceived(const rtabmap::RtabmapGlobalPathEvent & event);
 	void imgRateChanged(double);
 	void detectionRateChanged(double);
 	void timeLimitChanged(float);
@@ -205,9 +215,10 @@ private:
 	void createAndAddScanToMap(int nodeId, const Transform & pose, int mapId);
 	void drawKeypoints(const std::multimap<int, cv::KeyPoint> & refWords, const std::multimap<int, cv::KeyPoint> & loopWords);
 	void setupMainLayout(bool vertical);
-	void updateSelectSourceImageMenu(bool used, PreferencesDialog::Src src);
-	void updateSelectSourceDatabase(bool used);
-	void updateSelectSourceRGBDMenu(bool used, PreferencesDialog::Src src);
+	void updateSelectSourceMenu();
+	void applyPrefSettings(const rtabmap::ParametersMap & parameters, bool postParamEvent);
+	void saveFigures();
+	void loadFigures();
 
 	pcl::PointCloud<pcl::PointXYZRGB>::Ptr getAssembledCloud(
 			const std::map<int, Transform> & poses,
@@ -258,13 +269,16 @@ private:
 	AboutDialog * _aboutDialog;
 	ExportCloudsDialog * _exportDialog;
 	PostProcessingDialog * _postProcessingDialog;
+	DataRecorder * _dataRecorder;
 
 	QSet<int> _lastIds;
 	int _lastId;
 	bool _processingStatistics;
 	bool _odometryReceived;
+	QString _newDatabasePath;
+	QString _newDatabasePathOutput;
 	QString _openedDatabasePath;
-	bool _emptyNewDatabase;
+	bool _databaseUpdated;
 	bool _odomImageShow;
 	bool _odomImageDepthShow;
 	bool _savedMaximized;
@@ -275,10 +289,12 @@ private:
 	std::map<int, int> _currentMapIds;   // <nodeId, mapId>
 	std::map<int, pcl::PointCloud<pcl::PointXYZRGB>::Ptr > _createdClouds;
 	std::map<int, pcl::PointCloud<pcl::PointXYZ>::Ptr > _createdScans;
-	std::map<int, std::pair<cv::Mat, cv::Mat> > _occupancyLocalMaps; // <ground, obstacles>
+	std::map<int, std::pair<cv::Mat, cv::Mat> > _projectionLocalMaps; // <ground, obstacles>
+	std::map<int, std::pair<cv::Mat, cv::Mat> > _gridLocalMaps; // <ground, obstacles>
 	Transform _odometryCorrection;
 	Transform _lastOdomPose;
-	bool _lastOdometryProcessed;
+	bool _processingOdometry;
+	double _lastOdomInfoUpdateTime;
 
 	QTimer * _oneSecondTimer;
 	QTime * _elapsedTime;
@@ -296,6 +312,8 @@ private:
 
 	QVector<int> _refIds;
 	QVector<int> _loopClosureIds;
+
+	bool _firstCall;
 };
 
 }

@@ -28,8 +28,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #ifndef GRAPHVIEWER_H_
 #define GRAPHVIEWER_H_
 
-#include <QtGui/QGraphicsView>
+#include <QGraphicsView>
 #include <QtCore/QMap>
+#include <QtCore/QSettings>
 #include <rtabmap/core/Link.h>
 #include <opencv2/opencv.hpp>
 #include <map>
@@ -53,39 +54,56 @@ public:
 
 	void updateGraph(const std::map<int, Transform> & poses,
 					 const std::multimap<int, Link> & constraints);
+	void updateReferentialPosition(const Transform & t);
 	void updateMap(const cv::Mat & map8U, float resolution, float xMin, float yMin);
 	void updatePosterior(const std::map<int, float> & posterior);
 	void updateLocalPath(const std::vector<int> & localPath);
+	void setGlobalPath(const std::vector<std::pair<int, Transform> > & globalPath);
+	void setCurrentGoalID(int id);
+	void setLocalRadius(float radius);
 	void clearGraph();
 	void clearMap();
 	void clearPosterior();
 	void clearAll();
+
+	void saveSettings(QSettings & settings, const QString & group = "") const;
+	void loadSettings(QSettings & settings, const QString & group = "");
 
 	//getters
 	const QString & getWorkingDirectory() const {return _workingDirectory;}
 	float getNodeRadius() const {return _nodeRadius;}
 	float getLinkWidth() const {return _linkWidth;}
 	const QColor & getNodeColor() const {return _nodeColor;}
+	const QColor & getCurrentGoalColor() const {return _currentGoalColor;}
 	const QColor & getNeighborColor() const {return _neighborColor;}
 	const QColor & getGlobalLoopClosureColor() const {return _loopClosureColor;}
 	const QColor & getLocalLoopClosureColor() const {return _loopClosureLocalColor;}
 	const QColor & getUserLoopClosureColor() const {return _loopClosureUserColor;}
 	const QColor & getVirtualLoopClosureColor() const {return _loopClosureVirtualColor;}
-	const QColor & getLocalPathColor() const {return _pathColor;}
+	const QColor & getLocalPathColor() const {return _localPathColor;}
+	const QColor & getGlobalPathColor() const {return _globalPathColor;}
 	bool isGridMapVisible() const;
+	bool isOriginVisible() const;
+	bool isReferentialVisible() const;
+	bool isLocalRadiusVisible() const;
 
 	// setters
 	void setWorkingDirectory(const QString & path);
 	void setNodeRadius(float radius);
 	void setLinkWidth(float width);
 	void setNodeColor(const QColor & color);
+	void setCurrentGoalColor(const QColor & color);
 	void setNeighborColor(const QColor & color);
 	void setGlobalLoopClosureColor(const QColor & color);
 	void setLocalLoopClosureColor(const QColor & color);
 	void setUserLoopClosureColor(const QColor & color);
 	void setVirtualLoopClosureColor(const QColor & color);
 	void setLocalPathColor(const QColor & color);
+	void setGlobalPathColor(const QColor & color);
 	void setGridMapVisible(bool visible);
+	void setOriginVisible(bool visible);
+	void setReferentialVisible(bool visible);
+	void setLocalRadiusVisible(bool visible);
 
 signals:
 	void configChanged();
@@ -100,20 +118,26 @@ protected:
 private:
 	QString _workingDirectory;
 	QColor _nodeColor;
+	QColor _currentGoalColor;
 	QColor _neighborColor;
 	QColor _loopClosureColor;
 	QColor _loopClosureLocalColor;
 	QColor _loopClosureUserColor;
 	QColor _loopClosureVirtualColor;
-	QColor _pathColor;
+	QColor _localPathColor;
+	QColor _globalPathColor;
 	QGraphicsItem * _root;
 	QMap<int, NodeItem*> _nodeItems;
 	QMultiMap<int, LinkItem*> _linkItems;
+	QMultiMap<int, LinkItem*> _localPathLinkItems;
+	QMultiMap<int, LinkItem*> _globalPathLinkItems;
 	float _nodeRadius;
 	float _linkWidth;
 	QGraphicsPixmapItem * _gridMap;
-	QGraphicsItemGroup * _lastReferential;
+	QGraphicsItemGroup * _referential;
+	QGraphicsItemGroup * _originReferential;
 	float _gridCellSize;
+	QGraphicsEllipseItem * _localRadius;
 };
 
 } /* namespace rtabmap */

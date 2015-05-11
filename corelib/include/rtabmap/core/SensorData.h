@@ -43,7 +43,7 @@ class RTABMAP_EXP SensorData
 {
 public:
 	SensorData(); // empty constructor
-	SensorData(const cv::Mat & image, int id = 0);
+	SensorData(const cv::Mat & image, int id = 0, double stamp = 0.0, const std::vector<unsigned char> & userData = std::vector<unsigned char>());
 
 	// Metric constructor
 	SensorData(const cv::Mat & image,
@@ -54,11 +54,15 @@ public:
 		  float cy,
 		  const Transform & localTransform,
 		  const Transform & pose,
-		  float poseVariance,
-		  int id = 0);
+		  float poseRotVariance,
+		  float poseTransVariance,
+		  int id,
+		  double stamp,
+		  const std::vector<unsigned char> & userData = std::vector<unsigned char>());
 
 	// Metric constructor + 2d laser scan
 	SensorData(const cv::Mat & laserScan,
+			int laserScanMaxPts,
 		  const cv::Mat & image,
 		  const cv::Mat & depthOrRightImage,
 		  float fx,
@@ -67,8 +71,11 @@ public:
 		  float cy,
 		  const Transform & localTransform,
 		  const Transform & pose,
-		  float poseVariance,
-		  int id = 0);
+		  float poseRotVariance,
+		  float poseTransVariance,
+		  int id,
+		  double stamp,
+		  const std::vector<unsigned char> & userData = std::vector<unsigned char>());
 
 	virtual ~SensorData() {}
 
@@ -80,13 +87,16 @@ public:
 	const cv::Mat & image() const {return _image;}
 	int id() const {return _id;}
 	void setId(int id) {_id = id;}
+	double stamp() const {return _stamp;}
+	void setStamp(double stamp) {_stamp = stamp;}
 
 	bool isMetric() const {return !_depthOrRightImage.empty() || _fx != 0.0f || _fyOrBaseline != 0.0f || !_pose.isNull();}
-	void setPose(const Transform & pose, float variance) {_pose = pose; _poseVariance=variance;}
+	void setPose(const Transform & pose, float rotVariance, float transVariance) {_pose = pose; _poseRotVariance=rotVariance; _poseTransVariance = transVariance;}
 	cv::Mat depth() const {return (_depthOrRightImage.type()==CV_32FC1 || _depthOrRightImage.type()==CV_16UC1)?_depthOrRightImage:cv::Mat();}
 	cv::Mat rightImage() const {return _depthOrRightImage.type()==CV_8UC1?_depthOrRightImage:cv::Mat();}
 	const cv::Mat & depthOrRightImage() const {return _depthOrRightImage;}
 	const cv::Mat & laserScan() const {return _laserScan;}
+	int laserScanMaxPts() const {return _laserScanMaxPts;}
 	float fx() const {return _fx;}
 	float fy() const {return (_depthOrRightImage.type()==CV_8UC1)?0:_fyOrBaseline;}
 	float cx() const {return _cx;}
@@ -95,7 +105,8 @@ public:
 	float fyOrBaseline() const {return _fyOrBaseline;}
 	const Transform & pose() const {return _pose;}
 	const Transform & localTransform() const {return _localTransform;}
-	float poseVariance() const {return _poseVariance;}
+	float poseRotVariance() const {return _poseRotVariance;}
+	float poseTransVariance() const {return _poseTransVariance;}
 
 	void setFeatures(const std::vector<cv::KeyPoint> & keypoints, const cv::Mat & descriptors)
 	{
@@ -105,9 +116,13 @@ public:
 	const std::vector<cv::KeyPoint> & keypoints() const {return _keypoints;}
 	const cv::Mat & descriptors() const {return _descriptors;}
 
+	void setUserData(const std::vector<unsigned char> & data) {_userData = data;}
+	const std::vector<unsigned char> & userData() const {return _userData;}
+
 private:
 	cv::Mat _image;
 	int _id;
+	double _stamp;
 
 	// Metric stuff
 	cv::Mat _depthOrRightImage;
@@ -118,11 +133,16 @@ private:
 	float _cy;
 	Transform _pose;
 	Transform _localTransform;
-	float _poseVariance;
+	float _poseRotVariance;
+	float _poseTransVariance;
+	int _laserScanMaxPts;
 
 	// features
 	std::vector<cv::KeyPoint> _keypoints;
 	cv::Mat _descriptors;
+
+	// user data
+	std::vector<unsigned char> _userData;
 };
 
 }

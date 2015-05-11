@@ -150,6 +150,29 @@ bool uStr2Bool(const char * str)
 	return !(str && (strcmp(str, "false") == 0 || strcmp(str, "FALSE") == 0 || strcmp(str, "0") == 0));
 }
 
+std::vector<unsigned char> uStr2Bytes(const std::string & str)
+{
+	std::vector<unsigned char> bytes(str.size()+1);
+	memcpy(bytes.data(), str.data(), str.size());
+	bytes[bytes.size()-1] = '\0'; // null character
+	return bytes;
+}
+
+std::string uBytes2Str(const std::vector<unsigned char> & bytes)
+{
+	if(bytes.size())
+	{
+		if(bytes[bytes.size()-1] != '\0')
+		{
+			std::vector<unsigned char> tmp = bytes;
+			tmp.push_back('\0');
+			return std::string((const char *)tmp.data());
+		}
+		return std::string((const char *)bytes.data());
+	}
+	return std::string();
+}
+
 std::string uBytes2Hex(const char * bytes, unsigned int bytesLen)
 {
 	std::string hex;
@@ -172,7 +195,7 @@ std::string uBytes2Hex(const char * bytes, unsigned int bytesLen)
 
 std::vector<char> uHex2Bytes(const std::string & hex)
 {
-	return uHex2Bytes(&hex[0], hex.length());
+	return uHex2Bytes(&hex[0], (int)hex.length());
 }
 
 std::vector<char> uHex2Bytes(const char * hex, int hexLen)
@@ -287,7 +310,11 @@ std::string uFormatv (const char *fmt, va_list args)
 #endif
 
         // Try to vsnprintf into our buffer.
+#ifdef _MSC_VER
+    	int needed = vsnprintf_s(buf, size, size, fmt, argsTmp);
+#else
     	int needed = vsnprintf (buf, size, fmt, argsTmp);
+#endif
     	va_end(argsTmp);
         // NB. C99 (which modern Linux and OS X follow) says vsnprintf
         // failure returns the length it would have needed.  But older

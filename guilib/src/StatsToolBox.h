@@ -28,7 +28,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #ifndef STATSTOOLBOX_H_
 #define STATSTOOLBOX_H_
 
-#include <QtGui/QWidget>
+#include <QWidget>
 #include <QtCore/QMap>
 
 class QToolButton;
@@ -94,6 +94,7 @@ public slots:
 
 signals:
 	void menuChanged(const QMenu *);
+	void figuresSetupChanged();
 
 private slots:
 	void plot(const StatItem * stat, const QString & plotName = QString());
