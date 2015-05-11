@@ -30,17 +30,18 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "rtabmap/gui/RtabmapGuiExp.h" // DLL export/import defines
 
-#include <QtGui/QGraphicsEllipseItem>
-#include <QtGui/QGraphicsTextItem>
+#include <QGraphicsEllipseItem>
+#include <QGraphicsTextItem>
 #include <QtGui/QPen>
 #include <QtGui/QBrush>
+#include <opencv2/features2d/features2d.hpp>
 
 namespace rtabmap {
 
 class RTABMAPGUI_EXP KeypointItem : public QGraphicsEllipseItem
 {
 public:
-	KeypointItem(qreal x, qreal y, int r, const QString & info, const QColor & color = Qt::green, QGraphicsItem * parent = 0);
+	KeypointItem(int id, const cv::KeyPoint & kpt, float depth = 0, const QColor & color = Qt::green, QGraphicsItem * parent = 0);
 	virtual ~KeypointItem();
 
 	void setColor(const QColor & color);
@@ -56,9 +57,11 @@ private:
 	void hideDescription();
 
 private:
-	QString _info;
+	int _id;
+	cv::KeyPoint _kpt;
 	QGraphicsRectItem * _placeHolder;
 	int _width;
+	float _depth;
 };
 
 }

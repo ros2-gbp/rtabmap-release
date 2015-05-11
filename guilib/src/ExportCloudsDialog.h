@@ -28,7 +28,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #ifndef EXPORTCLOUDSDIALOG_H_
 #define EXPORTCLOUDSDIALOG_H_
 
-#include <QtGui/QDialog>
+#include <QDialog>
+#include <QtCore/QSettings>
 
 class Ui_ExportCloudsDialog;
 class QAbstractButton;
@@ -43,6 +44,9 @@ public:
 	ExportCloudsDialog(QWidget *parent = 0);
 
 	virtual ~ExportCloudsDialog();
+
+	void saveSettings(QSettings & settings, const QString & group = "") const;
+	void loadSettings(QSettings & settings, const QString & group = "");
 
 	void setSaveButton();
 	void setOkButton();

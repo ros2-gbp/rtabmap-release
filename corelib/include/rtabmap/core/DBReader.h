@@ -39,6 +39,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <opencv2/core/core.hpp>
 
 #include <set>
+#include <list>
 
 namespace rtabmap {
 
@@ -49,7 +50,11 @@ public:
 	DBReader(const std::string & databasePath,
 			 float frameRate = 0.0f,
 			 bool odometryIgnored = false,
-			 float delayToStartSec = 0.0f);
+			 bool ignoreGoalDelay = false);
+	DBReader(const std::list<std::string> & databasePaths,
+			 float frameRate = 0.0f,
+			 bool odometryIgnored = false,
+			 bool ignoreGoalDelay = false);
 	virtual ~DBReader();
 
 	bool init(int startIndex=0);
@@ -61,15 +66,16 @@ protected:
 	virtual void mainLoop();
 
 private:
-	std::string _path;
-	float _frameRate;
+	std::list<std::string> _paths;
+	float _frameRate; // -1 = use Database stamps, 0 = inf
 	bool _odometryIgnored;
-	float _delayToStartSec;
+	bool _ignoreGoalDelay;
 
 	DBDriver * _dbDriver;
 	UTimer _timer;
 	std::set<int> _ids;
 	std::set<int>::iterator _currentId;
+	double _previousStamp;
 };
 
 } /* namespace rtabmap */
