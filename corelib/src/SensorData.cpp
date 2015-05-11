@@ -28,6 +28,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "rtabmap/core/SensorData.h"
 #include "rtabmap/utilite/ULogger.h"
+#include <rtabmap/utilite/UMath.h>
 
 namespace rtabmap
 {
@@ -36,29 +37,38 @@ namespace rtabmap
  * An id is automatically generated if id=0.
  */
 SensorData::SensorData() :
-	_image(cv::Mat()),
 	_id(0),
+	_stamp(0.0),
 	_fx(0.0f),
 	_fyOrBaseline(0.0f),
 	_cx(0.0f),
 	_cy(0.0f),
 	_localTransform(Transform::getIdentity()),
-	_poseVariance(1.0f)
+	_poseRotVariance(1.0f),
+	_poseTransVariance(1.0f),
+	_laserScanMaxPts(0)
 {
 }
 
 SensorData::SensorData(const cv::Mat & image,
-	  int id) :
+	  int id,
+	  double stamp,
+	  const std::vector<unsigned char> & userData) :
 	_image(image),
 	_id(id),
+	_stamp(stamp),
 	_fx(0.0f),
 	_fyOrBaseline(0.0f),
 	_cx(0.0f),
 	_cy(0.0f),
 	_localTransform(Transform::getIdentity()),
-	_poseVariance(1.0f)
+	_poseRotVariance(1.0f),
+	_poseTransVariance(1.0f),
+	_laserScanMaxPts(0),
+	_userData(userData)
 {
-	UASSERT(image.type() == CV_8UC1 || // Mono
+	UASSERT(image.empty() ||
+			image.type() == CV_8UC1 || // Mono
 			image.type() == CV_8UC3);  // RGB
 }
 
@@ -71,10 +81,14 @@ SensorData::SensorData(const cv::Mat & image,
 		  float cy,
 		  const Transform & localTransform,
 		  const Transform & pose,
-		  float poseVariance,
-		  int id) :
+		  float poseRotVariance,
+		  float poseTransVariance,
+		  int id,
+		  double stamp,
+		  const std::vector<unsigned char> & userData) :
 	_image(image),
 	_id(id),
+	_stamp(stamp),
 	_depthOrRightImage(depthOrRightImage),
 	_fx(fx),
 	_fyOrBaseline(fyOrBaseline),
@@ -82,19 +96,25 @@ SensorData::SensorData(const cv::Mat & image,
 	_cy(cy),
 	_pose(pose),
 	_localTransform(localTransform),
-	_poseVariance(poseVariance)
+	_poseRotVariance(poseRotVariance),
+	_poseTransVariance(poseTransVariance),
+	_laserScanMaxPts(0),
+	_userData(userData)
 {
-	UASSERT(image.type() == CV_8UC1 || // Mono
+	UASSERT(image.empty() ||
+			image.type() == CV_8UC1 || // Mono
 			image.type() == CV_8UC3);  // RGB
-	UASSERT(depthOrRightImage.type() == CV_32FC1 || // Depth in meter
+	UASSERT(depthOrRightImage.empty() ||
+			depthOrRightImage.type() == CV_32FC1 || // Depth in meter
 			depthOrRightImage.type() == CV_16UC1 || // Depth in millimetre
 			depthOrRightImage.type() == CV_8U);     // Right stereo image
-	UASSERT(!depthOrRightImage.empty() && _fx>0.0f && _fyOrBaseline>0.0f && _cx>=0.0f && _cy>=0.0f);
 	UASSERT(!_localTransform.isNull());
+	UASSERT_MSG(uIsFinite(_poseRotVariance) && _poseRotVariance>0 && uIsFinite(_poseTransVariance) && _poseTransVariance>0, "Rotational and transitional variances should not be null! (set to 1 if unknown)");
 }
 
 	// Metric constructor + 2d depth
 SensorData::SensorData(const cv::Mat & laserScan,
+		  int laserScanMaxPts,
 		  const cv::Mat & image,
 		  const cv::Mat & depthOrRightImage,
 		  float fx,
@@ -103,10 +123,14 @@ SensorData::SensorData(const cv::Mat & laserScan,
 		  float cy,
 		  const Transform & localTransform,
 		  const Transform & pose,
-		  float poseVariance,
-		  int id) :
+		  float poseRotVariance,
+		  float poseTransVariance,
+		  int id,
+		  double stamp,
+		  const std::vector<unsigned char> & userData) :
 	_image(image),
 	_id(id),
+	_stamp(stamp),
 	_depthOrRightImage(depthOrRightImage),
 	_laserScan(laserScan),
 	_fx(fx),
@@ -115,16 +139,21 @@ SensorData::SensorData(const cv::Mat & laserScan,
 	_cy(cy),
 	_pose(pose),
 	_localTransform(localTransform),
-	_poseVariance(poseVariance)
+	_poseRotVariance(poseRotVariance),
+	_poseTransVariance(poseTransVariance),
+	_laserScanMaxPts(laserScanMaxPts),
+	_userData(userData)
 {
 	UASSERT(_laserScan.empty() || _laserScan.type() == CV_32FC2);
-	UASSERT(image.type() == CV_8UC1 || // Mono
+	UASSERT(image.empty() ||
+			image.type() == CV_8UC1 || // Mono
 			image.type() == CV_8UC3);  // RGB
-	UASSERT(depthOrRightImage.type() == CV_32FC1 || // Depth in meter
+	UASSERT(depthOrRightImage.empty() ||
+			depthOrRightImage.type() == CV_32FC1 || // Depth in meter
 			depthOrRightImage.type() == CV_16UC1 || // Depth in millimetre
 			depthOrRightImage.type() == CV_8U);     // Right stereo image
-	UASSERT(!depthOrRightImage.empty() && _fx>0.0f && _fyOrBaseline>0.0f && _cx>=0.0f && _cy>=0.0f);
 	UASSERT(!_localTransform.isNull());
+	UASSERT_MSG(uIsFinite(_poseRotVariance) && _poseRotVariance>0 && uIsFinite(_poseTransVariance) && _poseTransVariance>0, "Rotational and transitional variances should not be null! (set to 1 if unknown)");
 }
 
 bool SensorData::empty() const
