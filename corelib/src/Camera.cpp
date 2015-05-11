@@ -50,6 +50,7 @@ Camera::Camera(float imageRate,
 	_imageRate(imageRate),
 	_imageWidth(imageWidth),
 	_imageHeight(imageHeight),
+	_mirroring(false),
 	_frameRateTimer(new UTimer())
 {
 }
@@ -177,6 +178,10 @@ cv::Mat Camera::takeImage()
 		cv::Mat temp = img.clone();
 		cv::undistort(temp, img, _k, _d);
 	}
+	if(!img.empty() && _mirroring)
+	{
+		cv::flip(img,img,1);
+	}
 	UDEBUG("Time capturing image = %fs", timer.ticks());
 	return img;
 }
@@ -290,6 +295,14 @@ cv::Mat CameraImages::captureImage()
 						IplImage * i = cvLoadImage(fullPath.c_str());
 						img = cv::Mat(i, true);
 						cvReleaseImage(&i);
+					}
+
+					if(img.channels()>3)
+					{
+						UWARN("Conversion from 4 channels to 3 channels (file=%s)", fullPath.c_str());
+						cv::Mat out;
+						cv::cvtColor(img, out, CV_BGRA2BGR);
+						img = out;
 					}
 				}
 			}

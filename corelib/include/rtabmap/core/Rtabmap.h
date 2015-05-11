@@ -47,6 +47,9 @@ class EpipolarGeometry;
 class Memory;
 class BayesFilter;
 class Signature;
+namespace graph {
+class Optimizer;
+}
 
 class RTABMAP_EXP Rtabmap
 {
@@ -88,15 +91,19 @@ public:
 	bool isIDsGenerated() const;
 	const Statistics & getStatistics() const;
 	//bool getMetricData(int locationId, cv::Mat & rgb, cv::Mat & depth, float & depthConstant, Transform & pose, Transform & localTransform) const;
+	const std::map<int, Transform> & getLocalOptimizedPoses() const {return _optimizedPoses;}
 	Transform getPose(int locationId) const;
 	Transform getMapCorrection() const {return _mapCorrection;}
 	const Memory * getMemory() const {return _memory;}
 	float getGoalReachedRadius() const {return _goalReachedRadius;}
+	float getLocalRadius() const {return _localRadius;}
 
 	float getTimeThreshold() const {return _maxTimeAllowed;} // in ms
 	void setTimeThreshold(float maxTimeAllowed); // in ms
 
-	void triggerNewMap();
+	int triggerNewMap();
+	bool labelLocation(int id, const std::string & label);
+	bool setUserData(int id, const std::vector<unsigned char> & data);
 	void generateDOTGraph(const std::string & path, int id=0, int margin=5);
 	void generateTOROGraph(const std::string & path, bool optimized, bool global);
 	void resetMemory();
@@ -104,30 +111,35 @@ public:
 	void dumpData() const;
 	void parseParameters(const ParametersMap & parameters);
 	void setWorkingDirectory(std::string path);
-	void deleteLocation(int locationId); // Only nodes in STM can be deleted
 	void rejectLoopClosure(int oldId, int newId);
 	void get3DMap(std::map<int, Signature> & signatures,
 			std::map<int, Transform> & poses,
 			std::multimap<int, Link> & constraints,
 			std::map<int, int> & mapIds,
+			std::map<int, double> & stamps,
+			std::map<int, std::string> & labels,
+			std::map<int, std::vector<unsigned char> > & userDatas,
 			bool optimized,
 			bool global) const;
 	void getGraph(std::map<int, Transform> & poses,
 			std::multimap<int, Link> & constraints,
 			std::map<int, int> & mapIds,
+			std::map<int, double> & stamps,
+			std::map<int, std::string> & labels,
+			std::map<int, std::vector<unsigned char> > & userDatas,
 			bool optimized,
 			bool global);
 	void clearPath();
-	std::list<std::pair<int, Transform> > computePath(int targetNode, bool global);
-	std::list<std::pair<int, Transform> > computePath(const Transform & targetPose, bool global);
-	const std::vector<int> & getPath() const {return _path;}
-	std::list<std::pair<int, Transform> > getPathNextPoses() const;
+	bool computePath(int targetNode, bool global);
+	bool computePath(const Transform & targetPose, bool global);
+	const std::vector<std::pair<int, Transform> > & getPath() const {return _path;}
+	std::vector<std::pair<int, Transform> > getPathNextPoses() const;
 	std::vector<int> getPathNextNodes() const;
 	int getPathCurrentGoalId() const;
 	const Transform & getPathTransformToGoal() const {return _pathTransformToGoal;}
 
-	std::map<int, float> getNodesInRadius(int fromId, int maxNearestNeighbors, float radius) const;
-	std::map<int, Transform> getWMPosesInRadius(int fromId, int maxNearestNeighbors, float radius, int maxDiffID, int & nearestId) const;
+	std::map<int, Transform> getForwardWMPoses(int fromId, int maxNearestNeighbors, float radius, int maxDiffID) const;
+	std::list<std::map<int, Transform> > getPaths(std::map<int, Transform> poses) const;
 	void adjustLikelihood(std::map<int, float> & likelihood) const;
 	std::pair<int, float> selectHypothesis(const std::map<int, float> & posterior,
 											const std::map<int, float> & likelihood) const;
@@ -137,8 +149,13 @@ private:
 			bool lookInDatabase,
 			std::map<int, Transform> & optimizedPoses,
 			std::multimap<int, Link> * constraints = 0) const;
+	std::map<int, Transform> optimizeGraph(
+			int fromId,
+			const std::set<int> & ids,
+			bool lookInDatabase,
+			std::multimap<int, Link> * constraints = 0) const;
 	void updateGoalIndex();
-	bool computePath(int targetNode, const std::map<int, Transform> & nodes, const std::multimap<int, rtabmap::Link> & constraints);
+	bool computePath(int targetNode, std::map<int, Transform> nodes, const std::multimap<int, rtabmap::Link> & constraints);
 
 	void setupLogFiles(bool overwrite = false);
 	void flushStatisticLogs();
@@ -154,6 +171,7 @@ private:
 	float _loopThr;
 	float _loopRatio;
 	unsigned int _maxRetrieved;
+	unsigned int _maxLocalRetrieved;
 	bool _statisticLogsBufferedInRAM;
 	bool _statisticLogged;
 	bool _statisticLoggedHeaders;
@@ -162,15 +180,14 @@ private:
 	float _rgbdAngularUpdate;
 	float _newMapOdomChangeDistance;
 	int _globalLoopClosureIcpType;
-	float _globalLoopClosureIcpMaxDistance;
 	bool _poseScanMatching;
 	bool _localLoopClosureDetectionTime;
 	bool _localLoopClosureDetectionSpace;
-	float _localDetectRadius;
-	float _localDetectMaxNeighbors;
-	int _localDetectMaxDiffID;
-	int _toroIterations;
-	bool _toroIgnoreVariance;
+	float _localRadius;
+	float _localImmunizationRatio;
+	int _localDetectMaxGraphDepth;
+	float _localPathFilteringRadius;
+	bool _localPathOdomPosesUsed;
 	std::string _databasePath;
 	bool _optimizeFromGraphEnd;
 	bool _reextractLoopClosureFeatures;
@@ -180,7 +197,8 @@ private:
 	int _reextractMaxWords;
 	bool _startNewMapOnLoopClosure;
 	float _goalReachedRadius; // meters
-	unsigned int _maxAnticipatedNodes;
+	bool _planVirtualLinks;
+	bool _goalsSavedInUserData;
 
 	std::pair<int, float> _loopClosureHypothesis;
 	std::pair<int, float> _highestHypothesis;
@@ -190,7 +208,8 @@ private:
 	// strategies for a type of signature or configuration.
 	EpipolarGeometry * _epipolarGeometry;
 	BayesFilter * _bayesFilter;
-	ParametersMap _lastParameters;
+	graph::Optimizer * _graphOptimizer;
+	ParametersMap _modifiedParameters;
 
 	Memory * _memory;
 
@@ -207,9 +226,10 @@ private:
 	std::multimap<int, Link> _constraints;
 	Transform _mapCorrection;
 	Transform _mapTransform; // for localization mode
+	Transform _lastLocalizationPose; // for localization mode
 
 	// Planning stuff
-	std::vector<int> _path;
+	std::vector<std::pair<int,Transform> > _path;
 	unsigned int _pathCurrentIndex;
 	unsigned int _pathGoalIndex;
 	Transform _pathTransformToGoal;

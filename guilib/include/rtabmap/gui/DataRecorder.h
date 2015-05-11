@@ -31,9 +31,12 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/gui/RtabmapGuiExp.h" // DLL export/import defines
 
 #include <rtabmap/utilite/UEventsHandler.h>
-#include <QtGui/QWidget>
+#include <QWidget>
 #include <rtabmap/core/SensorData.h>
 #include <rtabmap/utilite/UTimer.h>
+#include <rtabmap/utilite/UMutex.h>
+
+class QLabel;
 
 namespace rtabmap {
 
@@ -47,21 +50,29 @@ public:
 	DataRecorder(QWidget * parent = 0);
 	bool init(const QString & path, bool recordInRAM = true);
 
-	void close();
+	void closeRecorder();
 
 	virtual ~DataRecorder();
 
+	const QString & path() const {return path_;}
+
 public slots:
 	void addData(const rtabmap::SensorData & data);
-	void showImage(const rtabmap::SensorData & data);
+	void showImage(const cv::Mat & image, const cv::Mat & depth);
 protected:
+	virtual void closeEvent(QCloseEvent* event);
 	void handleEvent(UEvent * event);
 
 private:
+	UMutex memoryMutex_;
 	Memory * memory_;
 	ImageView* imageView_;
+	QLabel* label_;
 	UTimer timer_;
-	int dataQueue_;
+	QString path_;
+	bool processingImages_;
+	int count_;
+	int totalSizeKB_;
 };
 
 } /* namespace rtabmap */

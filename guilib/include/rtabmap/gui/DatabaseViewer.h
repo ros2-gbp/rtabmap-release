@@ -30,7 +30,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "rtabmap/gui/RtabmapGuiExp.h" // DLL export/import defines
 
-#include <QtGui/QMainWindow>
+#include <QMainWindow>
 #include <QtCore/QByteArray>
 #include <QtCore/QMap>
 #include <QtCore/QSet>
@@ -53,6 +53,7 @@ namespace rtabmap
 class Memory;
 class ImageView;
 class Signature;
+class CloudViewer;
 
 class RTABMAPGUI_EXP DatabaseViewer : public QMainWindow
 {
@@ -62,13 +63,19 @@ public:
 	DatabaseViewer(QWidget * parent = 0);
 	virtual ~DatabaseViewer();
 	bool openDatabase(const QString & path);
+	bool isSavedMaximized() const {return savedMaximized_;}
+	void showCloseButton(bool visible = true);
 
 protected:
 	virtual void showEvent(QShowEvent* anEvent);
+	virtual void moveEvent(QMoveEvent* anEvent);
 	virtual void resizeEvent(QResizeEvent* anEvent);
 	virtual void closeEvent(QCloseEvent* event);
+	virtual bool eventFilter(QObject *obj, QEvent *event);
 
 private slots:
+	void writeSettings();
+	void configModified();
 	void openDatabase();
 	void generateGraph();
 	void exportDatabase();
@@ -82,6 +89,7 @@ private slots:
 	void refineAllLoopClosureLinks();
 	void refineVisuallyAllNeighborLinks();
 	void refineVisuallyAllLoopClosureLinks();
+	void resetAllChanges();
 	void sliderAValueChanged(int);
 	void sliderBValueChanged(int);
 	void sliderAMoved(int);
@@ -89,6 +97,7 @@ private slots:
 	void sliderNeighborValueChanged(int);
 	void sliderLoopValueChanged(int);
 	void sliderIterationsValueChanged(int);
+	void updateGrid();
 	void updateGraphView();
 	void refineConstraint();
 	void refineConstraintVisually();
@@ -98,20 +107,31 @@ private slots:
 	void updateConstraintView();
 
 private:
+	QString getIniFilePath() const;
+	void readSettings();
+
 	void updateIds();
 	void update(int value,
 				QLabel * labelIndex,
 				QLabel * labelParents,
 				QLabel * labelChildren,
+				QLabel * weight,
+				QLabel * label,
+				QLabel * stamp,
 				rtabmap::ImageView * view,
+				rtabmap::CloudViewer * view3D,
 				QLabel * labelId,
-				bool updateConstraintView = true);
+				QLabel * labelMapId,
+				bool updateConstraintView);
 	void updateStereo(const Signature * data);
 	void updateWordsMatching();
-	void updateConstraintView(const rtabmap::Link & link,
+	void updateConstraintView(
+			const rtabmap::Link & link,
+			bool updateImageSliders = true,
 			const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloudFrom = pcl::PointCloud<pcl::PointXYZ>::Ptr(new pcl::PointCloud<pcl::PointXYZ>),
 			const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloudTo = pcl::PointCloud<pcl::PointXYZ>::Ptr(new pcl::PointCloud<pcl::PointXYZ>),
-			bool updateImageSliders = true);
+			const pcl::PointCloud<pcl::PointXYZ>::Ptr & scanFrom = pcl::PointCloud<pcl::PointXYZ>::Ptr(new pcl::PointCloud<pcl::PointXYZ>),
+			const pcl::PointCloud<pcl::PointXYZ>::Ptr & scanTo = pcl::PointCloud<pcl::PointXYZ>::Ptr(new pcl::PointCloud<pcl::PointXYZ>));
 	void updateConstraintButtons();
 	Link findActiveLink(int from, int to);
 	bool containsLink(
@@ -121,8 +141,8 @@ private:
 	std::multimap<int, rtabmap::Link> updateLinksWithModifications(
 			const std::multimap<int, rtabmap::Link> & edgeConstraints);
 	void updateLoopClosuresSlider(int from = 0, int to = 0);
-	void refineConstraint(int from, int to, bool updateGraph);
-	void refineConstraintVisually(int from, int to, bool updateGraph);
+	void refineConstraint(int from, int to,  bool silent, bool updateGraph);
+	void refineConstraintVisually(int from, int to,  bool silent, bool updateGraph);
 	bool addConstraint(int from, int to, bool silent, bool updateGraph);
 
 private:
@@ -139,7 +159,10 @@ private:
 	std::multimap<int, rtabmap::Link> linksRefined_;
 	std::multimap<int, rtabmap::Link> linksAdded_;
 	std::multimap<int, rtabmap::Link> linksRemoved_;
-	std::map<int, pcl::PointCloud<pcl::PointXYZ>::Ptr > scans_;
+	std::map<int, std::pair<cv::Mat, cv::Mat> > localMaps_; // <ground, obstacles>
+
+	bool savedMaximized_;
+	bool firstCall_;
 };
 
 }

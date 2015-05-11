@@ -30,12 +30,16 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap/utilite/ULogger.h>
 #include <rtabmap/utilite/UTimer.h>
 #include <rtabmap/core/Memory.h>
+#include <rtabmap/core/Signature.h>
 #include <rtabmap/core/CameraEvent.h>
 #include <rtabmap/core/util3d.h>
 #include <rtabmap/gui/ImageView.h>
 #include <rtabmap/gui/UCv2Qt.h>
 #include <QtCore/QMetaType>
-#include <QtGui/QHBoxLayout>
+#include <QMessageBox>
+#include <QtGui/QCloseEvent>
+#include <QLabel>
+#include <QVBoxLayout>
 
 namespace rtabmap {
 
@@ -44,17 +48,25 @@ DataRecorder::DataRecorder(QWidget * parent) :
 		QWidget(parent),
 	memory_(0),
 	imageView_(new ImageView(this)),
-	dataQueue_(0)
+	label_(new QLabel(this)),
+	processingImages_(false),
+	count_(0),
+	totalSizeKB_(0)
 {
-	qRegisterMetaType<rtabmap::SensorData>("rtabmap::SensorData");
+	qRegisterMetaType<cv::Mat>("cv::Mat");
 
 	imageView_->setImageDepthShown(true);
-	QHBoxLayout * layout = new QHBoxLayout(this);
+	imageView_->setMinimumSize(320, 240);
+	QVBoxLayout * layout = new QVBoxLayout(this);
+	layout->setMargin(0);
 	layout->addWidget(imageView_);
+	layout->addWidget(label_);
+	layout->setStretch(0,1);
 	this->setLayout(layout);
 }
 bool DataRecorder::init(const QString & path, bool recordInRAM)
 {
+	UScopeMutex scope(memoryMutex_);
 	if(!memory_)
 	{
 		ParametersMap customParameters;
@@ -63,7 +75,7 @@ bool DataRecorder::init(const QString & path, bool recordInRAM)
 		customParameters.insert(ParametersPair(Parameters::kMemBinDataKept(), "true")); // to keep images
 		if(!recordInRAM)
 		{
-			customParameters.insert(ParametersPair(Parameters::kDbSqlite3InMemory(), "false")); // to keep images
+			customParameters.insert(ParametersPair(Parameters::kDbSqlite3InMemory(), "false"));
 		}
 		memory_ = new Memory();
 		if(!memory_->init(path.toStdString(), true, customParameters))
@@ -73,6 +85,7 @@ bool DataRecorder::init(const QString & path, bool recordInRAM)
 			UERROR("Error initializing the memory.");
 			return false;
 		}
+		path_ = path;
 		return true;
 	}
 	else
@@ -82,69 +95,97 @@ bool DataRecorder::init(const QString & path, bool recordInRAM)
 	}
 }
 
-void DataRecorder::close()
+void DataRecorder::closeRecorder()
 {
+	memoryMutex_.lock();
 	if(memory_)
 	{
 		delete memory_;
 		memory_ = 0;
+		UINFO("Data recorded to \"%s\".", this->path().toStdString().c_str());
+	}
+	memoryMutex_.unlock();
+	processingImages_ = false;
+	count_ = 0;
+	totalSizeKB_ = 0;
+	if(this->isVisible())
+	{
+		QMessageBox::information(this, tr("Data recorder"), tr("Data recorded to \"%1\".").arg(this->path()));
 	}
 }
 
 DataRecorder::~DataRecorder()
 {
-	this->close();
+	this->unregisterFromEventsManager();
+	this->closeRecorder();
 }
 
 void DataRecorder::addData(const rtabmap::SensorData & data)
 {
+	memoryMutex_.lock();
 	if(memory_)
 	{
+		if(memory_->getStMem().size() == 0 && data.id() > 0)
+		{
+			ParametersMap customParameters;
+			customParameters.insert(ParametersPair(Parameters::kMemGenerateIds(), "false")); // use id from data
+			memory_->parseParameters(customParameters);
+		}
+
 		//save to database
 		UTimer time;
 		memory_->update(data);
+		const Signature * s = memory_->getLastWorkingSignature();
+		totalSizeKB_ += (int)s->getImageCompressed().total()/1000;
+		totalSizeKB_ += (int)s->getDepthCompressed().total()/1000;
 		memory_->cleanup();
 
-		if(data.id() % 30)
+		if(++count_ % 30)
 		{
 			memory_->emptyTrash();
 		}
-
 		UDEBUG("Time to process a message = %f s", time.ticks());
 	}
-	--dataQueue_;
+	memoryMutex_.unlock();
 }
 
-void DataRecorder::showImage(const rtabmap::SensorData & data)
+void DataRecorder::showImage(const cv::Mat & image, const cv::Mat & depth)
 {
-	if(this->isVisible() && data.isValid())
-	{
-		imageView_->setImage(uCvMat2QImage(data.image()));
-		imageView_->setImageDepth(uCvMat2QImage(data.depth()));
-		imageView_->fitInView(imageView_->sceneRect(), Qt::KeepAspectRatio);
-	}
+	processingImages_ = true;
+	imageView_->setImage(uCvMat2QImage(image));
+	imageView_->setImageDepth(uCvMat2QImage(depth));
+	label_->setText(tr("Images=%1 (~%2 MB)").arg(count_).arg(totalSizeKB_/1000));
+	processingImages_ = false;
+}
+
+void DataRecorder::closeEvent(QCloseEvent* event)
+{
+	this->closeRecorder();
+	event->accept();
 }
 
 void DataRecorder::handleEvent(UEvent * event)
 {
-	if(event->getClassName().compare("CameraEvent") == 0)
+	if(memory_)
 	{
-		CameraEvent * camEvent = (CameraEvent*)event;
-		if(camEvent->getCode() == CameraEvent::kCodeImageDepth ||
-		   camEvent->getCode() == CameraEvent::kCodeImage)
+		if(event->getClassName().compare("CameraEvent") == 0)
 		{
-			if(camEvent->data().isValid())
+			CameraEvent * camEvent = (CameraEvent*)event;
+			if(camEvent->getCode() == CameraEvent::kCodeImageDepth ||
+			   camEvent->getCode() == CameraEvent::kCodeImage)
 			{
-				UINFO("Receiving rate = %f Hz", 1.0f/timer_.ticks());
-				if(memory_)
+				if(camEvent->data().isValid())
 				{
-					QMetaObject::invokeMethod(this, "addData", Q_ARG(rtabmap::SensorData, camEvent->data()));
-					++dataQueue_;
-				}
+					UINFO("Receiving rate = %f Hz", 1.0f/timer_.ticks());
+					this->addData(camEvent->data());
 
-				if(dataQueue_ < 2 && this->isVisible())
-				{
-					QMetaObject::invokeMethod(this, "showImage", Q_ARG(rtabmap::SensorData, camEvent->data()));
+					if(!processingImages_ && this->isVisible() && camEvent->data().isValid())
+					{
+						processingImages_ = true;
+						QMetaObject::invokeMethod(this, "showImage",
+								Q_ARG(cv::Mat, camEvent->data().image()),
+								Q_ARG(cv::Mat, camEvent->data().depthOrRightImage()));
+					}
 				}
 			}
 		}

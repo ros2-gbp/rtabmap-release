@@ -31,8 +31,11 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <rtabmap/utilite/ULogger.h>
 #include <rtabmap/utilite/UFile.h>
+#include <rtabmap/utilite/UStl.h>
+#include <rtabmap/utilite/UConversion.h>
 
 #include "rtabmap/core/CameraEvent.h"
+#include "rtabmap/core/RtabmapEvent.h"
 #include "rtabmap/core/OdometryEvent.h"
 #include "rtabmap/core/util3d.h"
 #include "rtabmap/core/Compression.h"
@@ -42,15 +45,27 @@ namespace rtabmap {
 DBReader::DBReader(const std::string & databasePath,
 				   float frameRate,
 				   bool odometryIgnored,
-				   float delayToStartSec) :
-	_path(databasePath),
+				   bool ignoreGoalDelay) :
+	_paths(uSplit(databasePath, ';')),
 	_frameRate(frameRate),
 	_odometryIgnored(odometryIgnored),
-	_delayToStartSec(delayToStartSec),
+	_ignoreGoalDelay(ignoreGoalDelay),
 	_dbDriver(0),
 	_currentId(_ids.end())
 {
+}
 
+DBReader::DBReader(const std::list<std::string> & databasePaths,
+				   float frameRate,
+				   bool odometryIgnored,
+				   bool ignoreGoalDelay) :
+   _paths(databasePaths),
+   _frameRate(frameRate),
+	_odometryIgnored(odometryIgnored),
+	_ignoreGoalDelay(ignoreGoalDelay),
+	_dbDriver(0),
+	_currentId(_ids.end())
+{
 }
 
 DBReader::~DBReader()
@@ -72,10 +87,18 @@ bool DBReader::init(int startIndex)
 	}
 	_ids.clear();
 	_currentId=_ids.end();
+	_previousStamp = 0;
 
-	if(!UFile::exists(_path))
+	if(_paths.size() == 0)
 	{
-		UERROR("Database path does not exist (%s)", _path.c_str());
+		UERROR("No database path set...");
+		return false;
+	}
+
+	std::string path = _paths.front();
+	if(!UFile::exists(path))
+	{
+		UERROR("Database path does not exist (%s)", path.c_str());
 		return false;
 	}
 
@@ -87,9 +110,9 @@ bool DBReader::init(int startIndex)
 		UERROR("Driver doesn't exist.");
 		return false;
 	}
-	if(!_dbDriver->openConnection(_path))
+	if(!_dbDriver->openConnection(path))
 	{
-		UERROR("Can't open database %s", _path.c_str());
+		UERROR("Can't open database %s", path.c_str());
 		delete _dbDriver;
 		_dbDriver = 0;
 		return false;
@@ -99,10 +122,10 @@ bool DBReader::init(int startIndex)
 	_currentId = _ids.begin();
 	if(startIndex>0 && _ids.size())
 	{
-		std::set<int>::iterator iter = _ids.lower_bound(startIndex);
+		std::set<int>::iterator iter = uIteratorAt(_ids, startIndex);
 		if(iter == _ids.end())
 		{
-			UWARN("Start index is too high (%d), the last in database is %d. Starting from beginning...", startIndex, *_ids.rbegin());
+			UWARN("Start index is too high (%d), the last in database is %d. Starting from beginning...", startIndex, _ids.size()-1);
 		}
 		else
 		{
@@ -115,18 +138,11 @@ bool DBReader::init(int startIndex)
 
 void DBReader::setFrameRate(float frameRate)
 {
-	if(frameRate >= 0.0f)
-	{
-		_frameRate = frameRate;
-	}
+	_frameRate = frameRate;
 }
 
 void DBReader::mainLoopBegin()
 {
-	if(_delayToStartSec > 0.0f)
-	{
-		uSleep(_delayToStartSec*1000.0f);
-	}
 	_timer.start();
 }
 
@@ -135,6 +151,23 @@ void DBReader::mainLoop()
 	SensorData data = this->getNextData();
 	if(data.isValid())
 	{
+		int goalId = 0;
+		double previousStamp = data.stamp();
+		data.setStamp(UTimer::now());
+		if(data.userData().size() >= 6 && memcmp(data.userData().data(), "GOAL:", 5) == 0)
+		{
+			//GOAL format detected, remove it from the user data and send it as goal event
+			std::string goalStr = uBytes2Str(data.userData());
+			if(!goalStr.empty())
+			{
+				std::list<std::string> strs = uSplit(goalStr, ':');
+				if(strs.size() == 2)
+				{
+					goalId = atoi(strs.rbegin()->c_str());
+					data.setUserData(std::vector<unsigned char>());
+				}
+			}
+		}
 		if(!_odometryIgnored)
 		{
 			if(data.pose().isNull())
@@ -150,12 +183,56 @@ void DBReader::mainLoop()
 			this->post(new CameraEvent(data));
 		}
 
+		if(goalId > 0)
+		{
+			this->post(new RtabmapEventCmd(RtabmapEventCmd::kCmdGoal, "", goalId));
+
+			if(!_ignoreGoalDelay && _currentId != _ids.end())
+			{
+				// get stamp for the next signature to compute the delay
+				// that was used originally for planning
+				int weight;
+				std::string label;
+				double stamp;
+				int mapId;
+				Transform localTransform, pose;
+				std::vector<unsigned char> userData;
+				_dbDriver->getNodeInfo(*_currentId, pose, mapId, weight, label, stamp, userData);
+				if(previousStamp && stamp && stamp > previousStamp)
+				{
+					double delay = stamp - previousStamp;
+					UWARN("Goal %d detected, posting it! Waiting %f seconds before sending next data...",
+							goalId, delay);
+					uSleep(delay*1000);
+				}
+			}
+			else
+			{
+				UWARN("Goal %d detected, posting it!", goalId);
+			}
+		}
+
 	}
 	else if(!this->isKilled())
 	{
 		UINFO("no more images...");
-		this->kill();
-		this->post(new CameraEvent());
+		if(_paths.size() > 1)
+		{
+			_paths.pop_front();
+			UWARN("Loading next database \"%s\"...", _paths.front().c_str());
+			if(!this->init())
+			{
+				UERROR("Failed to initialize the next database \"%s\"", _paths.front().c_str());
+				this->kill();
+				this->post(new CameraEvent());
+			}
+		}
+		else
+		{
+			this->kill();
+			this->post(new CameraEvent());
+		}
+
 	}
 
 }
@@ -165,26 +242,6 @@ SensorData DBReader::getNextData()
 	SensorData data;
 	if(_dbDriver)
 	{
-		float frameRate = _frameRate;
-		if(frameRate>0.0f)
-		{
-			int sleepTime = (1000.0f/frameRate - 1000.0f*_timer.getElapsedTime());
-			if(sleepTime > 2)
-			{
-				uSleep(sleepTime-2);
-			}
-
-			// Add precision at the cost of a small overhead
-			while(_timer.getElapsedTime() < 1.0/double(frameRate)-0.000001)
-			{
-				//
-			}
-
-			double slept = _timer.getElapsedTime();
-			_timer.start();
-			UDEBUG("slept=%fs vs target=%fs", slept, 1.0/double(frameRate));
-		}
-
 		if(!this->isKilled() && _currentId != _ids.end())
 		{
 			cv::Mat imageBytes;
@@ -193,19 +250,34 @@ SensorData DBReader::getNextData()
 			int mapId;
 			float fx,fy,cx,cy;
 			Transform localTransform, pose;
-			float variance = 1.0f;
-			_dbDriver->getNodeData(*_currentId, imageBytes, depthBytes, laserScanBytes, fx, fy, cx, cy, localTransform);
+			float rotVariance = 1.0f;
+			float transVariance = 1.0f;
+			std::vector<unsigned char> userData;
+			int laserScanMaxPts = 0;
+			_dbDriver->getNodeData(*_currentId, imageBytes, depthBytes, laserScanBytes, fx, fy, cx, cy, localTransform, laserScanMaxPts);
+
+			// info
+			int weight;
+			std::string label;
+			double stamp;
+			_dbDriver->getNodeInfo(*_currentId, pose, mapId, weight, label, stamp, userData);
+
 			if(!_odometryIgnored)
 			{
-				_dbDriver->getPose(*_currentId, pose, mapId);
 				std::map<int, Link> links;
 				_dbDriver->loadLinks(*_currentId, links, Link::kNeighbor);
 				if(links.size())
 				{
 					// assume the first is the backward neighbor, take its variance
-					variance = links.begin()->second.variance();
+					rotVariance = links.begin()->second.rotVariance();
+					transVariance = links.begin()->second.transVariance();
 				}
 			}
+			else
+			{
+				pose.setNull();
+			}
+
 			int seq = *_currentId;
 			++_currentId;
 			if(imageBytes.empty())
@@ -213,29 +285,83 @@ SensorData DBReader::getNextData()
 				UWARN("No image loaded from the database for id=%d!", *_currentId);
 			}
 
-			rtabmap::CompressionThread ctImage(imageBytes, true);
-			rtabmap::CompressionThread ctDepth(depthBytes, true);
-			rtabmap::CompressionThread ctLaserScan(laserScanBytes, false);
-			ctImage.start();
-			ctDepth.start();
-			ctLaserScan.start();
-			ctImage.join();
-			ctDepth.join();
-			ctLaserScan.join();
-			data = SensorData(
-					ctLaserScan.getUncompressedData(),
-					ctImage.getUncompressedData(),
-					ctDepth.getUncompressedData(),
-					fx,fy,cx,cy,
-					localTransform,
-					pose,
-					variance,
-					seq);
-			UDEBUG("Laser=%d RGB/Left=%d Depth=%d Right=%d",
-					data.laserScan().empty()?0:1,
-					data.image().empty()?0:1,
-					data.depth().empty()?0:1,
-					data.rightImage().empty()?0:1);
+			// Frame rate
+			if(_frameRate < 0.0f)
+			{
+				if(stamp == 0)
+				{
+					UERROR("The option to use database stamps is set (framerate<0), but there are no stamps saved in the database! Aborting...");
+					this->kill();
+				}
+				else if(_previousStamp > 0)
+				{
+					int sleepTime = 1000.0*(stamp-_previousStamp) - 1000.0*_timer.getElapsedTime();
+					if(sleepTime > 2)
+					{
+						uSleep(sleepTime-2);
+					}
+
+					// Add precision at the cost of a small overhead
+					while(_timer.getElapsedTime() < (stamp-_previousStamp)-0.000001)
+					{
+						//
+					}
+
+					double slept = _timer.getElapsedTime();
+					_timer.start();
+					UDEBUG("slept=%fs vs target=%fs", slept, stamp-_previousStamp);
+				}
+				_previousStamp = stamp;
+			}
+			else if(_frameRate>0.0f)
+			{
+				int sleepTime = (1000.0f/_frameRate - 1000.0f*_timer.getElapsedTime());
+				if(sleepTime > 2)
+				{
+					uSleep(sleepTime-2);
+				}
+
+				// Add precision at the cost of a small overhead
+				while(_timer.getElapsedTime() < 1.0/double(_frameRate)-0.000001)
+				{
+					//
+				}
+
+				double slept = _timer.getElapsedTime();
+				_timer.start();
+				UDEBUG("slept=%fs vs target=%fs", slept, 1.0/double(_frameRate));
+			}
+
+			if(!this->isKilled())
+			{
+				rtabmap::CompressionThread ctImage(imageBytes, true);
+				rtabmap::CompressionThread ctDepth(depthBytes, true);
+				rtabmap::CompressionThread ctLaserScan(laserScanBytes, false);
+				ctImage.start();
+				ctDepth.start();
+				ctLaserScan.start();
+				ctImage.join();
+				ctDepth.join();
+				ctLaserScan.join();
+				data = SensorData(
+						ctLaserScan.getUncompressedData(),
+						laserScanMaxPts,
+						ctImage.getUncompressedData(),
+						ctDepth.getUncompressedData(),
+						fx,fy,cx,cy,
+						localTransform,
+						pose,
+						rotVariance,
+						transVariance,
+						seq,
+						stamp,
+						userData);
+				UDEBUG("Laser=%d RGB/Left=%d Depth=%d Right=%d",
+						data.laserScan().empty()?0:1,
+						data.image().empty()?0:1,
+						data.depth().empty()?0:1,
+						data.rightImage().empty()?0:1);
+			}
 		}
 	}
 	else
