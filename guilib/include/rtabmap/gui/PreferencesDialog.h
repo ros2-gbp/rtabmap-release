@@ -30,7 +30,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "rtabmap/gui/RtabmapGuiExp.h" // DLL export/import defines
 
-#include <QtGui/QDialog>
+#include <QDialog>
 #include <QtCore/QModelIndex>
 #include <QtCore/QVector>
 #include <set>
@@ -57,10 +57,10 @@ class QDoubleSpinBox;
 
 namespace rtabmap {
 
-class OdometryThread;
-class CameraThread;
 class Signature;
 class LoopClosureViewer;
+class CameraRGBD;
+class CalibrationDialog;
 
 class RTABMAPGUI_EXP PreferencesDialog : public QDialog
 {
@@ -87,7 +87,10 @@ public:
 		kSrcFreenect,
 		kSrcOpenNI_CV,
 		kSrcOpenNI_CV_ASUS,
-		kSrcOpenNI2
+		kSrcOpenNI2,
+		kSrcFreenect2,
+		kSrcStereoDC1394,
+		kSrcStereoFlyCapture2
 	};
 
 public:
@@ -97,11 +100,12 @@ public:
 	virtual QString getIniFilePath() const;
 	void init();
 
+	// save stuff
+	void saveSettings();
 	void saveWindowGeometry(const QWidget * window);
 	void loadWindowGeometry(QWidget * window);
 	void saveMainWindowState(const QMainWindow * mainWindow);
 	void loadMainWindowState(QMainWindow * mainWindow, bool & maximized);
-
 	void saveWidgetState(const QWidget * widget);
 	void loadWidgetState(QWidget * widget);
 
@@ -120,6 +124,7 @@ public:
 	bool imageRejectedShown() const;
 	bool imageHighestHypShown() const;
 	bool beepOnPause() const;
+	bool notifyWhenNewGlobalPathIsReceived() const;
 	int getOdomQualityWarnThr() const;
 	bool isPosteriorGraphView() const;
 
@@ -147,18 +152,18 @@ public:
 
 	bool getGridMapShown() const;
 	double getGridMapResolution() const;
-	bool getGridMapFillEmptySpace() const;
 	bool isGridMapFrom3DCloud() const;
-	int getGridMapFillEmptyRadius() const;
+	bool isGridMapEroded() const;
 	double getGridMapOpacity() const;
 
 	QString getWorkingDirectory() const;
 
 	// source panel
 	double getGeneralInputRate() const;
+	bool isSourceMirroring() const;
 	bool isSourceImageUsed() const;
 	bool isSourceDatabaseUsed() const;
-	bool isSourceOpenniUsed() const;
+	bool isSourceRGBDUsed() const;
 	PreferencesDialog::Src getSourceImageType() const;
 	QString getSourceImageTypeStr() const;
 	int getSourceWidth() const;
@@ -172,18 +177,20 @@ public:
 	int getSourceUsbDeviceId() const;		//UsbDevice group
 	QString getSourceDatabasePath() const; //Database group
 	bool getSourceDatabaseOdometryIgnored() const; //Database group
+	bool getSourceDatabaseGoalDelayIgnored() const; //Database group
 	int getSourceDatabaseStartPos() const; //Database group
+	bool getSourceDatabaseStampsUsed() const;//Database group
 	Src getSourceRGBD() const; 			// Openni group
 	bool getSourceOpenni2AutoWhiteBalance() const;  //Openni group
 	bool getSourceOpenni2AutoExposure() const;  //Openni group
 	int getSourceOpenni2Exposure() const;  //Openni group
 	int getSourceOpenni2Gain() const;   //Openni group
+	bool getSourceOpenni2Mirroring() const; //Openni group
+	int getSourceFreenect2Format() const; //Openni group
+	bool isSourceRGBDColorOnly() const;
 	QString getSourceOpenniDevice() const;            //Openni group
 	Transform getSourceOpenniLocalTransform() const;    //Openni group
-	float getSourceOpenniFx() const; // Openni group
-	float getSourceOpenniFy() const; // Openni group
-	float getSourceOpenniCx() const; // Openni group
-	float getSourceOpenniCy() const; // Openni group
+	CameraRGBD * createCameraRGBD(bool forCalibration = false); // return camera should be deleted if not null
 
 	int getIgnoredDCComponents() const;
 
@@ -198,6 +205,7 @@ public:
 	double getLoopThr() const;
 	double getVpThr() const;
 	int getOdomStrategy() const;
+	QString getCameraInfoDir() const; // "workinfDir/camera_info"
 
 	//
 	void setMonitoringState(bool monitoringState) {_monitoringState = monitoringState;}
@@ -209,12 +217,12 @@ signals:
 public slots:
 	void setInputRate(double value);
 	void setDetectionRate(double value);
-	void setHardThr(int value);
 	void setTimeLimit(float value);
 	void setSLAMMode(bool enabled);
-	void selectSourceImage(Src src = kSrcUndef, bool checked = true);
-	void selectSourceDatabase(bool user = false, bool checked = true);
-	void selectSourceRGBD(Src src = kSrcUndef, bool checked = true);
+	void selectSourceImage(Src src = kSrcUndef);
+	void selectSourceDatabase(bool user = false);
+	void selectSourceRGBD(Src src = kSrcUndef);
+	void calibrate();
 
 private slots:
 	void closeDialog ( QAbstractButton * button );
@@ -240,13 +248,9 @@ private slots:
 	void setupTreeView();
 	void updateBasicParameter();
 	void openDatabaseViewer();
-	void showOpenNI2GroupBox(bool);
-	void cleanOdometryTest();
+	void updateRGBDCameraGroupBoxVisibility();
 	void testOdometry();
-	void cleanRGBDCameraTest();
 	void testRGBDCamera();
-	void calibrate();
-	void resetCalibration();
 
 protected:
 	virtual void showEvent ( QShowEvent * event );
@@ -262,9 +266,11 @@ protected:
 	virtual bool readCoreSettings(const QString & filePath = QString());
 
 	virtual void writeSettings(const QString & filePath = QString());
-	virtual void writeGuiSettings(const QString & filePath = QString());
-	virtual void writeCameraSettings(const QString & filePath = QString());
-	virtual void writeCoreSettings(const QString & filePath = QString());
+	virtual void writeGuiSettings(const QString & filePath = QString()) const;
+	virtual void writeCameraSettings(const QString & filePath = QString()) const;
+	virtual void writeCoreSettings(const QString & filePath = QString()) const;
+
+	virtual QString getTmpIniFilePath() const;
 
 private:
 	bool validateForm();
@@ -295,9 +301,8 @@ private:
 
 	QProgressDialog * _progressDialog;
 
-	//Odometry test
-	CameraThread * _cameraThread;
-	OdometryThread * _odomThread;
+	//calibration
+	CalibrationDialog * _calibrationDialog;
 
 	QVector<QCheckBox*> _3dRenderingShowClouds;
 	QVector<QDoubleSpinBox*> _3dRenderingVoxelSize;

@@ -33,6 +33,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/core/SensorData.h"
 #include "rtabmap/utilite/UMutex.h"
 #include "rtabmap/utilite/USemaphore.h"
+#include "rtabmap/core/CameraModel.h"
 #include <set>
 #include <stack>
 #include <list>
@@ -54,7 +55,21 @@ class VideoStream;
 
 namespace pcl
 {
-	class Grabber;
+class Grabber;
+}
+
+namespace libfreenect2
+{
+class Freenect2;
+class Freenect2Device;
+class SyncMultiFrameListener;
+class Registration;
+class PacketPipeline;
+}
+
+namespace FlyCapture2
+{
+class Camera;
 }
 
 typedef struct _freenect_context freenect_context;
@@ -72,23 +87,22 @@ class RTABMAP_EXP CameraRGBD
 public:
 	virtual ~CameraRGBD();
 	void takeImage(cv::Mat & rgb, cv::Mat & depth, float & fx, float & fy, float & cx, float & cy);
-	virtual bool init() = 0;
+
+	virtual bool init(const std::string & calibrationFolder = ".") = 0;
+	virtual bool isCalibrated() const = 0;
+	virtual std::string getSerial() const = 0;
 
 	//getters
 	float getImageRate() const {return _imageRate;}
 	const Transform & getLocalTransform() const {return _localTransform;}
-	float getFx() const {return _fx;}
-	float getFy() const {return _fy;}
-	float getCx() const {return _cx;}
-	float getCy() const {return _cy;}
+	bool isMirroringEnabled() const {return _mirroring;}
+	bool isColorOnly() const {return _colorOnly;}
 
 	//setters
 	void setImageRate(float imageRate) {_imageRate = imageRate;}
 	void setLocalTransform(const Transform & localTransform) {_localTransform= localTransform;}
-	void setFx(float fx) {_fx = fx;}
-	void setFy(float fy) {_fy = fy;}
-	void setCx(float cx) {_cx = cx;}
-	void setCy(float cy) {_cy = cy;}
+	void setMirroringEnabled(bool mirroring) {_mirroring = mirroring;}
+	void setColorOnly(bool colorOnly) {_colorOnly = colorOnly;}
 
 protected:
 	/**
@@ -97,22 +111,19 @@ protected:
 	 * @param imageRate : image/second , 0 for fast as the camera can
 	 */
 	CameraRGBD(float imageRate = 0,
-				const Transform & localTransform = Transform::getIdentity(),
-				float fx = 0.0f,
-				float fy = 0.0f,
-				float cx = 0.0f,
-				float cy = 0.0f);
+				const Transform & localTransform = Transform::getIdentity());
 
+	/**
+	 * returned rgb and depth images should be already rectified
+	 */
 	virtual void captureImage(cv::Mat & rgb, cv::Mat & depth, float & fx, float & fy, float & cx, float & cy) = 0;
 
 private:
 	float _imageRate;
 	Transform _localTransform;
+	bool _mirroring;
+	bool _colorOnly;
 	UTimer * _frameRateTimer;
-	float _fx;
-	float _fy;
-	float _cx;
-	float _cy;
 };
 
 /////////////////////////
@@ -128,11 +139,7 @@ public:
 	// default local transform z in, x right, y down));
 	CameraOpenni(const std::string & deviceId="",
 			float imageRate = 0,
-			const Transform & localTransform = Transform::getIdentity(),
-			float fx = 0.0f,
-			float fy = 0.0f,
-			float cx = 0.0f,
-			float cy = 0.0f);
+			const Transform & localTransform = Transform::getIdentity());
 	virtual ~CameraOpenni();
 
     void image_cb (
@@ -140,7 +147,9 @@ public:
 			const boost::shared_ptr<openni_wrapper::DepthImage>& depth,
 			float constant);
 
-    bool init();
+    virtual bool init(const std::string & calibrationFolder = ".");
+    virtual bool isCalibrated() const;
+    virtual std::string getSerial() const;
 
 protected:
 	virtual void captureImage(cv::Mat & rgb, cv::Mat & depth, float & fx, float & fy, float & cx, float & cy);
@@ -169,14 +178,12 @@ public:
 public:
 	CameraOpenNICV(bool asus = false,
 					float imageRate = 0,
-					const Transform & localTransform = Transform::getIdentity(),
-					float fx = 0.0f,
-					float fy = 0.0f,
-					float cx = 0.0f,
-					float cy = 0.0f);
+					const Transform & localTransform = Transform::getIdentity());
 	virtual ~CameraOpenNICV();
 
-	virtual bool init();
+	virtual bool init(const std::string & calibrationFolder = ".");
+	virtual bool isCalibrated() const;
+	virtual std::string getSerial() const {return "";} // unknown with OpenCV
 
 protected:
 	virtual void captureImage(cv::Mat & rgb, cv::Mat & depth, float & fx, float & fy, float & cx, float & cy);
@@ -199,20 +206,20 @@ public:
 	static bool exposureGainAvailable();
 
 public:
-	CameraOpenNI2(float imageRate = 0,
-					const Transform & localTransform = Transform::getIdentity(),
-					float fx = 0.0f,
-					float fy = 0.0f,
-					float cx = 0.0f,
-					float cy = 0.0f);
+	CameraOpenNI2(const std::string & deviceId = "",
+					float imageRate = 0,
+					const Transform & localTransform = Transform::getIdentity());
 	virtual ~CameraOpenNI2();
 
-	virtual bool init();
+	virtual bool init(const std::string & calibrationFolder = ".");
+	virtual bool isCalibrated() const;
+	virtual std::string getSerial() const;
 
 	bool setAutoWhiteBalance(bool enabled);
 	bool setAutoExposure(bool enabled);
 	bool setExposure(int value);
 	bool setGain(int value);
+	bool setMirroring(bool enabled);
 
 protected:
 	virtual void captureImage(cv::Mat & rgb, cv::Mat & depth, float & fx, float & fy, float & cx, float & cy);
@@ -223,6 +230,7 @@ private:
 	openni::VideoStream * _depth;
 	float _depthFx;
 	float _depthFy;
+	std::string _deviceId;
 };
 
 
@@ -241,14 +249,12 @@ public:
 	// default local transform z in, x right, y down));
 	CameraFreenect(int deviceId= 0,
 					float imageRate=0.0f,
-					const Transform & localTransform = Transform::getIdentity(),
-					float fx = 0.0f,
-					float fy = 0.0f,
-					float cx = 0.0f,
-					float cy = 0.0f);
+					const Transform & localTransform = Transform::getIdentity());
 	virtual ~CameraFreenect();
 
-	bool init();
+	virtual bool init(const std::string & calibrationFolder = ".");
+	virtual bool isCalibrated() const;
+	virtual std::string getSerial() const;
 
 protected:
 	virtual void captureImage(cv::Mat & rgb, cv::Mat & depth, float & fx, float & fy, float & cx, float & cy);
@@ -257,6 +263,101 @@ private:
 	int deviceId_;
 	freenect_context * ctx_;
 	FreenectDevice * freenectDevice_;
+};
+
+/////////////////////////
+// CameraFreenect2
+/////////////////////////
+
+class RTABMAP_EXP CameraFreenect2 :
+	public CameraRGBD
+{
+public:
+	static bool available();
+
+	enum Type{
+		kTypeRGBDepthSD,
+		kTypeRGBDepthHD,
+		kTypeIRDepth,
+		kTypeRGBIR
+	};
+
+public:
+	// default local transform z in, x right, y down));
+	CameraFreenect2(int deviceId= 0,
+					Type type = kTypeRGBDepthSD,
+					float imageRate=0.0f,
+					const Transform & localTransform = Transform::getIdentity());
+	virtual ~CameraFreenect2();
+
+	virtual bool init(const std::string & calibrationFolder = ".");
+	virtual bool isCalibrated() const;
+	virtual std::string getSerial() const;
+
+protected:
+	virtual void captureImage(cv::Mat & rgb, cv::Mat & depth, float & fx, float & fy, float & cx, float & cy);
+
+private:
+	int deviceId_;
+	Type type_;
+	StereoCameraModel stereoModel_;
+	libfreenect2::Freenect2 * freenect2_;
+	libfreenect2::Freenect2Device *dev_;
+	libfreenect2::PacketPipeline * pipeline_;
+	libfreenect2::SyncMultiFrameListener * listener_;
+	libfreenect2::Registration * reg_;
+};
+
+/////////////////////////
+// CameraStereoDC1394
+/////////////////////////
+class DC1394Device;
+
+class RTABMAP_EXP CameraStereoDC1394 :
+	public CameraRGBD
+{
+public:
+	static bool available();
+
+public:
+	CameraStereoDC1394( float imageRate=0.0f, const Transform & localTransform = Transform::getIdentity());
+	virtual ~CameraStereoDC1394();
+
+	virtual bool init(const std::string & calibrationFolder = ".");
+	virtual bool isCalibrated() const;
+	virtual std::string getSerial() const;
+
+protected:
+	virtual void captureImage(cv::Mat & left, cv::Mat & right, float & fx, float & baseline, float & cx, float & cy);
+
+private:
+	DC1394Device *device_;
+	StereoCameraModel stereoModel_;
+};
+
+/////////////////////////
+// CameraStereoFlyCapture2
+/////////////////////////
+class RTABMAP_EXP CameraStereoFlyCapture2 :
+	public CameraRGBD
+{
+public:
+	static bool available();
+
+public:
+	CameraStereoFlyCapture2( float imageRate=0.0f, const Transform & localTransform = Transform::getIdentity());
+	virtual ~CameraStereoFlyCapture2();
+
+	virtual bool init(const std::string & calibrationFolder = ".");
+	virtual bool isCalibrated() const;
+	virtual std::string getSerial() const;
+
+protected:
+	virtual void captureImage(cv::Mat & left, cv::Mat & right, float & fx, float & baseline, float & cx, float & cy);
+
+private:
+	FlyCapture2::Camera * camera_;
+	void * triclopsCtx_; // TriclopsContext
 };
 
 } // namespace rtabmap

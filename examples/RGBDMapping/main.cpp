@@ -30,8 +30,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/core/CameraRGBD.h"
 #include "rtabmap/core/CameraThread.h"
 #include "rtabmap/core/Odometry.h"
+#include "rtabmap/core/OdometryThread.h"
 #include "rtabmap/utilite/UEventsManager.h"
-#include <QtGui/QApplication>
+#include <QApplication>
 #include <stdio.h>
 
 #include "MapBuilder.h"
@@ -65,10 +66,6 @@ int main(int argc, char * argv[])
 		}
 	}
 
-	// GUI stuff, there the handler will receive RtabmapEvent and construct the map
-	QApplication app(argc, argv);
-	MapBuilder mapBuilder;
-
 	// Here is the pipeline that we will use:
 	// CameraOpenni -> "CameraEvent" -> OdometryThread -> "OdometryEvent" -> RtabmapThread -> "RtabmapEvent"
 
@@ -83,7 +80,7 @@ int main(int argc, char * argv[])
 			UERROR("Not built with OpenNI2 support...");
 			exit(-1);
 		}
-		camera = new CameraOpenNI2(0, opticalRotation);
+		camera = new CameraOpenNI2("", 0, opticalRotation);
 	}
 	else if(driver == 2)
 	{
@@ -123,6 +120,11 @@ int main(int argc, char * argv[])
 		UERROR("Camera init failed!");
 		exit(1);
 	}
+
+	// GUI stuff, there the handler will receive RtabmapEvent and construct the map
+	// We give it the camera so the GUI can pause/resume the camera
+	QApplication app(argc, argv);
+	MapBuilder mapBuilder(&cameraThread);
 
 	// Create an odometry thread to process camera events, it will send OdometryEvent.
 	OdometryThread odomThread(new OdometryBOW());
