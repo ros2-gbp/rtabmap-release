@@ -17,27 +17,32 @@ CREATE TABLE Node (
 	id INTEGER NOT NULL,
 	map_id INTEGER NOT NULL,
 	weight INTEGER,
+	stamp FLOAT,
 	pose BLOB,
+	label TEXT,
+	user_data BLOB,
 	time_enter DATE,
 	PRIMARY KEY (id)
 );
 
 CREATE TABLE Image (
 	id INTEGER NOT NULL,
-	data BLOB,
+	data BLOB,       -- compressed image (RGB)
 	time_enter DATE,
 	PRIMARY KEY (id)
 );
 
+-- TODO: Merge "Image" and "Depth" tables to "Data" table.
 CREATE TABLE Depth (
 	id INTEGER NOT NULL,
-	data BLOB,   -- CV_32FC1, width = Image/raw_width, height=Image/raw_height
+	data BLOB,       -- compressed image (Depth or Right image)
 	fx FLOAT,
-	fy FLOAT,
+	fy FLOAT,        -- baseline if stereo
 	cx FLOAT,
 	cy FLOAT,
 	local_transform BLOB,
-	data2d BLOB,   -- CV_32FC2, Example: Laser scan
+	data2d BLOB,     -- compressed data (Laser scan)
+	data2d_max_pts INTEGER,   -- Laser scan max points
 	time_enter DATE,
 	PRIMARY KEY (id)
 );
@@ -46,7 +51,8 @@ CREATE TABLE Link (
 	from_id INTEGER NOT NULL,
 	to_id INTEGER NOT NULL,
 	type INTEGER NOT NULL, -- neighbor=0, loop=1, child=2
-	variance FLOAT NOT NULL,
+	rot_variance FLOAT NOT NULL,
+	trans_variance FLOAT NOT NULL,
 	transform BLOB,
 	FOREIGN KEY (from_id) REFERENCES Node(id),
 	FOREIGN KEY (to_id) REFERENCES Node(id)
@@ -121,6 +127,7 @@ END;
 -- *******************************************************************
 CREATE INDEX IDX_Map_Node_Word_node_id on Map_Node_Word (node_id);
 CREATE INDEX IDX_Link_from_id on Link (from_id);
+CREATE UNIQUE INDEX IDX_node_label on Node (label);
 
 -- *******************************************************************
 -- VERSION
