@@ -33,13 +33,14 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap/core/util3d.h>
 #include <pcl/visualization/pcl_visualizer.h>
 #include <pcl/filters/frustum_culling.h>
-#include <QtGui/QMenu>
-#include <QtGui/QAction>
+#include <QMenu>
+#include <QAction>
 #include <QtGui/QContextMenuEvent>
-#include <QtGui/QInputDialog>
+#include <QInputDialog>
 #include <QtGui/QWheelEvent>
 #include <QtGui/QKeyEvent>
-#include <QtGui/QColorDialog>
+#include <QColorDialog>
+#include <QtGui/QVector3D>
 #include <set>
 
 #include <vtkRenderWindow.h>
@@ -75,13 +76,17 @@ CloudViewer::CloudViewer(QWidget *parent) :
 		_gridCellCount(50),
 		_gridCellSize(1),
 		_workingDirectory("."),
-		_backgroundColor(Qt::black)
+		_defaultBgColor(Qt::black),
+		_currentBgColor(Qt::black)
 {
 	this->setMinimumSize(200, 200);
 
 	this->SetRenderWindow(_visualizer->getRenderWindow());
 
-	_visualizer->setupInteractor(this->GetInteractor(), this->GetRenderWindow());
+	// Replaced by the second line, to avoid a crash in Mac OS X on close, as well as
+	// the "Invalid drawable" warning when the view is not visible.
+	//_visualizer->setupInteractor(this->GetInteractor(), this->GetRenderWindow());
+	this->GetInteractor()->SetInteractorStyle (_visualizer->getInteractorStyle());
 
 	_visualizer->registerMouseCallback (&CloudViewer::mouseEventOccurred, *this, (void*)_visualizer);
 	_visualizer->setCameraPosition(
@@ -159,6 +164,92 @@ void CloudViewer::createMenu()
 	_menu->addAction(_aSetBackgroundColor);
 }
 
+void CloudViewer::saveSettings(QSettings & settings, const QString & group) const
+{
+	if(!group.isEmpty())
+	{
+		settings.beginGroup(group);
+	}
+
+	float poseX, poseY, poseZ, focalX, focalY, focalZ, upX, upY, upZ;
+	this->getCameraPosition(poseX, poseY, poseZ, focalX, focalY, focalZ, upX, upY, upZ);
+	QVector3D pose(poseX, poseY, poseZ);
+	QVector3D focal(focalX, focalY, focalZ);
+	if(!this->isCameraFree())
+	{
+		// make camera position relative to target
+		Transform T = this->getTargetPose();
+		if(this->isCameraTargetLocked())
+		{
+			T = Transform(T.x(), T.y(), T.z(), 0,0,0);
+		}
+		Transform F(focalX, focalY, focalZ, 0,0,0);
+		Transform P(poseX, poseY, poseZ, 0,0,0);
+		Transform newFocal = T.inverse() * F;
+		Transform newPose = newFocal * F.inverse() * P;
+		pose = QVector3D(newPose.x(), newPose.y(), newPose.z());
+		focal = QVector3D(newFocal.x(), newFocal.y(), newFocal.z());
+	}
+	settings.setValue("camera_pose", pose);
+	settings.setValue("camera_focal", focal);
+	settings.setValue("camera_up", QVector3D(upX, upY, upZ));
+
+	settings.setValue("grid", this->isGridShown());
+	settings.setValue("grid_cell_count", this->getGridCellCount());
+	settings.setValue("grid_cell_size", (double)this->getGridCellSize());
+
+	settings.setValue("trajectory_shown", this->isTrajectoryShown());
+	settings.setValue("trajectory_size", this->getTrajectorySize());
+
+	settings.setValue("camera_target_locked", this->isCameraTargetLocked());
+	settings.setValue("camera_target_follow", this->isCameraTargetFollow());
+	settings.setValue("camera_free", this->isCameraFree());
+	settings.setValue("camera_lockZ", this->isCameraLockZ());
+
+	settings.setValue("bg_color", this->getDefaultBackgroundColor());
+	if(!group.isEmpty())
+	{
+		settings.endGroup();
+	}
+}
+
+void CloudViewer::loadSettings(QSettings & settings, const QString & group)
+{
+	if(!group.isEmpty())
+	{
+		settings.beginGroup(group);
+	}
+
+	float poseX, poseY, poseZ, focalX, focalY, focalZ, upX, upY, upZ;
+	this->getCameraPosition(poseX, poseY, poseZ, focalX, focalY, focalZ, upX, upY, upZ);
+	QVector3D pose(poseX, poseY, poseZ), focal(focalX, focalY, focalZ), up(upX, upY, upZ);
+	pose = settings.value("camera_pose", pose).value<QVector3D>();
+	focal = settings.value("camera_focal", focal).value<QVector3D>();
+	up = settings.value("camera_up", up).value<QVector3D>();
+	this->setCameraPosition(pose.x(),pose.y(),pose.z(), focal.x(),focal.y(),focal.z(), up.x(),up.y(),up.z());
+
+	this->setGridShown(settings.value("grid", this->isGridShown()).toBool());
+	this->setGridCellCount(settings.value("grid_cell_count", this->getGridCellCount()).toUInt());
+	this->setGridCellSize(settings.value("grid_cell_size", this->getGridCellSize()).toFloat());
+
+	this->setTrajectoryShown(settings.value("trajectory_shown", this->isTrajectoryShown()).toBool());
+	this->setTrajectorySize(settings.value("trajectory_size", this->getTrajectorySize()).toUInt());
+
+	this->setCameraTargetLocked(settings.value("camera_target_locked", this->isCameraTargetLocked()).toBool());
+	this->setCameraTargetFollow(settings.value("camera_target_follow", this->isCameraTargetFollow()).toBool());
+	if(settings.value("camera_free", this->isCameraFree()).toBool())
+	{
+		this->setCameraFree();
+	}
+	this->setCameraLockZ(settings.value("camera_lockZ", this->isCameraLockZ()).toBool());
+
+	this->setDefaultBackgroundColor(settings.value("bg_color", this->getDefaultBackgroundColor()).value<QColor>());
+	if(!group.isEmpty())
+	{
+		settings.endGroup();
+	}
+}
+
 bool CloudViewer::updateCloudPose(
 		const std::string & id,
 		const Transform & pose)
@@ -179,14 +270,15 @@ bool CloudViewer::updateCloudPose(
 bool CloudViewer::updateCloud(
 		const std::string & id,
 		const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud,
-		const Transform & pose)
+		const Transform & pose,
+		const QColor & color)
 {
 	if(_addedClouds.contains(id))
 	{
 		UDEBUG("Updating %s with %d points", id.c_str(), (int)cloud->size());
 		int index = _visualizer->getColorHandlerIndex(id);
 		this->removeCloud(id);
-		if(this->addCloud(id, cloud, pose))
+		if(this->addCloud(id, cloud, pose, color))
 		{
 			_visualizer->updateColorHandlerIndex(id, index);
 			return true;
@@ -198,14 +290,15 @@ bool CloudViewer::updateCloud(
 bool CloudViewer::updateCloud(
 		const std::string & id,
 		const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud,
-		const Transform & pose)
+		const Transform & pose,
+		const QColor & color)
 {
 	if(_addedClouds.contains(id))
 	{
 		UDEBUG("Updating %s with %d points", id.c_str(), (int)cloud->size());
 		int index = _visualizer->getColorHandlerIndex(id);
 		this->removeCloud(id);
-		if(this->addCloud(id, cloud, pose))
+		if(this->addCloud(id, cloud, pose, color))
 		{
 			_visualizer->updateColorHandlerIndex(id, index);
 			return true;
@@ -220,7 +313,7 @@ bool CloudViewer::addOrUpdateCloud(
 		const Transform & pose,
 		const QColor & color)
 {
-	if(!updateCloud(id, cloud, pose))
+	if(!updateCloud(id, cloud, pose, color))
 	{
 		return addCloud(id, cloud, pose, color);
 	}
@@ -233,7 +326,7 @@ bool CloudViewer::addOrUpdateCloud(
 		const Transform & pose,
 		const QColor & color)
 {
-	if(!updateCloud(id, cloud, pose))
+	if(!updateCloud(id, cloud, pose, color))
 	{
 		return addCloud(id, cloud, pose, color);
 	}
@@ -257,8 +350,12 @@ bool CloudViewer::addCloud(
 		 colorHandler.reset (new pcl::visualization::PointCloudColorHandlerRandom<pcl::PCLPointCloud2> (binaryCloud));
 		 if(_visualizer->addPointCloud (binaryCloud, colorHandler, origin, orientation, id))
 		{
-			 // white
-			colorHandler.reset (new pcl::visualization::PointCloudColorHandlerCustom<pcl::PCLPointCloud2> (binaryCloud, color.red(), color.green(), color.blue()));
+			QColor c = Qt::gray;
+			if(color.isValid())
+			{
+				c = color;
+			}
+			colorHandler.reset (new pcl::visualization::PointCloudColorHandlerCustom<pcl::PCLPointCloud2> (binaryCloud, c.red(), c.green(), c.blue()));
 			_visualizer->addPointCloud (binaryCloud, colorHandler, origin, orientation, id);
 
 			// x,y,z
@@ -276,6 +373,10 @@ bool CloudViewer::addCloud(
 				_visualizer->addPointCloud (binaryCloud, colorHandler, origin, orientation, id);
 
 				_visualizer->updateColorHandlerIndex(id, 5);
+			}
+			else if(color.isValid())
+			{
+				_visualizer->updateColorHandlerIndex(id, 1);
 			}
 
 			_addedClouds.insert(id, pose);
@@ -401,7 +502,11 @@ bool CloudViewer::addOccupancyGridMap(
 		material.tex_file = tmpPath;
 		mesh->tex_materials.push_back(material);
 
+#if PCL_VERSION_COMPARE(>=, 1, 8, 0)
+		std::vector<Eigen::Vector2f, Eigen::aligned_allocator<Eigen::Vector2f> > coordinates;
+#else
 		std::vector<Eigen::Vector2f> coordinates;
+#endif
 		coordinates.push_back(Eigen::Vector2f(0,1));
 		coordinates.push_back(Eigen::Vector2f(1,1));
 		coordinates.push_back(Eigen::Vector2f(1,0));
@@ -447,7 +552,7 @@ void CloudViewer::addOrUpdateGraph(
 
 	if(graph->size())
 	{
-		_graphes.insert(std::make_pair(id, graph));
+		_graphes.insert(id);
 
 		pcl::PolygonMesh mesh;
 		pcl::Vertices vertices;
@@ -460,6 +565,9 @@ void CloudViewer::addOrUpdateGraph(
 		mesh.polygons.push_back(vertices);
 		_visualizer->addPolylineFromPolygonMesh(mesh, id);
 		_visualizer->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_COLOR, color.redF(), color.greenF(), color.blueF(), id);
+
+		this->addOrUpdateCloud(id+"_nodes", graph, Transform::getIdentity(), color);
+		this->setCloudPointSize(id+"_nodes", 5);
 	}
 }
 
@@ -475,16 +583,18 @@ void CloudViewer::removeGraph(const std::string & id)
 	{
 		_visualizer->removeShape(id);
 		_graphes.erase(id);
+		removeCloud(id+"_nodes");
 	}
 }
 
 void CloudViewer::removeAllGraphs()
 {
-	for(std::map<std::string, pcl::PointCloud<pcl::PointXYZ>::Ptr >::iterator iter = _graphes.begin(); iter!=_graphes.end(); ++iter)
+	std::set<std::string> graphes = _graphes;
+	for(std::set<std::string>::iterator iter = graphes.begin(); iter!=graphes.end(); ++iter)
 	{
-		_visualizer->removeShape(iter->first);
+		this->removeGraph(*iter);
 	}
-	_graphes.clear();
+	UASSERT(_graphes.empty());
 }
 
 bool CloudViewer::isTrajectoryShown() const
@@ -523,8 +633,9 @@ void CloudViewer::removeAllClouds()
 
 bool CloudViewer::removeCloud(const std::string & id)
 {
-	_addedClouds.remove(id);
-	return _visualizer->removePointCloud(id);
+	bool success = _visualizer->removePointCloud(id);
+	_addedClouds.remove(id); // remove after visualizer
+	return success;
 }
 
 bool CloudViewer::getPose(const std::string & id, Transform & pose)
@@ -687,14 +798,28 @@ void CloudViewer::updateCameraTargetPosition(const Transform & pose)
 	_lastPose = pose;
 }
 
+const QColor & CloudViewer::getDefaultBackgroundColor() const
+{
+	return _defaultBgColor;
+}
+
+void CloudViewer::setDefaultBackgroundColor(const QColor & color)
+{
+	if(_currentBgColor == _defaultBgColor)
+	{
+		setBackgroundColor(color);
+	}
+	_defaultBgColor = color;
+}
+
 const QColor & CloudViewer::getBackgroundColor() const
 {
-	return _backgroundColor;
+	return _currentBgColor;
 }
 
 void CloudViewer::setBackgroundColor(const QColor & color)
 {
-	_backgroundColor = color;
+	_currentBgColor = color;
 	_visualizer->setBackgroundColor(color.redF(), color.greenF(), color.blueF());
 }
 
@@ -1148,9 +1273,12 @@ void CloudViewer::handleAction(QAction * a)
 	}
 	else if(a == _aSetBackgroundColor)
 	{
-		QColor color = this->getBackgroundColor();
+		QColor color = this->getDefaultBackgroundColor();
 		color = QColorDialog::getColor(color, this);
-		this->setBackgroundColor(color);
+		if(color.isValid())
+		{
+			this->setDefaultBackgroundColor(color);
+		}
 	}
 	else if(a == _aLockViewZ)
 	{

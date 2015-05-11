@@ -307,8 +307,6 @@ void DBDriver::loadSignatures(const std::list<int> & signIds,
 	bool valueFound = false;
 	_trashesMutex.lock();
 	{
-		_dbSafeAccessMutex.lock();
-		_dbSafeAccessMutex.unlock();
 		for(std::list<int>::iterator iter = ids.begin(); iter != ids.end();)
 		{
 			valueFound = false;
@@ -361,8 +359,6 @@ void DBDriver::loadWords(const std::set<int> & wordIds, std::list<VisualWord *> 
 	{
 		if(_trashVisualWords.size())
 		{
-			_dbSafeAccessMutex.lock();
-			_dbSafeAccessMutex.unlock();
 			for(std::set<int>::iterator iter = ids.begin(); iter != ids.end();)
 			{
 				wIter = _trashVisualWords.find(*iter);
@@ -394,15 +390,26 @@ void DBDriver::loadWords(const std::set<int> & wordIds, std::list<VisualWord *> 
 	}
 }
 
-//TODO Check also in the trash ?
 void DBDriver::loadNodeData(std::list<Signature *> & signatures, bool loadMetricData) const
 {
+	// Don't look in the trash, we assume that if we want to load
+	// data of a signature, it is not in thrash! Print an error if so.
+	_trashesMutex.lock();
+	if(_trashSignatures.size())
+	{
+		for(std::list<Signature *>::iterator iter=signatures.begin(); iter!=signatures.end(); ++iter)
+		{
+			UASSERT(*iter != 0);
+			UASSERT_MSG(!uContains(_trashSignatures, (*iter)->id()), uFormat("Signature %d should not be used when transferred to trash!!!!", (*iter)->id()).c_str());
+		}
+	}
+	_trashesMutex.unlock();
+
 	_dbSafeAccessMutex.lock();
 	this->loadNodeDataQuery(signatures, loadMetricData);
 	_dbSafeAccessMutex.unlock();
 }
 
-//TODO Check also in the trash ?
 void DBDriver::getNodeData(
 		int signatureId,
 		cv::Mat & imageCompressed,
@@ -412,74 +419,284 @@ void DBDriver::getNodeData(
 		float & fy,
 		float & cx,
 		float & cy,
-		Transform & localTransform) const
+		Transform & localTransform,
+		int & laserScanMaxPts) const
 {
-	_dbSafeAccessMutex.lock();
-	this->getNodeDataQuery(signatureId, imageCompressed, depthCompressed, laserScanCompressed, fx, fy, cx, cy, localTransform);
-	_dbSafeAccessMutex.unlock();
+	bool found = false;
+	// look in the trash
+	_trashesMutex.lock();
+	if(uContains(_trashSignatures, signatureId))
+	{
+		const Signature * s = _trashSignatures.at(signatureId);
+		if(!s->getImageCompressed().empty() || !s->isSaved())
+		{
+			imageCompressed = s->getImageCompressed();
+			depthCompressed = s->getDepthCompressed();
+			laserScanCompressed = s->getLaserScanCompressed();
+			fx = s->getFx();
+			fy = s->getFy();
+			cx = s->getCx();
+			cy = s->getCy();
+			localTransform = s->getLocalTransform();
+			laserScanMaxPts = s->getLaserScanMaxPts();
+			found = true;
+		}
+	}
+	_trashesMutex.unlock();
+
+	if(!found)
+	{
+		_dbSafeAccessMutex.lock();
+		this->getNodeDataQuery(signatureId, imageCompressed, depthCompressed, laserScanCompressed, fx, fy, cx, cy, localTransform, laserScanMaxPts);
+		_dbSafeAccessMutex.unlock();
+	}
 }
 
-//TODO Check also in the trash ?
 void DBDriver::getNodeData(int signatureId, cv::Mat & imageCompressed) const
 {
-	_dbSafeAccessMutex.lock();
-	this->getNodeDataQuery(signatureId, imageCompressed);
-	_dbSafeAccessMutex.unlock();
+	bool found = false;
+	// look in the trash
+	_trashesMutex.lock();
+	if(uContains(_trashSignatures, signatureId))
+	{
+		const Signature * s = _trashSignatures.at(signatureId);
+		if(!s->getImageCompressed().empty() || !s->isSaved())
+		{
+			imageCompressed = s->getImageCompressed();
+			found = true;
+		}
+	}
+	_trashesMutex.unlock();
+
+	if(!found)
+	{
+		_dbSafeAccessMutex.lock();
+		this->getNodeDataQuery(signatureId, imageCompressed);
+		_dbSafeAccessMutex.unlock();
+	}
 }
 
-//TODO Check also in the trash ?
-void DBDriver::getPose(int signatureId, Transform & pose, int & mapId) const
+bool DBDriver::getNodeInfo(int signatureId,
+		Transform & pose,
+		int & mapId,
+		int & weight,
+		std::string & label,
+		double & stamp,
+		std::vector<unsigned char> & userData) const
 {
-	_dbSafeAccessMutex.lock();
-	this->getPoseQuery(signatureId, pose, mapId);
-	_dbSafeAccessMutex.unlock();
+	bool found = false;
+	// look in the trash
+	_trashesMutex.lock();
+	if(uContains(_trashSignatures, signatureId))
+	{
+		pose = _trashSignatures.at(signatureId)->getPose();
+		mapId = _trashSignatures.at(signatureId)->mapId();
+		weight = _trashSignatures.at(signatureId)->getWeight();
+		label = _trashSignatures.at(signatureId)->getLabel();
+		stamp = _trashSignatures.at(signatureId)->getStamp();
+		userData = _trashSignatures.at(signatureId)->getUserData();
+		found = true;
+	}
+	_trashesMutex.unlock();
+
+	if(!found)
+	{
+		_dbSafeAccessMutex.lock();
+		found = this->getNodeInfoQuery(signatureId, pose, mapId, weight, label, stamp, userData);
+		_dbSafeAccessMutex.unlock();
+	}
+	return found;
 }
 
-//TODO Check also in the trash ?
 void DBDriver::loadLinks(int signatureId, std::map<int, Link> & links, Link::Type type) const
 {
-	_dbSafeAccessMutex.lock();
-	this->loadLinksQuery(signatureId, links, type);
-	_dbSafeAccessMutex.unlock();
+	bool found = false;
+	// look in the trash
+	_trashesMutex.lock();
+	if(uContains(_trashSignatures, signatureId))
+	{
+		const Signature * s = _trashSignatures.at(signatureId);
+		UASSERT(s != 0);
+		for(std::map<int, Link>::const_iterator nIter = s->getLinks().begin();
+				nIter!=s->getLinks().end();
+				++nIter)
+		{
+			if(type == Link::kUndef || nIter->second.type() == type)
+			{
+				links.insert(*nIter);
+			}
+		}
+		found = true;
+	}
+	_trashesMutex.unlock();
+
+	if(!found)
+	{
+		_dbSafeAccessMutex.lock();
+		this->loadLinksQuery(signatureId, links, type);
+		_dbSafeAccessMutex.unlock();
+	}
 }
 
-//TODO Check also in the trash ?
 void DBDriver::getWeight(int signatureId, int & weight) const
 {
-	_dbSafeAccessMutex.lock();
-	this->getWeightQuery(signatureId, weight);
-	_dbSafeAccessMutex.unlock();
+	bool found = false;
+	// look in the trash
+	_trashesMutex.lock();
+	if(uContains(_trashSignatures, signatureId))
+	{
+		weight = _trashSignatures.at(signatureId)->getWeight();
+		found = true;
+	}
+	_trashesMutex.unlock();
+
+	if(!found)
+	{
+		_dbSafeAccessMutex.lock();
+		this->getWeightQuery(signatureId, weight);
+		_dbSafeAccessMutex.unlock();
+	}
 }
 
-//TODO Check also in the trash ?
 void DBDriver::getAllNodeIds(std::set<int> & ids, bool ignoreChildren) const
 {
+	// look in the trash
+	_trashesMutex.lock();
+	if(_trashSignatures.size())
+	{
+		for(std::map<int, Signature*>::const_iterator sIter = _trashSignatures.begin(); sIter!=_trashSignatures.end(); ++sIter)
+		{
+			bool hasNeighbors = !ignoreChildren;
+			if(ignoreChildren)
+			{
+				for(std::map<int, Link>::const_iterator nIter = sIter->second->getLinks().begin();
+						nIter!=sIter->second->getLinks().end();
+						++nIter)
+				{
+					if(nIter->second.type() == Link::kNeighbor)
+					{
+						hasNeighbors = true;
+						break;
+					}
+				}
+			}
+			if(hasNeighbors)
+			{
+				ids.insert(sIter->first);
+			}
+		}
+
+		std::vector<int> keys = uKeys(_trashSignatures);
+
+	}
+	_trashesMutex.unlock();
+
 	_dbSafeAccessMutex.lock();
 	this->getAllNodeIdsQuery(ids, ignoreChildren);
 	_dbSafeAccessMutex.unlock();
 }
 
-//TODO Check also in the trash ?
 void DBDriver::getLastNodeId(int & id) const
 {
+	// look in the trash
+	_trashesMutex.lock();
+	if(_trashSignatures.size())
+	{
+		id = _trashSignatures.rbegin()->first;
+	}
+	_trashesMutex.unlock();
+
 	_dbSafeAccessMutex.lock();
 	this->getLastIdQuery("Node", id);
 	_dbSafeAccessMutex.unlock();
 }
 
-//TODO Check also in the trash ?
 void DBDriver::getLastWordId(int & id) const
 {
+	// look in the trash
+	_trashesMutex.lock();
+	if(_trashVisualWords.size())
+	{
+		id = _trashVisualWords.rbegin()->first;
+	}
+	_trashesMutex.unlock();
+
 	_dbSafeAccessMutex.lock();
 	this->getLastIdQuery("Word", id);
 	_dbSafeAccessMutex.unlock();
 }
 
-//TODO Check also in the trash ?
 void DBDriver::getInvertedIndexNi(int signatureId, int & ni) const
 {
+	bool found = false;
+	// look in the trash
+	_trashesMutex.lock();
+	if(uContains(_trashSignatures, signatureId))
+	{
+		ni = _trashSignatures.at(signatureId)->getWords().size();
+		found = true;
+	}
+	_trashesMutex.unlock();
+
+	if(!found)
+	{
+		_dbSafeAccessMutex.lock();
+		this->getInvertedIndexNiQuery(signatureId, ni);
+		_dbSafeAccessMutex.unlock();
+	}
+}
+
+void DBDriver::getNodeIdByLabel(const std::string & label, int & id) const
+{
+	if(!label.empty())
+	{
+		int idFound = 0;
+		// look in the trash
+		_trashesMutex.lock();
+		for(std::map<int, Signature*>::const_iterator sIter = _trashSignatures.begin(); sIter!=_trashSignatures.end(); ++sIter)
+		{
+			if(sIter->second->getLabel().compare(label) == 0)
+			{
+				idFound = sIter->first;
+				break;
+			}
+		}
+		_trashesMutex.unlock();
+
+		// then look in the database
+		if(idFound == 0)
+		{
+			_dbSafeAccessMutex.lock();
+			this->getNodeIdByLabelQuery(label, id);
+			_dbSafeAccessMutex.unlock();
+		}
+		else
+		{
+			id = idFound;
+		}
+	}
+	else
+	{
+		UWARN("Can't search with an empty label!");
+	}
+}
+
+void DBDriver::getAllLabels(std::map<int, std::string> & labels) const
+{
+	// look in the trash
+	_trashesMutex.lock();
+	for(std::map<int, Signature*>::const_iterator sIter = _trashSignatures.begin(); sIter!=_trashSignatures.end(); ++sIter)
+	{
+		if(!sIter->second->getLabel().empty())
+		{
+			labels.insert(std::make_pair(sIter->first, sIter->second->getLabel()));
+		}
+	}
+	_trashesMutex.unlock();
+
+	// then look in the database
 	_dbSafeAccessMutex.lock();
-	this->getInvertedIndexNiQuery(signatureId, ni);
+	this->getAllLabelsQuery(labels);
 	_dbSafeAccessMutex.unlock();
 }
 
