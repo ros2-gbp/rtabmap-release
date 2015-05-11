@@ -73,7 +73,8 @@ public:
 			kCmdPublishTOROGraphGlobal, // params: optimized
 			kCmdPublishTOROGraphLocal, // params: optimized
 			kCmdTriggerNewMap,
-			kCmdPause};
+			kCmdPause,
+			kCmdGoal}; // params: label or location ID
 public:
 	RtabmapEventCmd(Cmd cmd, const std::string & strValue = "", int intValue = 0, const ParametersMap & parameters = ParametersMap()) :
 			UEvent(0),
@@ -148,12 +149,18 @@ public:
 			const std::map<int, Signature> & signatures,
 			const std::map<int, Transform> & poses,
 			const std::multimap<int, Link> & constraints,
-			const std::map<int, int> & mapIds) :
+			const std::map<int, int> & mapIds,
+			const std::map<int, double> & stamps,
+			const std::map<int, std::string> & labels,
+			const std::map<int, std::vector<unsigned char> > & userDatas) :
 		UEvent(0),
 		_signatures(signatures),
 		_poses(poses),
 		_constraints(constraints),
-		_mapIds(mapIds)
+		_mapIds(mapIds),
+		_stamps(stamps),
+		_labels(labels),
+		_userDatas(userDatas)
 	{}
 
 	virtual ~RtabmapEvent3DMap() {}
@@ -162,6 +169,9 @@ public:
 	const std::map<int, Transform> & getPoses() const {return _poses;}
 	const std::multimap<int, Link> & getConstraints() const {return _constraints;}
 	const std::map<int, int> & getMapIds() const {return _mapIds;}
+	const std::map<int, double> & getStamps() const {return _stamps;}
+	const std::map<int, std::string> & getLabels() const {return _labels;}
+	const std::map<int, std::vector<unsigned char> > & getUserDatas() const {return _userDatas;}
 
 	virtual std::string getClassName() const {return std::string("RtabmapEvent3DMap");}
 
@@ -170,6 +180,27 @@ private:
 	std::map<int, Transform> _poses;
 	std::multimap<int, Link> _constraints;
 	std::map<int, int> _mapIds;
+	std::map<int, double> _stamps;
+	std::map<int, std::string> _labels;
+	std::map<int, std::vector<unsigned char> > _userDatas;
+};
+
+class RtabmapGlobalPathEvent : public UEvent
+{
+public:
+	RtabmapGlobalPathEvent():
+		UEvent(0) {}
+	RtabmapGlobalPathEvent(int goalId, const std::vector<std::pair<int, Transform> > & poses) :
+		UEvent(goalId),
+		_poses(poses) {}
+
+	virtual ~RtabmapGlobalPathEvent() {}
+	int getGoal() const {return this->getCode();}
+	const std::vector<std::pair<int, Transform> > & getPoses() const {return _poses;}
+	virtual std::string getClassName() const {return std::string("RtabmapGlobalPathEvent");}
+
+private:
+	std::vector<std::pair<int, Transform> > _poses;
 };
 
 } // namespace rtabmap
