@@ -53,6 +53,7 @@ namespace rtabmap {
 class RTABMAP_EXP Statistics
 {
 	RTABMAP_STATS(Loop, RejectedHypothesis,);
+	RTABMAP_STATS(Loop, Accepted_hypothesis_id,);
 	RTABMAP_STATS(Loop, Highest_hypothesis_id,);
 	RTABMAP_STATS(Loop, Highest_hypothesis_value,);
 	RTABMAP_STATS(Loop, Vp_hypothesis,);
@@ -60,23 +61,30 @@ class RTABMAP_EXP Statistics
 	RTABMAP_STATS(Loop, Hypothesis_ratio,);
 	RTABMAP_STATS(Loop, Hypothesis_reactivated,);
 	RTABMAP_STATS(Loop, VisualInliers,);
-	RTABMAP_STATS(Loop, Last_loop_closure_parent,);
-	RTABMAP_STATS(Loop, Last_loop_closure_child,);
+	RTABMAP_STATS(Loop, Last_id,);
 
-	RTABMAP_STATS(LocalLoop, Odom_corrected,);
 	RTABMAP_STATS(LocalLoop, Time_closures,);
-	RTABMAP_STATS(LocalLoop, Space_closure_id,);
-	RTABMAP_STATS(LocalLoop, Space_nearest_id,);
-	RTABMAP_STATS(LocalLoop, Space_neighbors,);
-	RTABMAP_STATS(LocalLoop, Space_diff_id,);
+	RTABMAP_STATS(LocalLoop, Space_last_closure_id,);
+	RTABMAP_STATS(LocalLoop, Space_paths,);
+	RTABMAP_STATS(LocalLoop, Space_closures_added_visually,);
+	RTABMAP_STATS(LocalLoop, Space_closures_added_icp_only,);
+
+	RTABMAP_STATS(OdomCorrection, Accepted,);
+	RTABMAP_STATS(OdomCorrection, Inliers,);
+	RTABMAP_STATS(OdomCorrection, Inliers_ratio,);
+	RTABMAP_STATS(OdomCorrection, Variance,);
 
 	RTABMAP_STATS(Memory, Working_memory_size,);
 	RTABMAP_STATS(Memory, Short_time_memory_size,);
 	RTABMAP_STATS(Memory, Signatures_removed,);
+	RTABMAP_STATS(Memory, Immunized_globally,);
+	RTABMAP_STATS(Memory, Immunized_locally,);
+	RTABMAP_STATS(Memory, Immunized_locally_max,);
 	RTABMAP_STATS(Memory, Signatures_retrieved,);
 	RTABMAP_STATS(Memory, Images_buffered,);
 	RTABMAP_STATS(Memory, Rehearsal_sim,);
 	RTABMAP_STATS(Memory, Rehearsal_merged,);
+	RTABMAP_STATS(Memory, Local_graph_size,);
 
 	RTABMAP_STATS(Timing, Memory_update, ms);
 	RTABMAP_STATS(Timing, Scan_matching, ms);
@@ -101,9 +109,8 @@ class RTABMAP_EXP Statistics
 	RTABMAP_STATS(TimingMem, Signature_creation, ms);
 	RTABMAP_STATS(TimingMem, Rehearsal, ms);
 	RTABMAP_STATS(TimingMem, Keypoints_detection, ms);
-	RTABMAP_STATS(TimingMem, Stereo_subpixel, ms);
+	RTABMAP_STATS(TimingMem, Subpixel, ms);
 	RTABMAP_STATS(TimingMem, Stereo_correspondences, ms);
-	RTABMAP_STATS(TimingMem, Keypoints_filtering, ms);
 	RTABMAP_STATS(TimingMem, Descriptors_extraction, ms);
 	RTABMAP_STATS(TimingMem, Keypoints_3D, ms);
 	RTABMAP_STATS(TimingMem, Joining_dictionary_update, ms);
@@ -130,6 +137,9 @@ public:
 	void setLocalLoopClosureId(int localLoopClosureId) {_localLoopClosureId = localLoopClosureId;}
 
 	void setMapIds(const std::map<int, int> & mapIds) {_mapIds = mapIds;}
+	void setLabels(const std::map<int, std::string> & labels) {_labels = labels;}
+	void setStamps(const std::map<int, double> & stamps) {_stamps = stamps;}
+	void setUserDatas(const std::map<int, std::vector<unsigned char> > & userDatas) {_userDatas = userDatas;}
 	void setSignature(const Signature & s) {_signature = s;}
 
 	void setPoses(const std::map<int, Transform> & poses) {_poses = poses;}
@@ -141,6 +151,7 @@ public:
 	void setLikelihood(const std::map<int, float> & likelihood) {_likelihood = likelihood;}
 	void setRawLikelihood(const std::map<int, float> & rawLikelihood) {_rawLikelihood = rawLikelihood;}
 	void setLocalPath(const std::vector<int> & localPath) {_localPath=localPath;}
+	void setCurrentGoalId(int goal) {_currentGoalId=goal;}
 
 	// getters
 	bool extended() const {return _extended;}
@@ -149,6 +160,9 @@ public:
 	int localLoopClosureId() const {return _localLoopClosureId;}
 
 	const std::map<int, int> & getMapIds() const {return _mapIds;}
+	const std::map<int, std::string> & getLabels() const {return _labels;}
+	const std::map<int, double> & getStamps() const {return _stamps;}
+	const std::map<int, std::vector<unsigned char> > & getUserDatas() const {return _userDatas;}
 	const Signature & getSignature() const {return _signature;}
 
 	const std::map<int, Transform> & poses() const {return _poses;}
@@ -160,6 +174,7 @@ public:
 	const std::map<int, float> & likelihood() const {return _likelihood;}
 	const std::map<int, float> & rawLikelihood() const {return _rawLikelihood;}
 	const std::vector<int> & localPath() const {return _localPath;}
+	int currentGoalId() const {return _currentGoalId;}
 
 	const std::map<std::string, float> & data() const {return _data;}
 
@@ -172,6 +187,9 @@ private:
 
 	// extended data start here...
 	std::map<int, int> _mapIds;
+	std::map<int, std::string> _labels;
+	std::map<int, double> _stamps;
+	std::map<int, std::vector<unsigned char> > _userDatas;
 
 	// Signature data
 	Signature _signature;
@@ -187,6 +205,7 @@ private:
 	std::map<int, float> _rawLikelihood;
 
 	std::vector<int> _localPath;
+	int _currentGoalId;
 
 	// Format for statistics (Plottable statistics must go in that map) :
 	// {"Group/Name/Unit", value}

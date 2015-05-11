@@ -404,6 +404,286 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr generateKeypoints3DStereo(
 	return keypoints3d;
 }
 
+// cameraTransform, from ref to next
+// return 3D points in ref referential
+// If cameraTransform is not null, it will be used for triangulation instead of the camera transform computed by epipolar geometry
+// when refGuess3D is passed and cameraTransform is null, scale will be estimated, returning scaled cloud and camera transform
+std::multimap<int, pcl::PointXYZ> generateWords3DMono(
+		const std::multimap<int, cv::KeyPoint> & refWords,
+		const std::multimap<int, cv::KeyPoint> & nextWords,
+		float fx,
+		float fy,
+		float cx,
+		float cy,
+		const Transform & localTransform,
+		Transform & cameraTransform,
+		int pnpIterations,
+		float pnpReprojError,
+		int pnpFlags,
+		float ransacParam1,
+		float ransacParam2,
+		const std::multimap<int, pcl::PointXYZ> & refGuess3D,
+		double * varianceOut)
+{
+	std::multimap<int, pcl::PointXYZ> words3D;
+	std::list<std::pair<int, std::pair<cv::KeyPoint, cv::KeyPoint> > > pairs;
+	if(EpipolarGeometry::findPairsUnique(refWords, nextWords, pairs) > 8)
+	{
+		std::vector<unsigned char> status;
+		cv::Mat F = EpipolarGeometry::findFFromWords(pairs, status, ransacParam1, ransacParam2);
+		if(!F.empty())
+		{
+			//get inliers
+			//normalize coordinates
+			int oi = 0;
+			UASSERT(status.size() == pairs.size());
+			std::list<std::pair<int, std::pair<cv::KeyPoint, cv::KeyPoint> > >::iterator iter=pairs.begin();
+			std::vector<cv::Point2f> refCorners(status.size());
+			std::vector<cv::Point2f> newCorners(status.size());
+			std::vector<int> indexes(status.size());
+			for(unsigned int i=0; i<status.size(); ++i)
+			{
+				if(status[i])
+				{
+					refCorners[oi] = iter->second.first.pt;
+					newCorners[oi] = iter->second.second.pt;
+					indexes[oi] = iter->first;
+					++oi;
+				}
+				++iter;
+			}
+			refCorners.resize(oi);
+			newCorners.resize(oi);
+			indexes.resize(oi);
+
+			UDEBUG("inliers=%d/%d", oi, pairs.size());
+			if(oi > 3)
+			{
+				std::vector<cv::Point2f> refCornersRefined;
+				std::vector<cv::Point2f> newCornersRefined;
+				cv::correctMatches(F, refCorners, newCorners, refCornersRefined, newCornersRefined);
+				refCorners = refCornersRefined;
+				newCorners = newCornersRefined;
+
+				cv::Mat x(3, (int)refCorners.size(), CV_64FC1);
+				cv::Mat xp(3, (int)refCorners.size(), CV_64FC1);
+				for(unsigned int i=0; i<refCorners.size(); ++i)
+				{
+					x.at<double>(0, i) = refCorners[i].x;
+					x.at<double>(1, i) = refCorners[i].y;
+					x.at<double>(2, i) = 1;
+
+					xp.at<double>(0, i) = newCorners[i].x;
+					xp.at<double>(1, i) = newCorners[i].y;
+					xp.at<double>(2, i) = 1;
+				}
+
+				cv::Mat K = (cv::Mat_<double>(3,3) <<
+					fx, 0, cx,
+					0, fy, cy,
+					0, 0, 1);
+				cv::Mat Kinv = K.inv();
+				cv::Mat E = K.t()*F*K;
+				cv::Mat x_norm = Kinv * x;
+				cv::Mat xp_norm = Kinv * xp;
+				x_norm = x_norm.rowRange(0,2);
+				xp_norm = xp_norm.rowRange(0,2);
+
+				cv::Mat P = EpipolarGeometry::findPFromE(E, x_norm, xp_norm);
+				if(!P.empty())
+				{
+					cv::Mat P0 = cv::Mat::zeros(3, 4, CV_64FC1);
+					P0.at<double>(0,0) = 1;
+					P0.at<double>(1,1) = 1;
+					P0.at<double>(2,2) = 1;
+
+					bool useCameraTransformGuess = !cameraTransform.isNull();
+					//if camera transform is set, use it instead of the computed one from epipolar geometry
+					if(useCameraTransformGuess)
+					{
+						Transform t = (localTransform.inverse()*cameraTransform*localTransform).inverse();
+						P = (cv::Mat_<double>(3,4) <<
+								(double)t.r11(), (double)t.r12(), (double)t.r13(), (double)t.x(),
+								(double)t.r21(), (double)t.r22(), (double)t.r23(), (double)t.y(),
+								(double)t.r31(), (double)t.r32(), (double)t.r33(), (double)t.z());
+					}
+
+					// triangulate the points
+					//std::vector<double> reprojErrors;
+					//pcl::PointCloud<pcl::PointXYZ>::Ptr cloud;
+					//EpipolarGeometry::triangulatePoints(x_norm, xp_norm, P0, P, cloud, reprojErrors);
+					cv::Mat pts4D;
+					cv::triangulatePoints(P0, P, x_norm, xp_norm, pts4D);
+
+					for(unsigned int i=0; i<indexes.size(); ++i)
+					{
+						//if(cloud->at(i).z > 0)
+						//{
+						//	words3D.insert(std::make_pair(indexes[i], util3d::transformPoint(cloud->at(i), localTransform)));
+						//}
+						pts4D.col(i) /= pts4D.at<double>(3,i);
+						if(pts4D.at<double>(2,i) > 0)
+						{
+							words3D.insert(std::make_pair(indexes[i], util3d::transformPoint(pcl::PointXYZ(pts4D.at<double>(0,i), pts4D.at<double>(1,i), pts4D.at<double>(2,i)), localTransform)));
+						}
+					}
+
+					if(!useCameraTransformGuess)
+					{
+						cv::Mat R, T;
+						EpipolarGeometry::findRTFromP(P, R, T);
+
+						Transform t(R.at<double>(0,0), R.at<double>(0,1), R.at<double>(0,2), T.at<double>(0),
+									R.at<double>(1,0), R.at<double>(1,1), R.at<double>(1,2), T.at<double>(1),
+									R.at<double>(2,0), R.at<double>(2,1), R.at<double>(2,2), T.at<double>(2));
+
+						cameraTransform = (localTransform * t).inverse() * localTransform;
+					}
+
+					if(refGuess3D.size())
+					{
+						// scale estimation
+						pcl::PointCloud<pcl::PointXYZ>::Ptr inliersRef(new pcl::PointCloud<pcl::PointXYZ>);
+						pcl::PointCloud<pcl::PointXYZ>::Ptr inliersRefGuess(new pcl::PointCloud<pcl::PointXYZ>);
+						util3d::findCorrespondences(
+								words3D,
+								refGuess3D,
+								*inliersRef,
+								*inliersRefGuess,
+								0);
+
+						if(inliersRef->size())
+						{
+							// estimate the scale
+							float scale = 1.0f;
+							float variance = 1.0f;
+							if(!useCameraTransformGuess)
+							{
+								std::multimap<float, float> scales; // <variance, scale>
+								for(unsigned int i=0; i<inliersRef->size(); ++i)
+								{
+									// using x as depth, assuming we are in global referential
+									float s = inliersRefGuess->at(i).x/inliersRef->at(i).x;
+									std::vector<float> errorSqrdDists(inliersRef->size());
+									for(unsigned int j=0; j<inliersRef->size(); ++j)
+									{
+										pcl::PointXYZ refPt = inliersRef->at(j);
+										refPt.x *= s;
+										refPt.y *= s;
+										refPt.z *= s;
+										const pcl::PointXYZ & newPt = inliersRefGuess->at(j);
+										errorSqrdDists[j] = uNormSquared(refPt.x-newPt.x, refPt.y-newPt.y, refPt.z-newPt.z);
+									}
+									std::sort(errorSqrdDists.begin(), errorSqrdDists.end());
+									double median_error_sqr = (double)errorSqrdDists[errorSqrdDists.size () >> 1];
+									float var = 2.1981 * median_error_sqr;
+									//UDEBUG("scale %d = %f variance = %f", (int)i, s, variance);
+
+									scales.insert(std::make_pair(var, s));
+								}
+								scale = scales.begin()->second;
+								variance = scales.begin()->first;;
+							}
+							else
+							{
+								//compute variance at scale=1
+								std::vector<float> errorSqrdDists(inliersRef->size());
+								for(unsigned int j=0; j<inliersRef->size(); ++j)
+								{
+									const pcl::PointXYZ & refPt = inliersRef->at(j);
+									const pcl::PointXYZ & newPt = inliersRefGuess->at(j);
+									errorSqrdDists[j] = uNormSquared(refPt.x-newPt.x, refPt.y-newPt.y, refPt.z-newPt.z);
+								}
+								std::sort(errorSqrdDists.begin(), errorSqrdDists.end());
+								double median_error_sqr = (double)errorSqrdDists[errorSqrdDists.size () >> 1];
+								 variance = 2.1981 * median_error_sqr;
+							}
+
+							UDEBUG("scale used = %f (variance=%f)", scale, variance);
+							if(varianceOut)
+							{
+								*varianceOut = variance;
+							}
+
+							if(!useCameraTransformGuess)
+							{
+								std::vector<cv::Point3f> objectPoints(indexes.size());
+								std::vector<cv::Point2f> imagePoints(indexes.size());
+								int oi=0;
+								for(unsigned int i=0; i<indexes.size(); ++i)
+								{
+									std::multimap<int, pcl::PointXYZ>::iterator iter = words3D.find(indexes[i]);
+									if(pcl::isFinite(iter->second))
+									{
+										iter->second.x *= scale;
+										iter->second.y *= scale;
+										iter->second.z *= scale;
+										objectPoints[oi].x = iter->second.x;
+										objectPoints[oi].y = iter->second.y;
+										objectPoints[oi].z = iter->second.z;
+										imagePoints[oi] = newCorners[i];
+										++oi;
+									}
+								}
+								objectPoints.resize(oi);
+								imagePoints.resize(oi);
+
+								//PnPRansac
+								Transform guess = localTransform.inverse();
+								cv::Mat R = (cv::Mat_<double>(3,3) <<
+										(double)guess.r11(), (double)guess.r12(), (double)guess.r13(),
+										(double)guess.r21(), (double)guess.r22(), (double)guess.r23(),
+										(double)guess.r31(), (double)guess.r32(), (double)guess.r33());
+								cv::Mat rvec(1,3, CV_64FC1);
+								cv::Rodrigues(R, rvec);
+								cv::Mat tvec = (cv::Mat_<double>(1,3) << (double)guess.x(), (double)guess.y(), (double)guess.z());
+								std::vector<int> inliersV;
+								cv::solvePnPRansac(
+										objectPoints,
+										imagePoints,
+										K,
+										cv::Mat(),
+										rvec,
+										tvec,
+										true,
+										pnpIterations,
+										pnpReprojError,
+										0,
+										inliersV,
+										pnpFlags);
+
+								UDEBUG("PnP inliers = %d / %d", (int)inliersV.size(), (int)objectPoints.size());
+
+								if(inliersV.size())
+								{
+									cv::Rodrigues(rvec, R);
+									Transform pnp(R.at<double>(0,0), R.at<double>(0,1), R.at<double>(0,2), tvec.at<double>(0),
+												   R.at<double>(1,0), R.at<double>(1,1), R.at<double>(1,2), tvec.at<double>(1),
+												   R.at<double>(2,0), R.at<double>(2,1), R.at<double>(2,2), tvec.at<double>(2));
+
+									cameraTransform = (localTransform * pnp).inverse();
+								}
+								else
+								{
+									UWARN("No inliers after PnP!");
+									cameraTransform = Transform();
+								}
+							}
+						}
+						else
+						{
+							UWARN("Cannot compute the scale, no points corresponding between the generated ref words and words guess");
+						}
+					}
+				}
+			}
+		}
+	}
+	UDEBUG("wordsSet=%d / %d", (int)words3D.size(), (int)refWords.size());
+
+	return words3D;
+}
+
 std::multimap<int, cv::KeyPoint> aggregate(
 		const std::list<int> & wordIds,
 		const std::vector<cv::KeyPoint> & keypoints)
@@ -476,7 +756,7 @@ void findCorrespondences(
 			   pcl::isFinite(inliers2[oi]) &&
 			   (inliers1[oi].x != 0 || inliers1[oi].y != 0 || inliers1[oi].z != 0) &&
 			   (inliers2[oi].x != 0 || inliers2[oi].y != 0 || inliers2[oi].z != 0) &&
-			   (maxDepth <= 0 || (inliers1[oi].x <= maxDepth && inliers2[oi].x<=maxDepth)))
+			   (maxDepth <= 0 || (inliers1[oi].x > 0 && inliers1[oi].x <= maxDepth && inliers2[oi].x>0 &&inliers2[oi].x<=maxDepth)))
 			{
 				++oi;
 				if(uniqueCorrespondences)
@@ -490,18 +770,14 @@ void findCorrespondences(
 	inliers2.resize(oi);
 }
 
-pcl::PointXYZ projectDepthTo3D(
+float getDepth(
 		const cv::Mat & depthImage,
 		float x, float y,
-		float cx, float cy,
-		float fx, float fy,
 		bool smoothing,
 		float maxZError)
 {
+	UASSERT(!depthImage.empty());
 	UASSERT(depthImage.type() == CV_16UC1 || depthImage.type() == CV_32FC1);
-
-	pcl::PointXYZ pt;
-	float bad_point = std::numeric_limits<float>::quiet_NaN ();
 
 	int u = int(x+0.5f);
 	int v = int(y+0.5f);
@@ -510,8 +786,7 @@ pcl::PointXYZ projectDepthTo3D(
 	{
 		UERROR("!(x >=0 && x<depthImage.cols && y >=0 && y<depthImage.rows) cond failed! returning bad point. (x=%f (u=%d), y=%f (v=%d), cols=%d, rows=%d)",
 				x,u,y,v,depthImage.cols, depthImage.rows);
-		pt.x = pt.y = pt.z = bad_point;
-		return pt;
+		return 0;
 	}
 
 	bool isInMM = depthImage.type() == CV_16UC1; // is in mm?
@@ -565,7 +840,30 @@ pcl::PointXYZ projectDepthTo3D(
 			// mean
 			depth = (depth+sumDepths)/sumWeights;
 		}
+	}
+	else
+	{
+		depth = 0;
+	}
+	return depth;
+}
 
+pcl::PointXYZ projectDepthTo3D(
+		const cv::Mat & depthImage,
+		float x, float y,
+		float cx, float cy,
+		float fx, float fy,
+		bool smoothing,
+		float maxZError)
+{
+	UASSERT(depthImage.type() == CV_16UC1 || depthImage.type() == CV_32FC1);
+
+	pcl::PointXYZ pt;
+	float bad_point = std::numeric_limits<float>::quiet_NaN ();
+
+	float depth = getDepth(depthImage, x, y, smoothing, maxZError);
+	if(depth)
+	{
 		// Use correct principal point from calibration
 		cx = cx > 0.0f ? cx : float(depthImage.cols/2) - 0.5f; //cameraInfo.K.at(2)
 		cy = cy > 0.0f ? cy : float(depthImage.rows/2) - 0.5f; //cameraInfo.K.at(5)
@@ -589,6 +887,9 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr cloudFromDepth(
 		int decimation)
 {
 	UASSERT(!imageDepth.empty() && (imageDepth.type() == CV_16UC1 || imageDepth.type() == CV_32FC1));
+	UASSERT(imageDepth.rows % decimation == 0);
+	UASSERT(imageDepth.cols % decimation == 0);
+
 	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
 	if(decimation < 1)
 	{
@@ -630,6 +931,9 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloudFromDepthRGB(
 {
 	UASSERT(imageRgb.rows == imageDepth.rows && imageRgb.cols == imageDepth.cols);
 	UASSERT(!imageDepth.empty() && (imageDepth.type() == CV_16UC1 || imageDepth.type() == CV_32FC1));
+	UASSERT(imageDepth.rows % decimation == 0);
+	UASSERT(imageDepth.cols % decimation == 0);
+
 	pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
 	if(decimation < 1)
 	{
@@ -691,6 +995,9 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr cloudFromDisparity(
 		int decimation)
 {
 	UASSERT(imageDisparity.type() == CV_32FC1 || imageDisparity.type()==CV_16SC1);
+	UASSERT(imageDisparity.rows % decimation == 0);
+	UASSERT(imageDisparity.cols % decimation == 0);
+
 	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
 	if(decimation < 1)
 	{
@@ -738,6 +1045,8 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloudFromDisparityRGB(
 	UASSERT(imageRgb.rows == imageDisparity.rows &&
 			imageRgb.cols == imageDisparity.cols &&
 			(imageDisparity.type() == CV_32FC1 || imageDisparity.type()==CV_16SC1));
+	UASSERT(imageDisparity.rows % decimation == 0);
+	UASSERT(imageDisparity.cols % decimation == 0);
 	pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
 	if(decimation < 1)
 	{
@@ -824,13 +1133,32 @@ cv::Mat disparityFromStereoImages(
 		const cv::Mat & rightImage)
 {
 	UASSERT(!leftImage.empty() && !rightImage.empty() &&
-			leftImage.type() == CV_8UC1 && rightImage.type() == CV_8UC1 &&
+			(leftImage.type() == CV_8UC1 || leftImage.type() == CV_8UC3) && rightImage.type() == CV_8UC1 &&
 			leftImage.cols == rightImage.cols &&
 			leftImage.rows == rightImage.rows);
-	cv::StereoBM stereo(cv::StereoBM::BASIC_PRESET, 160, 15);
+
+	cv::Mat leftMono;
+	if(leftImage.channels() == 3)
+	{
+		cv::cvtColor(leftImage, leftMono, CV_BGR2GRAY);
+	}
+	else
+	{
+		leftMono = leftImage;
+	}
+
+	cv::StereoBM stereo(cv::StereoBM::BASIC_PRESET);
+	stereo.state->SADWindowSize = 15;
+	stereo.state->minDisparity = 0;
+	stereo.state->numberOfDisparities = 64;
+	stereo.state->preFilterSize = 9;
+	stereo.state->preFilterCap = 31;
+	stereo.state->uniquenessRatio = 15;
+	stereo.state->textureThreshold = 10;
+	stereo.state->speckleWindowSize = 100;
+	stereo.state->speckleRange = 4;
 	cv::Mat disparity;
-	stereo(leftImage, rightImage, disparity, CV_16SC1);
-	cv::filterSpeckles(disparity, 0, 1000, 16);
+	stereo(leftMono, rightImage, disparity, CV_16SC1);
 	return disparity;
 }
 
@@ -980,8 +1308,8 @@ pcl::PointXYZ projectDisparityTo3D(
 	int u = int(pt.x+0.5f);
 	int v = int(pt.y+0.5f);
 	float bad_point = std::numeric_limits<float>::quiet_NaN ();
-	if(uIsInBounds(u, 0, disparity.cols-1) &&
-	   uIsInBounds(v, 0, disparity.rows-1))
+	if(uIsInBounds(u, 0, disparity.cols) &&
+	   uIsInBounds(v, 0, disparity.rows))
 	{
 		float d = disparity.type() == CV_16SC1?float(disparity.at<short>(v,u))/16.0f:disparity.at<float>(v,u);
 		return projectDisparityTo3D(pt, d, cx, cy, fx, baseline);
@@ -1017,6 +1345,170 @@ cv::Mat depthFromDisparity(const cv::Mat & disparity,
 		}
 	}
 	return depth;
+}
+
+cv::Mat registerDepth(
+		const cv::Mat & depth,
+		const cv::Mat & depthK,
+		const cv::Mat & colorK,
+		const rtabmap::Transform & transform)
+{
+	UASSERT(!transform.isNull());
+	UASSERT(!depth.empty());
+	UASSERT(depth.type() == CV_16UC1); // mm
+	UASSERT(depthK.type() == CV_64FC1 && depthK.cols == 3 && depthK.cols == 3);
+	UASSERT(colorK.type() == CV_64FC1 && colorK.cols == 3 && colorK.cols == 3);
+
+	float fx = depthK.at<double>(0,0);
+	float fy = depthK.at<double>(1,1);
+	float cx = depthK.at<double>(0,2);
+	float cy = depthK.at<double>(1,2);
+
+	float rfx = colorK.at<double>(0,0);
+	float rfy = colorK.at<double>(1,1);
+	float rcx = colorK.at<double>(0,2);
+	float rcy = colorK.at<double>(1,2);
+
+	Eigen::Affine3f proj = transform.toEigen3f();
+	Eigen::Vector4f P4,P3;
+	P4[3] = 1;
+	cv::Mat registered = cv::Mat::zeros(depth.rows, depth.cols, depth.type());
+
+	for(int y=0; y<depth.rows; ++y)
+	{
+		for(int x=0; x<depth.cols; ++x)
+		{
+			//filtering
+			float dz = float(depth.at<unsigned short>(y,x))*0.001f; // put in meter for projection
+			if(dz>=0.0f)
+			{
+				// Project to 3D
+				P4[0] = (x - cx) * dz / fx; // Optimization: we could have (x-cx)/fx in a lookup table
+				P4[1] = (y - cy) * dz / fy; // Optimization: we could have (y-cy)/fy in a lookup table
+				P4[2] = dz;
+
+				P3 = proj * P4;
+				float z = P3[2];
+				float invZ = 1.0f/z;
+				int dx = (rfx*P3[0])*invZ + rcx;
+				int dy = (rfy*P3[1])*invZ + rcy;
+
+				if(uIsInBounds(dx, 0, registered.cols) && uIsInBounds(dy, 0, registered.rows))
+				{
+					unsigned short z16 = z * 1000; //mm
+					unsigned short &zReg = registered.at<unsigned short>(dy, dx);
+					if(zReg == 0 || z16 < zReg)
+					{
+						zReg = z16;
+					}
+				}
+			}
+		}
+	}
+	return registered;
+}
+
+void fillRegisteredDepthHoles(cv::Mat & registeredDepth, bool vertical, bool horizontal, bool fillDoubleHoles)
+{
+	UASSERT(registeredDepth.type() == CV_16UC1);
+	int margin = fillDoubleHoles?2:1;
+	for(int x=1; x<registeredDepth.cols-margin; ++x)
+	{
+		for(int y=1; y<registeredDepth.rows-margin; ++y)
+		{
+			unsigned short & b = registeredDepth.at<unsigned short>(y, x);
+			bool set = false;
+			if(vertical)
+			{
+				const unsigned short & a = registeredDepth.at<unsigned short>(y-1, x);
+				unsigned short & c = registeredDepth.at<unsigned short>(y+1, x);
+				if(a && c)
+				{
+					unsigned short error = 0.01*((a+c)/2);
+					if(((b == 0 && a && c) || (b > a+error && b > c+error)) &&
+						(a>c?a-c<=error:c-a<=error))
+					{
+						b = (a+c)/2;
+						set = true;
+						if(!horizontal)
+						{
+							++y;
+						}
+					}
+				}
+				if(!set && fillDoubleHoles)
+				{
+					const unsigned short & d = registeredDepth.at<unsigned short>(y+2, x);
+					if(a && d && (b==0 || c==0))
+					{
+						unsigned short error = 0.01*((a+d)/2);
+						if(((b == 0 && a && d) || (b > a+error && b > d+error)) &&
+						   ((c == 0 && a && d) || (c > a+error && c > d+error)) &&
+							(a>d?a-d<=error:d-a<=error))
+						{
+							if(a>d)
+							{
+								unsigned short tmp = (a-d)/4;
+								b = d + tmp;
+								c = d + 3*tmp;
+							}
+							else
+							{
+								unsigned short tmp = (d-a)/4;
+								b = a + tmp;
+								c = a + 3*tmp;
+							}
+							set = true;
+							if(!horizontal)
+							{
+								y+=2;
+							}
+						}
+					}
+				}
+			}
+			if(!set && horizontal)
+			{
+				const unsigned short & a = registeredDepth.at<unsigned short>(y, x-1);
+				unsigned short & c = registeredDepth.at<unsigned short>(y, x+1);
+				if(a && c)
+				{
+					unsigned short error = 0.01*((a+c)/2);
+					if(((b == 0 && a && c) || (b > a+error && b > c+error)) &&
+						(a>c?a-c<=error:c-a<=error))
+					{
+						b = (a+c)/2;
+						set = true;
+					}
+				}
+				if(!set && fillDoubleHoles)
+				{
+					const unsigned short & d = registeredDepth.at<unsigned short>(y, x+2);
+					if(a && d && (b==0 || c==0))
+					{
+						unsigned short error = 0.01*((a+d)/2);
+						if(((b == 0 && a && d) || (b > a+error && b > d+error)) &&
+						   ((c == 0 && a && d) || (c > a+error && c > d+error)) &&
+							(a>d?a-d<=error:d-a<=error))
+						{
+							if(a>d)
+							{
+								unsigned short tmp = (a-d)/4;
+								b = d + tmp;
+								c = d + 3*tmp;
+							}
+							else
+							{
+								unsigned short tmp = (d-a)/4;
+								b = a + tmp;
+								c = a + 3*tmp;
+							}
+						}
+					}
+				}
+			}
+		}
+	}
 }
 
 cv::Mat laserScanFromPointCloud(const pcl::PointCloud<pcl::PointXYZ> & cloud)
@@ -1459,7 +1951,7 @@ Transform icp(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr & cloud_source,
 			  int maximumIterations,
 			  bool * hasConvergedOut,
 			  double * variance,
-			  int * inliers)
+			  int * correspondencesOut)
 {
 	pcl::IterativeClosestPoint<pcl::PointXYZ, pcl::PointXYZ> icp;
 	// Set the input source and target
@@ -1482,7 +1974,7 @@ Transform icp(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr & cloud_source,
 	bool hasConverged = icp.hasConverged();
 
 	// compute variance
-	if((inliers || variance) && hasConverged)
+	if((correspondencesOut || variance) && hasConverged)
 	{
 		pcl::registration::CorrespondenceEstimation<pcl::PointXYZ, pcl::PointXYZ>::Ptr est;
 		est.reset(new pcl::registration::CorrespondenceEstimation<pcl::PointXYZ, pcl::PointXYZ>);
@@ -1512,16 +2004,16 @@ Transform icp(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr & cloud_source,
 			}
 		}
 
-		if(inliers)
+		if(correspondencesOut)
 		{
-			*inliers = correspondences.size();
+			*correspondencesOut = (int)correspondences.size();
 		}
 	}
 	else
 	{
-		if(inliers)
+		if(correspondencesOut)
 		{
-			*inliers = 0;
+			*correspondencesOut = 0;
 		}
 		if(variance)
 		{
@@ -1545,7 +2037,7 @@ Transform icpPointToPlane(
 		int maximumIterations,
 		bool * hasConvergedOut,
 		double * variance,
-		int * inliers)
+		int * correspondencesOut)
 {
 	pcl::IterativeClosestPoint<pcl::PointNormal, pcl::PointNormal> icp;
 	// Set the input source and target
@@ -1572,7 +2064,7 @@ Transform icpPointToPlane(
 	bool hasConverged = icp.hasConverged();
 
 	// compute variance
-	if((inliers || variance) && hasConverged)
+	if((correspondencesOut || variance) && hasConverged)
 	{
 		pcl::registration::CorrespondenceEstimation<pcl::PointNormal, pcl::PointNormal>::Ptr est;
 		est.reset(new pcl::registration::CorrespondenceEstimation<pcl::PointNormal, pcl::PointNormal>);
@@ -1602,16 +2094,16 @@ Transform icpPointToPlane(
 			}
 		}
 
-		if(inliers)
+		if(correspondencesOut)
 		{
-			*inliers = correspondences.size();
+			*correspondencesOut = (int)correspondences.size();
 		}
 	}
 	else
 	{
-		if(inliers)
+		if(correspondencesOut)
 		{
-			*inliers = 0;
+			*correspondencesOut = 0;
 		}
 		if(variance)
 		{
@@ -1634,7 +2126,7 @@ Transform icp2D(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr & cloud_source,
 			  int maximumIterations,
 			  bool * hasConvergedOut,
 			  double * variance,
-			  int * inliers)
+			  int * correspondencesOut)
 {
 	pcl::IterativeClosestPoint<pcl::PointXYZ, pcl::PointXYZ> icp;
 	// Set the input source and target
@@ -1661,7 +2153,7 @@ Transform icp2D(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr & cloud_source,
 	bool hasConverged = icp.hasConverged();
 
 	// compute variance
-	if((inliers || variance) && hasConverged)
+	if((correspondencesOut || variance) && hasConverged)
 	{
 		pcl::registration::CorrespondenceEstimation<pcl::PointXYZ, pcl::PointXYZ>::Ptr est;
 		est.reset(new pcl::registration::CorrespondenceEstimation<pcl::PointXYZ, pcl::PointXYZ>);
@@ -1691,16 +2183,16 @@ Transform icp2D(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr & cloud_source,
 			}
 		}
 
-		if(inliers)
+		if(correspondencesOut)
 		{
-			*inliers = correspondences.size();
+			*correspondencesOut = (int)correspondences.size();
 		}
 	}
 	else
 	{
-		if(inliers)
+		if(correspondencesOut)
 		{
-			*inliers = 0;
+			*correspondencesOut = 0;
 		}
 		if(variance)
 		{
@@ -2006,89 +2498,66 @@ pcl::PolygonMesh::Ptr createMesh(
 	return mesh;
 }
 
-bool occupancy2DFromCloud3D(
-		const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud,
+void occupancy2DFromLaserScan(
+		const cv::Mat & scan,
 		cv::Mat & ground,
 		cv::Mat & obstacles,
-		float cellSize,
-		float groundNormalAngle,
-		int minClusterSize)
+		float cellSize)
 {
-	pcl::PointCloud<pcl::PointXYZ>::Ptr groundCloud(new pcl::PointCloud<pcl::PointXYZ>);
-	pcl::PointCloud<pcl::PointXYZ>::Ptr obstaclesCloud(new pcl::PointCloud<pcl::PointXYZ>);
-
-	//voxelize
-	pcl::PointCloud<pcl::PointXYZRGB>::Ptr voxelizedCloud = util3d::voxelize<pcl::PointXYZRGB>(cloud, cellSize);
-
-	pcl::IndicesPtr groundIndices, obstaclesIndices;
-
-	segmentObstaclesFromGround<pcl::PointXYZRGB>(cloud,
-			groundIndices,
-			obstaclesIndices,
-			cellSize,
-			groundNormalAngle,
-			minClusterSize);
-
-	if(groundIndices->size())
+	if(scan.empty())
 	{
-		pcl::copyPointCloud(*cloud, *groundIndices, *groundCloud);
-		//project on XY plane
-		util3d::projectCloudOnXYPlane<pcl::PointXYZ>(groundCloud);
-		//voxelize to grid cell size
-		groundCloud = util3d::voxelize<pcl::PointXYZ>(groundCloud, cellSize);
+		return;
 	}
 
-	if(obstaclesIndices->size())
-	{
-		pcl::copyPointCloud(*cloud, *obstaclesIndices, *obstaclesCloud);
-		//project on XY plane
-		util3d::projectCloudOnXYPlane<pcl::PointXYZ>(obstaclesCloud);
-		//voxelize to grid cell size
-		obstaclesCloud = util3d::voxelize<pcl::PointXYZ>(obstaclesCloud, cellSize);
-	}
+	std::map<int, Transform> poses;
+	poses.insert(std::make_pair(1, Transform::getIdentity()));
 
-	ground = cv::Mat();
-	if(groundCloud->size())
+	pcl::PointCloud<pcl::PointXYZ>::Ptr obstaclesCloud = util3d::laserScanToPointCloud(scan);
+	//obstaclesCloud = util3d::voxelize<pcl::PointXYZ>(obstaclesCloud, cellSize);
+
+	std::map<int, pcl::PointCloud<pcl::PointXYZ>::Ptr> scans;
+	scans.insert(std::make_pair(1, obstaclesCloud));
+
+	float xMin, yMin;
+	cv::Mat map8S = create2DMap(poses, scans, cellSize, false, xMin, yMin);
+
+	// find ground cells
+	std::list<int> groundIndices;
+	for(unsigned int i=0; i< map8S.total(); ++i)
 	{
-		ground = cv::Mat(groundCloud->size(), 1, CV_32FC2);
-		for(unsigned int i=0;i<groundCloud->size(); ++i)
+		if(map8S.data[i] == 0)
 		{
-			ground.at<cv::Vec2f>(i)[0] = groundCloud->at(i).x;
-			ground.at<cv::Vec2f>(i)[1] = groundCloud->at(i).y;
+			groundIndices.push_back(i);
 		}
 	}
 
+	// Convert to position matrices, get points to each center of the cells
+	ground = cv::Mat();
+	if(groundIndices.size())
+	{
+		ground = cv::Mat((int)groundIndices.size(), 1, CV_32FC2);
+		int i=0;
+		for(std::list<int>::iterator iter=groundIndices.begin();iter!=groundIndices.end(); ++iter)
+		{
+			int x = *iter / map8S.cols;
+			int y = *iter - x*map8S.cols;
+			ground.at<cv::Vec2f>(i)[0] = (float(y)+0.5)*cellSize + xMin;
+			ground.at<cv::Vec2f>(i)[1] = (float(x)+0.5)*cellSize + yMin;
+			++i;
+		}
+	}
+
+	// copy directly obstacles precise positions
 	obstacles = cv::Mat();
 	if(obstaclesCloud->size())
 	{
-		obstacles = cv::Mat(obstaclesCloud->size(), 1, CV_32FC2);
+		obstacles = cv::Mat((int)obstaclesCloud->size(), 1, CV_32FC2);
 		for(unsigned int i=0;i<obstaclesCloud->size(); ++i)
 		{
 			obstacles.at<cv::Vec2f>(i)[0] = obstaclesCloud->at(i).x;
 			obstacles.at<cv::Vec2f>(i)[1] = obstaclesCloud->at(i).y;
 		}
 	}
-	/*
-	if(cloud->size())
-	{
-		UWARN("saving cloud");
-		pcl::io::savePCDFile("cloud.pcd", *cloud);
-		pcl::io::savePCDFile("cloudXYZ.pcd", *cloudXYZ);
-	}
-	if(groundCloud->size())
-	{
-		UWARN("saving ground");
-		pcl::io::savePCDFile("ground.pcd", *groundCloud);
-		pcl::io::savePCDFile("ground_indices.pcd", *cloudXYZ, *groundIndices);
-	}
-	if(obstaclesCloud->size())
-	{
-		UWARN("saving obstacles");
-		pcl::io::savePCDFile("obstacles.pcd", *obstaclesCloud);
-		pcl::io::savePCDFile("obstacles_indices.pcd", *cloudXYZ, *obstaclesIndices);
-	}
-	*/
-	return !ground.empty();
 }
 
 /**
@@ -2101,7 +2570,8 @@ bool occupancy2DFromCloud3D(
  * @param cellSize m
  * @param xMin
  * @param yMin
- * @param fillEmptyRadius fill neighbors of empty space if there're no obstacles.
+ * @param minMapSize minimum width (m)
+ * @param erode
  */
 cv::Mat create2DMapFromOccupancyLocalMaps(
 		const std::map<int, Transform> & poses,
@@ -2109,12 +2579,11 @@ cv::Mat create2DMapFromOccupancyLocalMaps(
 		float cellSize,
 		float & xMin,
 		float & yMin,
-		int fillEmptyRadius,
-		float minMapSize)
+		float minMapSize,
+		bool erode)
 {
-	UASSERT(fillEmptyRadius >= 0);
 	UASSERT(minMapSize >= 0.0f);
-	UDEBUG("");
+	UDEBUG("cellSize=%f m, minMapSize=%f m, erode=%d", cellSize, minMapSize, erode?1:0);
 	UTimer timer;
 
 	std::map<int, cv::Mat> emptyLocalMaps;
@@ -2122,16 +2591,36 @@ cv::Mat create2DMapFromOccupancyLocalMaps(
 
 	float minX=-minMapSize/2.0, minY=-minMapSize/2.0, maxX=minMapSize/2.0, maxY=minMapSize/2.0;
 	bool undefinedSize = minMapSize == 0.0f;
-	float x,y,z,toll,pitch,yaw,cosT,sinT;
+	float x=0.0f,y=0.0f,z=0.0f,roll=0.0f,pitch=0.0f,yaw=0.0f,cosT=0.0f,sinT=0.0f;
 	cv::Mat affineTransform(2,3,CV_32FC1);
 	for(std::map<int, Transform>::const_iterator iter = poses.begin(); iter!=poses.end(); ++iter)
 	{
+		UASSERT(!iter->second.isNull());
+
+		iter->second.getTranslationAndEulerAngles(x,y,z,roll,pitch,yaw);
+
+		if(undefinedSize)
+		{
+			minX = maxX = x;
+			minY = maxY = y;
+			undefinedSize = false;
+		}
+		else
+		{
+			if(minX > x)
+				minX = x;
+			else if(maxX < x)
+				maxX = x;
+
+			if(minY > y)
+				minY = y;
+			else if(maxY < y)
+				maxY = y;
+		}
+
 		if(uContains(occupancy, iter->first))
 		{
-			UASSERT(!iter->second.isNull());
 			const std::pair<cv::Mat, cv::Mat> & pair = occupancy.at(iter->first);
-
-			iter->second.getTranslationAndEulerAngles(x,y,z,toll,pitch,yaw);
 			cosT = cos(yaw);
 			sinT = sin(yaw);
 			affineTransform.at<float>(0,0) = cosT;
@@ -2140,25 +2629,6 @@ cv::Mat create2DMapFromOccupancyLocalMaps(
 			affineTransform.at<float>(1,1) = cosT;
 			affineTransform.at<float>(0,2) = x;
 			affineTransform.at<float>(1,2) = y;
-
-			if(undefinedSize)
-			{
-				minX = maxX = x;
-				minY = maxY = y;
-				undefinedSize = false;
-			}
-			else
-			{
-				if(minX > x)
-					minX = x;
-				else if(maxX < x)
-					maxX = x;
-
-				if(minY > y)
-					minY = y;
-				else if(maxY < y)
-					maxY = y;
-			}
 
 			//ground
 			if(pair.first.rows)
@@ -2209,48 +2679,136 @@ cv::Mat create2DMapFromOccupancyLocalMaps(
 	if(minX != maxX && minY != maxY)
 	{
 		//Get map size
-		float margin = (fillEmptyRadius + 1)*cellSize;
+		float margin = cellSize*10.0f;
 		xMin = minX-margin;
 		yMin = minY-margin;
 		float xMax = maxX+margin;
 		float yMax = maxY+margin;
-		UDEBUG("map min=(%f, %f) max=(%f,%f)", xMin, yMin, xMax, yMax);
-
-		map = cv::Mat::ones((yMax - yMin) / cellSize + 0.5f, (xMax - xMin) / cellSize + 0.5f, CV_8S)*-1;
-		for(std::map<int, Transform>::const_iterator kter = poses.begin(); kter!=poses.end(); ++kter)
+		if(fabs((yMax - yMin) / cellSize) > 99999 ||
+		   fabs((xMax - xMin) / cellSize) > 99999)
 		{
-			std::map<int, cv::Mat >::iterator iter = emptyLocalMaps.find(kter->first);
-			std::map<int, cv::Mat >::iterator jter = occupiedLocalMaps.find(kter->first);
-			if(iter!=emptyLocalMaps.end())
+			UERROR("Large map size!! map min=(%f, %f) max=(%f,%f). "
+					"There's maybe an error with the poses provided! The map will not be created!",
+					xMin, yMin, xMax, yMax);
+		}
+		else
+		{
+			UDEBUG("map min=(%f, %f) max=(%f,%f)", xMin, yMin, xMax, yMax);
+
+
+			map = cv::Mat::ones((yMax - yMin) / cellSize + 0.5f, (xMax - xMin) / cellSize + 0.5f, CV_8S)*-1;
+			for(std::map<int, Transform>::const_iterator kter = poses.begin(); kter!=poses.end(); ++kter)
 			{
-				for(int i=0; i<iter->second.rows; ++i)
+				std::map<int, cv::Mat >::iterator iter = emptyLocalMaps.find(kter->first);
+				std::map<int, cv::Mat >::iterator jter = occupiedLocalMaps.find(kter->first);
+				if(iter!=emptyLocalMaps.end())
 				{
-					cv::Point2i pt((iter->second.at<float>(i,0)-xMin)/cellSize + 0.5f, (iter->second.at<float>(i,1)-yMin)/cellSize + 0.5f);
-					map.at<char>(pt.y, pt.x) = 0; // free space
-					if(fillEmptyRadius>0)
+					for(int i=0; i<iter->second.rows; ++i)
 					{
-						for(int j=pt.y-fillEmptyRadius; j<=pt.y+fillEmptyRadius; ++j)
-						{
-							for(int k=pt.x-fillEmptyRadius; k<=pt.x+fillEmptyRadius; ++k)
-							{
-								if(map.at<char>(j, k) == -1)
-								{
-									map.at<char>(j, k) = 0;
-								}
-							}
-						}
+						cv::Point2i pt((iter->second.at<float>(i,0)-xMin)/cellSize + 0.5f, (iter->second.at<float>(i,1)-yMin)/cellSize + 0.5f);
+						map.at<char>(pt.y, pt.x) = 0; // free space
 					}
 				}
-			}
-			if(jter!=occupiedLocalMaps.end())
-			{
-				for(int i=0; i<jter->second.rows; ++i)
+				if(jter!=occupiedLocalMaps.end())
 				{
-					cv::Point2i pt((jter->second.at<float>(i,0)-xMin)/cellSize + 0.5f, (jter->second.at<float>(i,1)-yMin)/cellSize + 0.5f);
-					map.at<char>(pt.y, pt.x) = 100; // obstacles
+					for(int i=0; i<jter->second.rows; ++i)
+					{
+						cv::Point2i pt((jter->second.at<float>(i,0)-xMin)/cellSize + 0.5f, (jter->second.at<float>(i,1)-yMin)/cellSize + 0.5f);
+						map.at<char>(pt.y, pt.x) = 100; // obstacles
+					}
+				}
+
+				//UDEBUG("empty=%d occupied=%d", empty, occupied);
+			}
+
+			// fill holes and remove empty from obstacle borders
+			cv::Mat updatedMap = map.clone();
+			std::list<std::pair<int, int> > obstacleIndices;
+			for(int i=2; i<map.rows-2; ++i)
+			{
+				for(int j=2; j<map.cols-2; ++j)
+				{
+					if(map.at<char>(i, j) == -1 &&
+						map.at<char>(i+1, j) != -1 &&
+						map.at<char>(i-1, j) != -1 &&
+						map.at<char>(i, j+1) != -1 &&
+						map.at<char>(i, j-1) != -1)
+					{
+						updatedMap.at<char>(i, j) = 0;
+					}
+					else if(map.at<char>(i, j) == 100)
+					{
+						// obstacle/empty/unknown -> remove empty
+						// unknown/empty/obstacle -> remove empty
+						if(map.at<char>(i-1, j) == 0 &&
+							map.at<char>(i-2, j) == -1)
+						{
+							updatedMap.at<char>(i-1, j) = -1;
+						}
+						else if(map.at<char>(i+1, j) == 0 &&
+								map.at<char>(i+2, j) == -1)
+						{
+							updatedMap.at<char>(i+1, j) = -1;
+						}
+						if(map.at<char>(i, j-1) == 0 &&
+							map.at<char>(i, j-2) == -1)
+						{
+							updatedMap.at<char>(i, j-1) = -1;
+						}
+						else if(map.at<char>(i, j+1) == 0 &&
+								map.at<char>(i, j+2) == -1)
+						{
+							updatedMap.at<char>(i, j+1) = -1;
+						}
+
+						if(erode)
+						{
+							obstacleIndices.push_back(std::make_pair(i, j));
+						}
+					}
+					else if(map.at<char>(i, j) == 0)
+					{
+						// obstacle/empty/obstacle -> remove empty
+						if(map.at<char>(i-1, j) == 100 &&
+							map.at<char>(i+1, j) == 100)
+						{
+							updatedMap.at<char>(i, j) = -1;
+						}
+						else if(map.at<char>(i, j-1) == 100 &&
+							map.at<char>(i, j+1) == 100)
+						{
+							updatedMap.at<char>(i, j) = -1;
+						}
+					}
+
 				}
 			}
-			//UDEBUG("empty=%d occupied=%d", empty, occupied);
+			map = updatedMap;
+
+			if(erode)
+			{
+				// remove obstacles which touch to empty cells but not unknown cells
+				cv::Mat erodedMap = map.clone();
+				for(std::list<std::pair<int,int> >::iterator iter = obstacleIndices.begin();
+					iter!= obstacleIndices.end();
+					++iter)
+				{
+					int i = iter->first;
+					int j = iter->second;
+					bool touchEmpty = map.at<char>(i+1, j) == 0 ||
+						map.at<char>(i-1, j) == 0 ||
+						map.at<char>(i, j+1) == 0 ||
+						map.at<char>(i, j-1) == 0;
+					if(touchEmpty && map.at<char>(i+1, j) != -1 &&
+						map.at<char>(i-1, j) != -1 &&
+						map.at<char>(i, j+1) != -1 &&
+						map.at<char>(i, j-1) != -1)
+					{
+						erodedMap.at<char>(i, j) = 0; // empty
+					}
+				}
+				map = erodedMap;
+			}
 		}
 	}
 	UDEBUG("timer=%fs", timer.ticks());
@@ -2309,10 +2867,11 @@ cv::Mat create2DMap(const std::map<int, Transform> & poses,
 		pcl::getMinMax3D(minMax, min, max);
 
 		// Added X2 to make sure that all points are inside the map (when rounded to integer)
-		xMin = min.x-cellSize*2.0f;
-		yMin = min.y-cellSize*2.0f;
-		float xMax = max.x+cellSize*2.0f;
-		float yMax = max.y+cellSize*2.0f;
+		float marging = cellSize*10.0f;
+		xMin = min.x-marging;
+		yMin = min.y-marging;
+		float xMax = max.x+marging;
+		float yMax = max.y+marging;
 
 		UDEBUG("map min=(%f, %f) max=(%f,%f)", xMin, yMin, xMax, yMax);
 
@@ -2427,37 +2986,70 @@ void rayTrace(const cv::Point2i & start, const cv::Point2i & end, cv::Mat & grid
 	ptB = end;
 
 	float slope = float(ptB.y - ptA.y)/float(ptB.x - ptA.x);
+
+	bool swapped = false;
+	if(slope<-1.0f || slope>1.0f)
+	{
+		// swap x and y
+		slope = 1.0f/slope;
+
+		int tmp = ptA.x;
+		ptA.x = ptA.y;
+		ptA.y = tmp;
+
+		tmp = ptB.x;
+		ptB.x = ptB.y;
+		ptB.y = tmp;
+
+		swapped = true;
+	}
+
 	float b = ptA.y - slope*ptA.x;
-
-	//UWARN("start=%d,%d end=%d,%d", ptA.x, ptA.y, ptB.x, ptB.y);
-
-	//ROS_WARN("y = %f*x + %f", slope, b);
 	for(int x=ptA.x; ptA.x<ptB.x?x<ptB.x:x>ptB.x; ptA.x<ptB.x?++x:--x)
 	{
-		int lowerbound = float(x)*slope + b;
-		int upperbound = float(ptA.x<ptB.x?x+1:x-1)*slope + b;
+		int upperbound = float(x)*slope + b;
+		int lowerbound = upperbound;
+		if(x != ptA.x)
+		{
+			lowerbound = (ptA.x<ptB.x?x+1:x-1)*slope + b;
+		}
 
 		if(lowerbound > upperbound)
 		{
-			int tmp = lowerbound;
-			lowerbound = upperbound;
-			upperbound = tmp;
+			int tmp = upperbound;
+			upperbound = lowerbound;
+			lowerbound = tmp;
 		}
 
-		//ROS_WARN("lowerbound=%f upperbound=%f", lowerbound, upperbound);
-		UASSERT_MSG(lowerbound >= 0 && lowerbound < grid.rows, uFormat("lowerbound=%f grid.rows=%d x=%d slope=%f b=%f x=%f", lowerbound, grid.rows, x, slope, b, x).c_str());
-		UASSERT_MSG(upperbound >= 0 && upperbound < grid.rows, uFormat("upperbound=%f grid.rows=%d x+1=%d slope=%f b=%f x=%f", upperbound, grid.rows, x+1, slope, b, x).c_str());
+		if(!swapped)
+		{
+			UASSERT_MSG(lowerbound >= 0 && lowerbound < grid.rows, uFormat("lowerbound=%f grid.rows=%d x=%d slope=%f b=%f x=%f", lowerbound, grid.rows, x, slope, b, x).c_str());
+			UASSERT_MSG(upperbound >= 0 && upperbound < grid.rows, uFormat("upperbound=%f grid.rows=%d x+1=%d slope=%f b=%f x=%f", upperbound, grid.rows, x+1, slope, b, x).c_str());
+		}
+		else
+		{
+			UASSERT_MSG(lowerbound >= 0 && lowerbound < grid.cols, uFormat("lowerbound=%f grid.cols=%d x=%d slope=%f b=%f x=%f", lowerbound, grid.cols, x, slope, b, x).c_str());
+			UASSERT_MSG(upperbound >= 0 && upperbound < grid.cols, uFormat("upperbound=%f grid.cols=%d x+1=%d slope=%f b=%f x=%f", upperbound, grid.cols, x+1, slope, b, x).c_str());
+		}
 
 		for(int y = lowerbound; y<=(int)upperbound; ++y)
 		{
-			char & v = grid.at<char>(y, x);
-			if(v == 100 && stopOnObstacle)
+			char * v;
+			if(swapped)
+			{
+				v = &grid.at<char>(x, y);
+			}
+			else
+			{
+				v = &grid.at<char>(y, x);
+			}
+			if(*v == 100 && stopOnObstacle)
 			{
 				return;
 			}
 			else
 			{
-				v = 0; // free space
+				*v = 0; // free space
 			}
 		}
 	}
@@ -2498,7 +3090,7 @@ pcl::IndicesPtr concatenate(const std::vector<pcl::IndicesPtr> & indices)
 	unsigned int totalSize = 0;
 	for(unsigned int i=0; i<indices.size(); ++i)
 	{
-		totalSize += indices[i]->size();
+		totalSize += (unsigned int)indices[i]->size();
 	}
 	pcl::IndicesPtr ind(new std::vector<int>(totalSize));
 	unsigned int io = 0;
@@ -2516,12 +3108,77 @@ pcl::IndicesPtr concatenate(const pcl::IndicesPtr & indicesA, const pcl::Indices
 {
 	pcl::IndicesPtr ind(new std::vector<int>(*indicesA));
 	ind->resize(ind->size()+indicesB->size());
-	unsigned int oi = indicesA->size();
+	unsigned int oi = (unsigned int)indicesA->size();
 	for(unsigned int i=0; i<indicesB->size(); ++i)
 	{
 		ind->at(oi++) = indicesB->at(i);
 	}
 	return ind;
+}
+
+cv::Mat decimate(const cv::Mat & image, int decimation)
+{
+	UASSERT(decimation >= 1);
+	cv::Mat out;
+	if(!image.empty())
+	{
+		if(decimation > 1)
+		{
+			if((image.type() == CV_32FC1 || image.type()==CV_16UC1))
+			{
+				UASSERT_MSG(image.rows % decimation == 0 && image.cols % decimation == 0, "Decimation of depth images should be exact!");
+
+				out = cv::Mat(image.rows/decimation, image.cols/decimation, image.type());
+				if(image.type() == CV_32FC1)
+				{
+					for(int j=0; j<out.rows; ++j)
+					{
+						for(int i=0; i<out.cols; ++i)
+						{
+							out.at<float>(j, i) = image.at<float>(j*decimation, i*decimation);
+						}
+					}
+				}
+				else // CV_16UC1
+				{
+					for(int j=0; j<out.rows; ++j)
+					{
+						for(int i=0; i<out.cols; ++i)
+						{
+							out.at<unsigned short>(j, i) = image.at<unsigned short>(j*decimation, i*decimation);
+						}
+					}
+				}
+			}
+			else
+			{
+				cv::resize(image, out, cv::Size(), 1.0f/float(decimation), 1.0f/float(decimation), cv::INTER_AREA);
+			}
+		}
+		else
+		{
+			out = image;
+		}
+	}
+	return out;
+}
+
+void savePCDWords(
+		const std::string & fileName,
+		const std::multimap<int, pcl::PointXYZ> & words,
+		const Transform & transform)
+{
+	if(words.size())
+	{
+		pcl::PointCloud<pcl::PointXYZ> cloud;
+		cloud.resize(words.size());
+		int i=0;
+		for(std::multimap<int, pcl::PointXYZ>::const_iterator iter=words.begin(); iter!=words.end(); ++iter)
+		{
+			cloud[i++] = util3d::transformPoint(iter->second, transform);
+		}
+		pcl::io::savePCDFile(fileName, cloud);
+	}
 }
 
 }

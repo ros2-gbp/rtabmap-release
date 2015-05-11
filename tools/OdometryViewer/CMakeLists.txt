@@ -1,8 +1,4 @@
 
-SET(SRC_FILES
-    main.cpp
-)
-
 SET(INCLUDE_DIRS
 	${PROJECT_SOURCE_DIR}/corelib/include
 	${PROJECT_SOURCE_DIR}/utilite/include
@@ -11,11 +7,17 @@ SET(INCLUDE_DIRS
     ${PCL_INCLUDE_DIRS}
 )
 
-INCLUDE(${QT_USE_FILE})
+IF("${RTABMAP_QT_VERSION}" STREQUAL "4")
+    INCLUDE(${QT_USE_FILE})
+ENDIF()
 
 SET(LIBRARIES
 	${PCL_LIBRARIES} 
 	${QT_LIBRARIES} 
+)
+
+SET(SRC_FILES
+    main.cpp 
 )
 
 add_definitions(${PCL_DEFINITIONS})
