@@ -14,6 +14,7 @@ SET(SRC_FILES
     Camera.cpp
     CameraThread.cpp
     CameraRGBD.cpp
+    CameraModel.cpp
     
     EpipolarGeometry.cpp
 	VisualWord.cpp
@@ -25,14 +26,23 @@ SET(SRC_FILES
 	Transform.cpp
 	
 	util3d.cpp
-	Odometry.cpp
 	SensorData.cpp
 	Graph.cpp
 	Compression.cpp
 	
+	Odometry.cpp
+	OdometryThread.cpp
+	OdometryBOW.cpp
+	OdometryOpticalFlow.cpp
+	OdometryMono.cpp
+	OdometryICP.cpp
+	
 	toro3d/posegraph3.cpp
 	toro3d/treeoptimizer3_iteration.cpp
 	toro3d/treeoptimizer3.cpp
+	
+	toro3d/posegraph2.cpp
+	toro3d/treeoptimizer2.cpp
 	
 	sqlite3/sqlite3.c
 )
@@ -79,6 +89,54 @@ IF(OpenNI2_FOUND)
 		${OpenNI2_LIBRARIES}
 	)
 ENDIF(OpenNI2_FOUND)
+
+IF(freenect2_FOUND)
+	ADD_DEFINITIONS("-DWITH_FREENECT2")
+	SET(INCLUDE_DIRS
+		${INCLUDE_DIRS}
+		${freenect2_INCLUDE_DIRS}
+	)
+	SET(LIBRARIES
+		${LIBRARIES}
+		${freenect2_LIBRARIES}
+	)
+ENDIF(freenect2_FOUND)
+
+IF(DC1394_FOUND)
+	ADD_DEFINITIONS("-DWITH_DC1394")
+	SET(INCLUDE_DIRS
+		${INCLUDE_DIRS}
+		${DC1394_INCLUDE_DIRS}
+	)
+	SET(LIBRARIES
+		${LIBRARIES}
+		${DC1394_LIBRARIES}
+	)
+ENDIF(DC1394_FOUND)
+
+IF(FlyCapture2_FOUND)
+	ADD_DEFINITIONS("-DWITH_FLYCAPTURE2")
+	SET(INCLUDE_DIRS
+		${INCLUDE_DIRS}
+		${FlyCapture2_INCLUDE_DIRS}
+	)
+	SET(LIBRARIES
+		${LIBRARIES}
+		${FlyCapture2_LIBRARIES}
+	)
+ENDIF(FlyCapture2_FOUND)
+
+IF(G2O_FOUND)
+	ADD_DEFINITIONS("-DWITH_G2O")
+	SET(INCLUDE_DIRS 
+		${INCLUDE_DIRS} 
+		${G2O_INCLUDE_DIRS}
+	)
+	SET(LIBRARIES
+		${LIBRARIES}
+		${G2O_LIBRARIES}
+	)
+ENDIF(G2O_FOUND)
 
 ####################################
 # Generate resources files
