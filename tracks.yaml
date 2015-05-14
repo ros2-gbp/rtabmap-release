@@ -60,7 +60,7 @@ tracks:
     patches: null
     release_inc: '1'
     release_repo_url: null
-    release_tag: 0.8.12-2
+    release_tag: 0.9.0
     ros_distro: jade
     vcs_type: git
     vcs_uri: https://github.com/introlab/rtabmap.git
