@@ -26,7 +26,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include "rtabmap/core/CameraRGBD.h"
-#include "rtabmap/core/util3d.h"
+#include "rtabmap/core/util2d.h"
+#include "rtabmap/core/CameraRGB.h"
 
 #include <rtabmap/utilite/UEventsManager.h>
 #include <rtabmap/utilite/UConversion.h>
@@ -37,8 +38,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap/utilite/UTimer.h>
 #include <rtabmap/utilite/UMath.h>
 
+#ifdef HAVE_OPENNI
 #include <pcl/io/openni_grabber.h>
 #include <pcl/io/oni_grabber.h>
+#endif
 
 #ifdef WITH_FREENECT
 #include <libfreenect.h>
@@ -54,6 +57,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <libfreenect2/frame_listener_impl.h>
 #include <libfreenect2/registration.h>
 #include <libfreenect2/packet_pipeline.h>
+#include <libfreenect2/config.h>
 #endif
 
 #ifdef WITH_DC1394
@@ -73,96 +77,29 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 namespace rtabmap
 {
 
-CameraRGBD::CameraRGBD(float imageRate, const Transform & localTransform) :
-	_imageRate(imageRate),
-	_localTransform(localTransform),
-	_mirroring(false),
-	_colorOnly(false),
-	_frameRateTimer(new UTimer())
-{
-}
-
-CameraRGBD::~CameraRGBD()
-{
-	if(_frameRateTimer)
-	{
-		delete _frameRateTimer;
-	}
-}
-
-void CameraRGBD::takeImage(cv::Mat & rgb, cv::Mat & depth, float & fx, float & fy, float & cx, float & cy)
-{
-	bool warnFrameRateTooHigh = false;
-	float actualFrameRate = 0;
-	if(_imageRate>0)
-	{
-		int sleepTime = (1000.0f/_imageRate - 1000.0f*_frameRateTimer->getElapsedTime());
-		if(sleepTime > 2)
-		{
-			uSleep(sleepTime-2);
-		}
-		else if(sleepTime < 0)
-		{
-			warnFrameRateTooHigh = true;
-			actualFrameRate = 1.0/(_frameRateTimer->getElapsedTime());
-		}
-
-		// Add precision at the cost of a small overhead
-		while(_frameRateTimer->getElapsedTime() < 1.0/double(_imageRate)-0.000001)
-		{
-			//
-		}
-
-		double slept = _frameRateTimer->getElapsedTime();
-		_frameRateTimer->start();
-		UDEBUG("slept=%fs vs target=%fs", slept, 1.0/double(_imageRate));
-	}
-
-	UTimer timer;
-	this->captureImage(rgb, depth, fx, fy, cx, cy);
-	if(_colorOnly)
-	{
-		depth = cv::Mat();
-	}
-	if(_mirroring)
-	{
-		if(!rgb.empty())
-		{
-			cv::flip(rgb,rgb,1);
-			if(cx != 0.0f)
-			{
-				cx = float(rgb.cols) - cx;
-			}
-		}
-		if(!depth.empty())
-		{
-			cv::flip(depth,depth,1);
-		}
-	}
-	if(warnFrameRateTooHigh)
-	{
-		UWARN("Camera: Cannot reach target image rate %f Hz, current rate is %f Hz and capture time = %f s.",
-				_imageRate, actualFrameRate, timer.ticks());
-	}
-	else
-	{
-		UDEBUG("Time capturing image = %fs", timer.ticks());
-	}
-}
-
 /////////////////////////
 // CameraOpenNIPCL
 /////////////////////////
 CameraOpenni::CameraOpenni(const std::string & deviceId, float imageRate, const Transform & localTransform) :
-		CameraRGBD(imageRate, localTransform),
+		Camera(imageRate, localTransform),
 		interface_(0),
 		deviceId_(deviceId),
 		depthConstant_(0.0f)
 {
 }
 
+bool CameraOpenni::available() 
+{
+#ifdef HAVE_OPENNI
+	return true;
+#else
+	return false;
+#endif
+}
+
 CameraOpenni::~CameraOpenni()
 {
+#ifdef HAVE_OPENNI
 	UDEBUG("");
 	if(connection_.connected())
 	{
@@ -176,8 +113,9 @@ CameraOpenni::~CameraOpenni()
 		delete interface_;
 		interface_ = 0;
 	}
+#endif
 }
-
+#ifdef HAVE_OPENNI
 void CameraOpenni::image_cb (
 		const boost::shared_ptr<openni_wrapper::Image>& rgb,
 		const boost::shared_ptr<openni_wrapper::DepthImage>& depth,
@@ -201,9 +139,11 @@ void CameraOpenni::image_cb (
 		dataReady_.release();
 	}
 }
+#endif
 
-bool CameraOpenni::init(const std::string & calibrationFolder)
+bool CameraOpenni::init(const std::string & calibrationFolder, const std::string & cameraName)
 {
+#ifdef HAVE_OPENNI
 	if(interface_)
 	{
 		interface_->stop();
@@ -242,30 +182,36 @@ bool CameraOpenni::init(const std::string & calibrationFolder)
 		return false;
 	}
 	return true;
+#else
+	UERROR("PCL not built with OpenNI! Cannot initialize CameraOpenNI");
+	return false;
+#endif
 }
 
 bool CameraOpenni::isCalibrated() const
 {
+#ifdef HAVE_OPENNI
 	return true;
+#else
+	return false;
+#endif
 }
 
 std::string CameraOpenni::getSerial() const
 {
+#ifdef HAVE_OPENNI
 	if(interface_)
 	{
 		return interface_->getName();
 	}
+#endif
 	return "";
 }
 
-void CameraOpenni::captureImage(cv::Mat & rgb, cv::Mat & depth, float & fx, float & fy, float & cx, float & cy)
+SensorData CameraOpenni::captureImage()
 {
-	rgb = cv::Mat();
-	depth = cv::Mat();
-	fx=0.0f;
-	fy=0.0f;
-	cx=0.0f;
-	cy=0.0f;
+	SensorData data;
+#ifdef HAVE_OPENNI
 	if(interface_ && interface_->isRunning())
 	{
 		if(!dataReady_.acquire(1, 2000))
@@ -275,14 +221,15 @@ void CameraOpenni::captureImage(cv::Mat & rgb, cv::Mat & depth, float & fx, floa
 		else
 		{
 			UScopeMutex s(dataMutex_);
-			if(depthConstant_)
+			if(depthConstant_ && !rgb_.empty() && !depth_.empty())
 			{
-				depth = depth_;
-				rgb = rgb_;
-				fx = 1.0f/depthConstant_;
-				fy = 1.0f/depthConstant_;
-				cx = float(depth_.cols/2) - 0.5f;
-				cy = float(depth_.rows/2) - 0.5f;
+				CameraModel model(
+						1.0f/depthConstant_, //fx
+						1.0f/depthConstant_, //fy
+						float(rgb_.cols/2) - 0.5f,  //cx
+						float(rgb_.rows/2) - 0.5f,  //cy
+						this->getLocalTransform());
+				data = SensorData(rgb_, depth_, model, this->getNextSeqID(), UTimer::now());
 			}
 
 			depth_ = cv::Mat();
@@ -290,6 +237,10 @@ void CameraOpenni::captureImage(cv::Mat & rgb, cv::Mat & depth, float & fx, floa
 			depthConstant_ = 0.0f;
 		}
 	}
+#else
+	UERROR("CameraOpenNI: RTAB-Map is not built with PCL having OpenNI support!");
+#endif
+	return data;
 }
 
 
@@ -303,7 +254,7 @@ bool CameraOpenNICV::available()
 }
 
 CameraOpenNICV::CameraOpenNICV(bool asus, float imageRate, const rtabmap::Transform & localTransform) :
-	CameraRGBD(imageRate, localTransform),
+	Camera(imageRate, localTransform),
 	_asus(asus),
 	_depthFocal(0.0f)
 {
@@ -315,14 +266,14 @@ CameraOpenNICV::~CameraOpenNICV()
 	_capture.release();
 }
 
-bool CameraOpenNICV::init(const std::string & calibrationFolder)
+bool CameraOpenNICV::init(const std::string & calibrationFolder, const std::string & cameraName)
 {
 	if(_capture.isOpened())
 	{
 		_capture.release();
 	}
 
-	ULOGGER_DEBUG("CameraRGBD::init()");
+	ULOGGER_DEBUG("Camera::init()");
 	_capture.open( _asus?CV_CAP_OPENNI_ASUS:CV_CAP_OPENNI );
 	if(_capture.isOpened())
 	{
@@ -350,14 +301,14 @@ bool CameraOpenNICV::init(const std::string & calibrationFolder)
 		}
 		else
 		{
-			UERROR("CameraRGBD: Device doesn't contain image generator.");
+			UERROR("Camera: Device doesn't contain image generator.");
 			_capture.release();
 			return false;
 		}
 	}
 	else
 	{
-		ULOGGER_ERROR("CameraRGBD: Failed to create a capture object!");
+		ULOGGER_ERROR("Camera: Failed to create a capture object!");
 		_capture.release();
 		return false;
 	}
@@ -369,26 +320,36 @@ bool CameraOpenNICV::isCalibrated() const
 	return true;
 }
 
-void CameraOpenNICV::captureImage(cv::Mat & rgb, cv::Mat & depth, float & fx, float & fy, float & cx, float & cy)
+SensorData CameraOpenNICV::captureImage()
 {
+	SensorData data;
 	if(_capture.isOpened())
 	{
 		_capture.grab();
-		_capture.retrieve( depth, CV_CAP_OPENNI_DEPTH_MAP );
-		_capture.retrieve( rgb, CV_CAP_OPENNI_BGR_IMAGE );
+		cv::Mat depth, rgb;
+		_capture.retrieve(depth, CV_CAP_OPENNI_DEPTH_MAP );
+		_capture.retrieve(rgb, CV_CAP_OPENNI_BGR_IMAGE );
 
 		depth = depth.clone();
 		rgb = rgb.clone();
-		UASSERT(_depthFocal > 0.0f);
-		fx = _depthFocal;
-		fy = _depthFocal;
-		cx = float(depth.cols/2) - 0.5f;
-		cy = float(depth.rows/2) - 0.5f;
+
+		UASSERT(_depthFocal>0.0f);
+		if(!rgb.empty() && !depth.empty())
+		{
+			CameraModel model(
+					_depthFocal, //fx
+					_depthFocal, //fy
+					float(rgb.cols/2) - 0.5f,  //cx
+					float(rgb.rows/2) - 0.5f,  //cy
+					this->getLocalTransform());
+			data = SensorData(rgb, depth, model, this->getNextSeqID(), UTimer::now());
+		}
 	}
 	else
 	{
 		ULOGGER_WARN("The camera must be initialized before requesting an image.");
 	}
+	return data;
 }
 
 
@@ -417,7 +378,7 @@ CameraOpenNI2::CameraOpenNI2(
 		const std::string & deviceId,
 		float imageRate,
 		const rtabmap::Transform & localTransform) :
-	CameraRGBD(imageRate, localTransform),
+	Camera(imageRate, localTransform),
 #ifdef WITH_OPENNI2
 	_device(new openni::Device()),
 	_color(new openni::VideoStream()),
@@ -521,7 +482,7 @@ bool CameraOpenNI2::setMirroring(bool enabled)
 	return false;
 }
 
-bool CameraOpenNI2::init(const std::string & calibrationFolder)
+bool CameraOpenNI2::init(const std::string & calibrationFolder, const std::string & cameraName)
 {
 #ifdef WITH_OPENNI2
 	openni::OpenNI::initialize();
@@ -710,16 +671,10 @@ std::string CameraOpenNI2::getSerial() const
 	return "";
 }
 
-void CameraOpenNI2::captureImage(cv::Mat & rgb, cv::Mat & depth, float & fx, float & fy, float & cx, float & cy)
+SensorData CameraOpenNI2::captureImage()
 {
+	SensorData data;
 #ifdef WITH_OPENNI2
-	rgb = cv::Mat();
-	depth = cv::Mat();
-	fx = 0.0f;
-	fy = 0.0f;
-	cx = 0.0f;
-	cy = 0.0f;
-
 	int readyStream = -1;
 	if(_device->isValid() &&
 		_depth->isValid() &&
@@ -739,6 +694,7 @@ void CameraOpenNI2::captureImage(cv::Mat & rgb, cv::Mat & depth, float & fx, flo
 			openni::VideoFrameRef depthFrame, colorFrame;
 			_depth->readFrame(&depthFrame);
 			_color->readFrame(&colorFrame);
+			cv::Mat depth, rgb;
 			if(depthFrame.isValid() && colorFrame.isValid())
 			{
 				int h=depthFrame.getHeight();
@@ -751,10 +707,16 @@ void CameraOpenNI2::captureImage(cv::Mat & rgb, cv::Mat & depth, float & fx, flo
 				cv::cvtColor(tmp, rgb, CV_RGB2BGR);
 			}
 			UASSERT(_depthFx != 0.0f && _depthFy != 0.0f);
-			fx = _depthFx;
-			fy = _depthFy;
-			cx = float(depth.cols/2) - 0.5f;
-			cy = float(depth.rows/2) - 0.5f;
+			if(!rgb.empty() && !depth.empty())
+			{
+				CameraModel model(
+						_depthFx, //fx
+						_depthFy, //fy
+						float(rgb.cols/2) - 0.5f,  //cx
+						float(rgb.rows/2) - 0.5f,  //cy
+						this->getLocalTransform());
+				data = SensorData(rgb, depth, model, this->getNextSeqID(), UTimer::now());
+			}
 		}
 	}
 	else
@@ -764,6 +726,7 @@ void CameraOpenNI2::captureImage(cv::Mat & rgb, cv::Mat & depth, float & fx, flo
 #else
 	UERROR("CameraOpenNI2: RTAB-Map is not built with OpenNI2 support!");
 #endif
+	return data;
 }
 
 #ifdef WITH_FREENECT
@@ -981,7 +944,7 @@ bool CameraFreenect::available()
 }
 
 CameraFreenect::CameraFreenect(int deviceId, float imageRate, const Transform & localTransform) :
-		CameraRGBD(imageRate, localTransform),
+		Camera(imageRate, localTransform),
 		deviceId_(deviceId),
 		ctx_(0),
 		freenectDevice_(0)
@@ -1009,7 +972,7 @@ CameraFreenect::~CameraFreenect()
 #endif
 }
 
-bool CameraFreenect::init(const std::string & calibrationFolder)
+bool CameraFreenect::init(const std::string & calibrationFolder, const std::string & cameraName)
 {
 #ifdef WITH_FREENECT
 	if(freenectDevice_)
@@ -1061,27 +1024,29 @@ std::string CameraFreenect::getSerial() const
 	return "";
 }
 
-void CameraFreenect::captureImage(cv::Mat & rgb, cv::Mat & depth, float & fx, float & fy, float & cx, float & cy)
+SensorData CameraFreenect::captureImage()
 {
+	SensorData data;
 #ifdef WITH_FREENECT
-	rgb = cv::Mat();
-	depth = cv::Mat();
-	fx = 0.0f;
-	fy = 0.0f;
-	cx = 0.0f;
-	cy = 0.0f;
 	if(ctx_ && freenectDevice_)
 	{
 		if(freenectDevice_->isRunning())
 		{
+			cv::Mat depth,rgb;
 			freenectDevice_->getData(rgb, depth);
 			if(!rgb.empty() && !depth.empty())
 			{
 				UASSERT(freenectDevice_->getDepthFocal() != 0.0f);
-				fx = freenectDevice_->getDepthFocal();
-				fy = freenectDevice_->getDepthFocal();
-				cx = float(depth.cols/2) - 0.5f;
-				cy = float(depth.rows/2) - 0.5f;
+				if(!rgb.empty() && !depth.empty())
+				{
+					CameraModel model(
+							freenectDevice_->getDepthFocal(), //fx
+							freenectDevice_->getDepthFocal(), //fy
+							float(rgb.cols/2) - 0.5f,  //cx
+							float(rgb.rows/2) - 0.5f,  //cy
+							this->getLocalTransform());
+					data = SensorData(rgb, depth, model, this->getNextSeqID(), UTimer::now());
+				}
 			}
 		}
 		else
@@ -1094,6 +1059,7 @@ void CameraFreenect::captureImage(cv::Mat & rgb, cv::Mat & depth, float & fx, fl
 #else
 	UERROR("CameraFreenect: RTAB-Map is not built with Freenect support!");
 #endif
+	return data;
 }
 
 //
@@ -1109,7 +1075,7 @@ bool CameraFreenect2::available()
 }
 
 CameraFreenect2::CameraFreenect2(int deviceId, Type type, float imageRate, const Transform & localTransform) :
-		CameraRGBD(imageRate, localTransform),
+		Camera(imageRate, localTransform),
 		deviceId_(deviceId),
 		type_(type),
 		freenect2_(0),
@@ -1191,7 +1157,7 @@ CameraFreenect2::~CameraFreenect2()
 #endif
 }
 
-bool CameraFreenect2::init(const std::string & calibrationFolder)
+bool CameraFreenect2::init(const std::string & calibrationFolder, const std::string & cameraName)
 {
 #ifdef WITH_FREENECT2
 	if(dev_)
@@ -1229,15 +1195,20 @@ bool CameraFreenect2::init(const std::string & calibrationFolder)
 		//default registration params
 		libfreenect2::Freenect2Device::IrCameraParams depthParams = dev_->getIrCameraParams();
 		libfreenect2::Freenect2Device::ColorCameraParams colorParams = dev_->getColorCameraParams();
-		reg_ = new libfreenect2::Registration(&depthParams, &colorParams);
+		reg_ = new libfreenect2::Registration(depthParams, colorParams);
 
 		// look for calibration files
 		if(!calibrationFolder.empty())
 		{
-			if(!stereoModel_.load(calibrationFolder, dev_->getSerialNumber()))
+			std::string calibrationName = dev_->getSerialNumber();
+			if(!cameraName.empty())
+			{
+				calibrationName = cameraName;
+			}
+			if(!stereoModel_.load(calibrationFolder, calibrationName, false))
 			{
 				UWARN("Missing calibration files for camera \"%s\" in \"%s\" folder, default calibration used.",
-						dev_->getSerialNumber().c_str(), calibrationFolder.c_str());
+						calibrationName.c_str(), calibrationFolder.c_str());
 			}
 			else
 			{
@@ -1300,20 +1271,27 @@ std::string CameraFreenect2::getSerial() const
 	return "";
 }
 
-void CameraFreenect2::captureImage(cv::Mat & rgb, cv::Mat & depth, float & fx, float & fy, float & cx, float & cy)
+SensorData CameraFreenect2::captureImage()
 {
+	SensorData data;
 #ifdef WITH_FREENECT2
-	rgb = cv::Mat();
-	depth = cv::Mat();
-	fx = 0.0f;
-	fy = 0.0f;
-	cx = 0.0f;
-	cy = 0.0f;
 	if(dev_ && listener_)
 	{
 		libfreenect2::FrameMap frames;
-		if(listener_->waitForNewFrame(frames, 1000))
+#ifndef LIBFREENECT2_THREADING_STDLIB
+		UDEBUG("Waiting for new frames... If it is stalled here, rtabmap should link on libusb of libfreenect2. "
+				"Tip, before starting rtabmap: \"$ export LD_LIBRARY_PATH=~/libfreenect2/depends/libusb/lib:$LD_LIBRARY_PATH\"");
+		listener_->waitForNewFrame(frames);
+#else
+		if(!listener_->waitForNewFrame(frames, 1000))
 		{
+			UWARN("CameraFreenect2: Failed to get frames! rtabmap should link on libusb of libfreenect2. "
+					"Tip, before starting rtabmap: \"$ export LD_LIBRARY_PATH=~/libfreenect2/depends/libusb/lib:$LD_LIBRARY_PATH\"");
+		}
+		else
+#endif
+		{
+			double stamp = UTimer::now();
 			libfreenect2::Frame *rgbFrame = 0;
 			libfreenect2::Frame *irFrame = 0;
 			libfreenect2::Frame *depthFrame = 0;
@@ -1336,9 +1314,11 @@ void CameraFreenect2::captureImage(cv::Mat & rgb, cv::Mat & depth, float & fx, f
 				break;
 			}
 
+			cv::Mat rgb, depth;
+			float fx=0,fy=0,cx=0,cy=0;
 			if(irFrame && depthFrame)
 			{
-				cv::Mat irMat(irFrame->height, irFrame->width, CV_32FC1, irFrame->data);
+				cv::Mat irMat((int)irFrame->height, (int)irFrame->width, CV_32FC1, irFrame->data);
 				//convert to gray scaled
 				float maxIr_ = 0x7FFF;
 				float minIr_ = 0x0;
@@ -1352,9 +1332,11 @@ void CameraFreenect2::captureImage(cv::Mat & rgb, cv::Mat & depth, float & fx, f
 					}
 				}
 
-				cv::Mat(depthFrame->height, depthFrame->width, CV_32FC1, depthFrame->data).convertTo(depth, CV_16U, 1);
+				cv::Mat((int)depthFrame->height, (int)depthFrame->width, CV_32FC1, depthFrame->data).convertTo(depth, CV_16U, 1);
+
 				cv::flip(rgb, rgb, 1);
 				cv::flip(depth, depth, 1);
+
 				if(stereoModel_.isValid())
 				{
 					//rectify
@@ -1378,7 +1360,9 @@ void CameraFreenect2::captureImage(cv::Mat & rgb, cv::Mat & depth, float & fx, f
 			{
 				//rgb + ir or rgb + depth
 
-				cv::Mat rgbMat(rgbFrame->height, rgbFrame->width, CV_8UC3, rgbFrame->data);
+				cv::Mat rgbMatC4((int)rgbFrame->height, (int)rgbFrame->width, CV_8UC4, rgbFrame->data);
+				cv::Mat rgbMat; // rtabmap uses 3 channels RGB
+				cv::cvtColor(rgbMatC4, rgbMat, CV_BGRA2BGR);
 				cv::flip(rgbMat, rgb, 1);
 
 				if(stereoModel_.isValid())
@@ -1388,26 +1372,26 @@ void CameraFreenect2::captureImage(cv::Mat & rgb, cv::Mat & depth, float & fx, f
 					if(irFrame)
 					{
 						//rectify IR
-						cv::Mat(irFrame->height, irFrame->width, CV_32FC1, irFrame->data).convertTo(depth, CV_16U, 1);
+						cv::Mat((int)irFrame->height, (int)irFrame->width, CV_32FC1, irFrame->data).convertTo(depth, CV_16U, 1);
 						cv::flip(depth, depth, 1);
 						depth = stereoModel_.left().rectifyImage(depth);
 					}
 					else
 					{
 						//rectify depth
-						cv::Mat(depthFrame->height, depthFrame->width, CV_32FC1, depthFrame->data).convertTo(depth, CV_16U, 1);
+						cv::Mat((int)depthFrame->height, (int)depthFrame->width, CV_32FC1, depthFrame->data).convertTo(depth, CV_16U, 1);
 						cv::flip(depth, depth, 1);
 						depth = stereoModel_.left().rectifyDepth(depth);
 
 						bool registered = true;
 						if(registered)
 						{
-							depth = util3d::registerDepth(
+							depth = util2d::registerDepth(
 									depth,
 									stereoModel_.left().P().colRange(0,3).rowRange(0,3), //scaled depth K
 									stereoModel_.right().P().colRange(0,3).rowRange(0,3), //scaled color K
-									stereoModel_.transform());
-							util3d::fillRegisteredDepthHoles(depth, true, false);
+									stereoModel_.stereoTransform());
+							util2d::fillRegisteredDepthHoles(depth, true, false);
 							fx = stereoModel_.right().fx();
 							fy = stereoModel_.right().fy();
 							cx = stereoModel_.right().cx();
@@ -1427,11 +1411,11 @@ void CameraFreenect2::captureImage(cv::Mat & rgb, cv::Mat & depth, float & fx, f
 					//use data from libfreenect2
 					if(irFrame)
 					{
-						cv::Mat(irFrame->height, irFrame->width, CV_32FC1, irFrame->data).convertTo(depth, CV_16U, 1);
+						cv::Mat((int)irFrame->height, (int)irFrame->width, CV_32FC1, irFrame->data).convertTo(depth, CV_16U, 1);
 					}
 					else
 					{
-						cv::Mat(depthFrame->height, depthFrame->width, CV_32FC1, depthFrame->data).convertTo(depth, CV_16U, 1);
+						cv::Mat((int)depthFrame->height, (int)depthFrame->width, CV_32FC1, depthFrame->data).convertTo(depth, CV_16U, 1);
 
 						//registration of the depth
 						if(reg_)
@@ -1442,7 +1426,7 @@ void CameraFreenect2::captureImage(cv::Mat & rgb, cv::Mat & depth, float & fx, f
 								cv::resize(rgb, tmp, cv::Size(), 0.5, 0.5, cv::INTER_AREA);
 								rgb = tmp;
 							}
-							cv::Mat depthFrameMat = cv::Mat(depthFrame->height, depthFrame->width, CV_32FC1, depthFrame->data);
+							cv::Mat depthFrameMat = cv::Mat((int)depthFrame->height, (int)depthFrame->width, CV_32FC1, depthFrame->data);
 							depth = cv::Mat::zeros(rgb.rows, rgb.cols, CV_16U);
 							for(int dx=0; dx<depthFrameMat.cols-1; ++dx)
 							{
@@ -1482,8 +1466,8 @@ void CameraFreenect2::captureImage(cv::Mat & rgb, cv::Mat & depth, float & fx, f
 									}
 								}
 							}
-							util3d::fillRegisteredDepthHoles(depth, true, true, type_==kTypeRGBDepthHD);
-							util3d::fillRegisteredDepthHoles(depth, type_==kTypeRGBDepthSD, type_==kTypeRGBDepthHD);//second pass
+							util2d::fillRegisteredDepthHoles(depth, true, true, type_==kTypeRGBDepthHD);
+							util2d::fillRegisteredDepthHoles(depth, type_==kTypeRGBDepthSD, type_==kTypeRGBDepthHD);//second pass
 							libfreenect2::Freenect2Device::ColorCameraParams params = dev_->getColorCameraParams();
 							fx = params.fx*(type_==kTypeRGBDepthSD?0.5:1.0f);
 							fy = params.fy*(type_==kTypeRGBDepthSD?0.5:1.0f);
@@ -1502,676 +1486,209 @@ void CameraFreenect2::captureImage(cv::Mat & rgb, cv::Mat & depth, float & fx, f
 					cv::flip(depth, depth, 1);
 				}
 			}
+
+			CameraModel model;
+			if(fx && fy)
+			{
+				model=CameraModel(
+						fx, //fx
+						fy, //fy
+						cx,  //cx
+						cy, // cy
+						this->getLocalTransform());
+			}
+			data = SensorData(rgb, depth, model, this->getNextSeqID(), stamp);
+
 			listener_->release(frames);
-		}
-		else
-		{
-			UWARN("CameraFreenect2: Failed to get frames! rtabmap should link on libusb of "
-					"libfreenect2, this can be done by setting LD_LIBRARY_PATH to "
-					"\"libfreenect2/depends/libusb/lib\"");
 		}
 	}
 #else
 	UERROR("CameraFreenect2: RTAB-Map is not built with Freenect2 support!");
 #endif
+	return data;
 }
 
 //
-// CameraStereoDC1394
-// Inspired from ROS camera1394stereo package
+// CameraRGBDImages
 //
-
-#ifdef WITH_DC1394
-class DC1394Device
+bool CameraRGBDImages::available()
 {
-public:
-	DC1394Device() :
-		camera_(0),
-		context_(0)
-	{
+	return true;
+}
 
+CameraRGBDImages::CameraRGBDImages(
+		const std::string & pathRGBImages,
+		const std::string & pathDepthImages,
+		double depthScaleFactor,
+		bool filenamesAreTimestamps,
+		const std::string & timestampsPath,
+		float imageRate,
+		const Transform & localTransform) :
+		Camera(imageRate, localTransform),
+		cameraRGB_(0),
+		cameraDepth_(0),
+		depthScaleFactor_(depthScaleFactor),
+		filenamesAreTimestamps_(filenamesAreTimestamps),
+		timestampsPath_(timestampsPath)
+{
+	UASSERT(depthScaleFactor >= 1.0);
+	cameraRGB_ = new CameraImages(pathRGBImages);
+	cameraDepth_ = new CameraImages(pathDepthImages, 1, false, false, true);
+}
+
+CameraRGBDImages::~CameraRGBDImages()
+{
+	if(cameraRGB_)
+	{
+		delete cameraRGB_;
 	}
-	~DC1394Device()
+	if(cameraDepth_)
 	{
-		if (camera_)
-		{
-			if (DC1394_SUCCESS != dc1394_video_set_transmission(camera_, DC1394_OFF) ||
-				DC1394_SUCCESS != dc1394_capture_stop(camera_))
-			{
-				UWARN("unable to stop camera");
-			}
-
-			// Free resources
-			dc1394_capture_stop(camera_);
-			dc1394_camera_free(camera_);
-			camera_ = NULL;
-		}
-		if(context_)
-		{
-			dc1394_free(context_);
-			context_ = NULL;
-		}
+		delete cameraDepth_;
 	}
+}
 
-	const std::string & guid() const {return guid_;}
-
-	bool init()
+bool CameraRGBDImages::init(const std::string & calibrationFolder, const std::string & cameraName)
+{
+	// look for calibration files
+	cameraName_ = cameraName;
+	if(!calibrationFolder.empty() && !cameraName.empty())
 	{
-		if(camera_)
+		if(!cameraModel_.load(calibrationFolder, cameraName))
 		{
-			// Free resources
-			dc1394_capture_stop(camera_);
-			dc1394_camera_free(camera_);
-			camera_ = NULL;
-		}
-
-		// look for a camera
-		int err;
-		if(context_ == NULL)
-		{
-			context_ = dc1394_new ();
-			if (context_ == NULL)
-			{
-				UERROR(    "Could not initialize dc1394_context.\n"
-				"Make sure /dev/raw1394 exists, you have access permission,\n"
-				"and libraw1394 development package is installed.");
-				return false;
-			}
-		}
-
-		dc1394camera_list_t *list;
-		err = dc1394_camera_enumerate(context_, &list);
-		if (err != DC1394_SUCCESS)
-		{
-			UERROR("Could not get camera list");
-			return false;
-		}
-
-		if (list->num == 0)
-		{
-			UERROR("No cameras found");
-			dc1394_camera_free_list (list);
-			return false;
-		}
-		uint64_t guid = list->ids[0].guid;
-		dc1394_camera_free_list (list);
-
-		// Create a camera
-		camera_ = dc1394_camera_new (context_, guid);
-		if (!camera_)
-		{
-			UERROR("Failed to initialize camera with GUID [%016lx]", guid);
-			return false;
-		}
-
-		uint32_t value[3];
-		value[0]= camera_->guid & 0xffffffff;
-		value[1]= (camera_->guid >>32) & 0x000000ff;
-		value[2]= (camera_->guid >>40) & 0xfffff;
-		guid_ = uFormat("%06x%02x%08x", value[2], value[1], value[0]);
-
-		UINFO("camera model: %s %s", camera_->vendor, camera_->model);
-
-		// initialize camera
-		// Enable IEEE1394b mode if the camera and bus support it
-		bool bmode = camera_->bmode_capable;
-		if (bmode
-			&& (DC1394_SUCCESS !=
-			dc1394_video_set_operation_mode(camera_,
-									DC1394_OPERATION_MODE_1394B)))
-		{
-			bmode = false;
-			UWARN("failed to set IEEE1394b mode");
-		}
-
-		// start with highest speed supported
-		dc1394speed_t request = DC1394_ISO_SPEED_3200;
-		int rate = 3200;
-		if (!bmode)
-		{
-			// not IEEE1394b capable: so 400Mb/s is the limit
-			request = DC1394_ISO_SPEED_400;
-			rate = 400;
-		}
-
-		// round requested speed down to next-lower defined value
-		while (rate > 400)
-		{
-			if (request <= DC1394_ISO_SPEED_MIN)
-			{
-				// get current ISO speed of the device
-				dc1394speed_t curSpeed;
-				if (DC1394_SUCCESS == dc1394_video_get_iso_speed(camera_, &curSpeed) && curSpeed <= DC1394_ISO_SPEED_MAX)
-				{
-					// Translate curSpeed back to an int for the parameter
-					// update, works as long as any new higher speeds keep
-					// doubling.
-					request = curSpeed;
-					rate = 100 << (curSpeed - DC1394_ISO_SPEED_MIN);
-				}
-				else
-				{
-					UWARN("Unable to get ISO speed; assuming 400Mb/s");
-					rate = 400;
-					request = DC1394_ISO_SPEED_400;
-				}
-				break;
-			}
-			// continue with next-lower possible value
-			request = (dc1394speed_t) ((int) request - 1);
-			rate = rate / 2;
-		}
-
-		// set the requested speed
-		if (DC1394_SUCCESS != dc1394_video_set_iso_speed(camera_, request))
-		{
-			UERROR("Failed to set iso speed");
-			return false;
-		}
-
-		// set video mode
-		dc1394video_modes_t vmodes;
-		err = dc1394_video_get_supported_modes(camera_, &vmodes);
-		if (err != DC1394_SUCCESS)
-		{
-			UERROR("unable to get supported video modes");
-			return (dc1394video_mode_t) 0;
-		}
-
-		// see if requested mode is available
-		bool found = false;
-		dc1394video_mode_t videoMode = DC1394_VIDEO_MODE_FORMAT7_3; // bumblebee
-		for (uint32_t i = 0; i < vmodes.num; ++i)
-		{
-			if (vmodes.modes[i] == videoMode)
-			{
-				found = true;
-			}
-		}
-		if(!found)
-		{
-			UERROR("unable to get video mode %d", videoMode);
-			return false;
-		}
-
-		if (DC1394_SUCCESS != dc1394_video_set_mode(camera_, videoMode))
-		{
-			UERROR("Failed to set video mode %d", videoMode);
-			return false;
-		}
-
-		// special handling for Format7 modes
-		if (dc1394_is_video_mode_scalable(videoMode) == DC1394_TRUE)
-		{
-			if (DC1394_SUCCESS != dc1394_format7_set_color_coding(camera_, videoMode, DC1394_COLOR_CODING_RAW16))
-			{
-				UERROR("Could not set color coding");
-				return false;
-			}
-			uint32_t packetSize;
-			if (DC1394_SUCCESS != dc1394_format7_get_recommended_packet_size(camera_, videoMode, &packetSize))
-			{
-				UERROR("Could not get default packet size");
-				return false;
-			}
-
-			if (DC1394_SUCCESS != dc1394_format7_set_packet_size(camera_, videoMode, packetSize))
-			{
-				UERROR("Could not set packet size");
-				return false;
-			}
+			UWARN("Missing calibration files for camera \"%s\" in \"%s\" folder, you should calibrate the camera!",
+					cameraName.c_str(), calibrationFolder.c_str());
 		}
 		else
 		{
-			UERROR("Video is not in mode scalable");
+			UINFO("Camera parameters: fx=%f fy=%f cx=%f cy=%f",
+					cameraModel_.fx(),
+					cameraModel_.fy(),
+					cameraModel_.cx(),
+					cameraModel_.cy());
 		}
+	}
+	cameraModel_.setLocalTransform(this->getLocalTransform());
 
-		// start the device streaming data
-		// Set camera to use DMA, improves performance.
-		if (DC1394_SUCCESS != dc1394_capture_setup(camera_, 4, DC1394_CAPTURE_FLAGS_DEFAULT))
+	bool success = false;
+	if(cameraRGB_->init() && cameraDepth_->init())
+	{
+		if(cameraRGB_->imagesCount() == cameraDepth_->imagesCount())
 		{
-			UERROR("Failed to open device!");
-			return false;
+			success = true;
 		}
-
-		// Start transmitting camera data
-		if (DC1394_SUCCESS != dc1394_video_set_transmission(camera_, DC1394_ON))
+		else
 		{
-			UERROR("Failed to start device!");
-			return false;
+			UERROR("Cameras don't have the same number of images (%d vs %d)",
+					cameraRGB_->imagesCount(), cameraDepth_->imagesCount());
 		}
-
-		return true;
 	}
 
-	bool getImages(cv::Mat & left, cv::Mat & right)
+	stamps_.clear();
+	if(success)
 	{
-		if(camera_)
+		if(filenamesAreTimestamps_)
 		{
-			dc1394video_frame_t * frame = NULL;
-			UDEBUG("[%016lx] waiting camera", camera_->guid);
-			dc1394_capture_dequeue (camera_, DC1394_CAPTURE_POLICY_WAIT, &frame);
-			if (!frame)
+			std::vector<std::string> filenames = cameraRGB_->filenames();
+			for(unsigned int i=0; i<filenames.size(); ++i)
 			{
-				UERROR("Unable to capture frame");
-				return false;
-			}
-			dc1394video_frame_t frame1 = *frame;
-			// deinterlace frame into two images one on top the other
-			size_t frame1_size = frame->total_bytes;
-			frame1.image = (unsigned char *) malloc(frame1_size);
-			frame1.allocated_image_bytes = frame1_size;
-			frame1.color_coding = DC1394_COLOR_CODING_RAW8;
-			int err = dc1394_deinterlace_stereo_frames(frame, &frame1, DC1394_STEREO_METHOD_INTERLACED);
-			if (err != DC1394_SUCCESS)
-			{
-				free(frame1.image);
-				dc1394_capture_enqueue(camera_, frame);
-				UERROR("Could not extract stereo frames");
-				return false;
-			}
-
-			uint8_t* capture_buffer = reinterpret_cast<uint8_t *>(frame1.image);
-			UASSERT(capture_buffer);
-
-			cv::Mat image(frame->size[1], frame->size[0], CV_8UC3);
-			cv::Mat image2 = image.clone();
-
-			//DC1394_COLOR_CODING_RAW16:
-			//DC1394_COLOR_FILTER_BGGR
-			cv::cvtColor(cv::Mat(frame->size[1], frame->size[0], CV_8UC1, capture_buffer), left, CV_BayerRG2BGR);
-			cv::cvtColor(cv::Mat(frame->size[1], frame->size[0], CV_8UC1, capture_buffer+image.total()), right, CV_BayerRG2GRAY);
-
-			dc1394_capture_enqueue(camera_, frame);
-
-			free(frame1.image);
-
-			return true;
-		}
-		return false;
-	}
-
-private:
-	dc1394camera_t *camera_;
-	dc1394_t *context_;
-	std::string guid_;
-};
-#endif
-
-bool CameraStereoDC1394::available()
-{
-#ifdef WITH_DC1394
-	return true;
-#else
-	return false;
-#endif
-}
-
-CameraStereoDC1394::CameraStereoDC1394(float imageRate, const Transform & localTransform) :
-		CameraRGBD(imageRate, localTransform),
-		device_(0)
-{
-#ifdef WITH_DC1394
-	device_ = new DC1394Device();
-#endif
-}
-
-CameraStereoDC1394::~CameraStereoDC1394()
-{
-#ifdef WITH_DC1394
-	if(device_)
-	{
-		delete device_;
-	}
-#endif
-}
-
-bool CameraStereoDC1394::init(const std::string & calibrationFolder)
-{
-#ifdef WITH_DC1394
-	if(device_)
-	{
-		bool ok = device_->init();
-		if(ok)
-		{
-			// look for calibration files
-			if(!calibrationFolder.empty())
-			{
-				if(!stereoModel_.load(calibrationFolder, device_->guid()))
+				// format is 12234456.12334.png
+				std::list<std::string> list = uSplit(filenames.at(i), '.');
+				if(list.size() == 3)
 				{
-					UWARN("Missing calibration files for camera \"%s\" in \"%s\" folder, you should calibrate the camera!",
-							device_->guid().c_str(), calibrationFolder.c_str());
-				}
-				else
-				{
-					UINFO("Stereo parameters: fx=%f cx=%f cy=%f baseline=%f",
-							stereoModel_.left().fx(),
-							stereoModel_.left().cx(),
-							stereoModel_.left().cy(),
-							stereoModel_.baseline());
-				}
-			}
-		}
-		return ok;
-	}
-#else
-	UERROR("CameraDC1394: RTAB-Map is not built with dc1394 support!");
-#endif
-	return false;
-}
-
-bool CameraStereoDC1394::isCalibrated() const
-{
-	return stereoModel_.isValid();
-}
-
-std::string CameraStereoDC1394::getSerial() const
-{
-#ifdef WITH_DC1394
-	if(device_)
-	{
-		return device_->guid();
-	}
-#endif
-	return "";
-}
-
-void CameraStereoDC1394::captureImage(cv::Mat & left, cv::Mat & right, float & fx, float & baseline, float & cx, float & cy)
-{
-#ifdef WITH_DC1394
-	left = cv::Mat();
-	right = cv::Mat();
-	fx = 0.0f;
-	baseline = 0.0f;
-	cx = 0.0f;
-	cy = 0.0f;
-	if(device_)
-	{
-		device_->getImages(left, right);
-
-		// Rectification
-		left = stereoModel_.left().rectifyImage(left);
-		right = stereoModel_.right().rectifyImage(right);
-		fx = stereoModel_.left().fx();
-		cx = stereoModel_.left().cx();
-		cy = stereoModel_.left().cy();
-		baseline = stereoModel_.baseline();
-	}
-#else
-	UERROR("CameraDC1394: RTAB-Map is not built with dc1394 support!");
-#endif
-}
-
-//
-// CameraTriclops
-//
-CameraStereoFlyCapture2::CameraStereoFlyCapture2(float imageRate, const Transform & localTransform) :
-		CameraRGBD(imageRate, localTransform),
-		camera_(0),
-		triclopsCtx_(0)
-{
-#ifdef WITH_FLYCAPTURE2
-	camera_ = new FlyCapture2::Camera();
-#endif
-}
-
-CameraStereoFlyCapture2::~CameraStereoFlyCapture2()
-{
-#ifdef WITH_FLYCAPTURE2
-	// Close the camera
-	camera_->StopCapture();
-	camera_->Disconnect();
-
-	// Destroy the Triclops context
-	triclopsDestroyContext( triclopsCtx_ ) ;
-
-	delete camera_;
-#endif
-}
-
-bool CameraStereoFlyCapture2::available()
-{
-#ifdef WITH_FLYCAPTURE2
-	return true;
-#else
-	return false;
-#endif
-}
-
-bool CameraStereoFlyCapture2::init(const std::string & calibrationFolder)
-{
-#ifdef WITH_FLYCAPTURE2
-	if(camera_)
-	{
-		// Close the camera
-		camera_->StopCapture();
-		camera_->Disconnect();
-	}
-	if(triclopsCtx_)
-	{
-		triclopsDestroyContext(triclopsCtx_);
-		triclopsCtx_ = 0;
-	}
-
-	// connect camera
-	FlyCapture2::Error fc2Error = camera_->Connect();
-	if(fc2Error != FlyCapture2::PGRERROR_OK)
-	{
-		UERROR("Failed to connect the camera.");
-		return false;
-	}
-
-	// configure camera
-	Fc2Triclops::StereoCameraMode mode = Fc2Triclops::TWO_CAMERA_NARROW;
-	if(Fc2Triclops::setStereoMode(*camera_, mode ))
-	{
-		UERROR("Failed to set stereo mode.");
-		return false;
-	}
-
-	// generate the Triclops context
-	FlyCapture2::CameraInfo camInfo;
-	if(camera_->GetCameraInfo(&camInfo) != FlyCapture2::PGRERROR_OK)
-	{
-		UERROR("Failed to get camera info.");
-		return false;
-	}
-
-	float dummy;
-	unsigned packetSz;
-	FlyCapture2::Format7ImageSettings imageSettings;
-	int maxWidth = 640;
-	int maxHeight = 480;
-	if(camera_->GetFormat7Configuration(&imageSettings, &packetSz, &dummy) == FlyCapture2::PGRERROR_OK)
-	{
-		maxHeight = imageSettings.height;
-		maxWidth = imageSettings.width;
-	}
-
-	// Get calibration from th camera
-	if(Fc2Triclops::getContextFromCamera(camInfo.serialNumber, &triclopsCtx_))
-	{
-		UERROR("Failed to get calibration from the camera.");
-		return false;
-	}
-
-	float fx, cx, cy, baseline;
-	triclopsGetFocalLength(triclopsCtx_, &fx);
-	triclopsGetImageCenter(triclopsCtx_, &cy, &cx);
-	triclopsGetBaseline(triclopsCtx_, &baseline);
-	UINFO("Stereo parameters: fx=%f cx=%f cy=%f baseline=%f", fx, cx, cy, baseline);
-
-	triclopsSetCameraConfiguration(triclopsCtx_, TriCfg_2CAM_HORIZONTAL_NARROW );
-	UASSERT(triclopsSetResolutionAndPrepare(triclopsCtx_, maxHeight, maxWidth, maxHeight, maxWidth) == Fc2Triclops::ERRORTYPE_OK);
-
-	if(camera_->StartCapture() != FlyCapture2::PGRERROR_OK)
-	{
-		UERROR("Failed to start capture.");
-		return false;
-	}
-
-	return true;
-#else
-	UERROR("CameraStereoFlyCapture2: RTAB-Map is not built with Triclops support!");
-#endif
-	return false;
-}
-
-bool CameraStereoFlyCapture2::isCalibrated() const
-{
-#ifdef WITH_FLYCAPTURE2
-	if(triclopsCtx_)
-	{
-		float fx, cx, cy, baseline;
-		triclopsGetFocalLength(triclopsCtx_, &fx);
-		triclopsGetImageCenter(triclopsCtx_, &cy, &cx);
-		triclopsGetBaseline(triclopsCtx_, &baseline);
-		return fx > 0.0f && cx > 0.0f && cy > 0.0f && baseline > 0.0f;
-	}
-#endif
-	return false;
-}
-
-std::string CameraStereoFlyCapture2::getSerial() const
-{
-#ifdef WITH_FLYCAPTURE2
-	if(camera_ && camera_->IsConnected())
-	{
-		FlyCapture2::CameraInfo camInfo;
-		if(camera_->GetCameraInfo(&camInfo) == FlyCapture2::PGRERROR_OK)
-		{
-			return uNumber2Str(camInfo.serialNumber);
-		}
-	}
-#endif
-	return "";
-}
-
-// struct containing image needed for processing
-#ifdef WITH_FLYCAPTURE2
-struct ImageContainer
-{
-	FlyCapture2::Image tmp[2];
-    FlyCapture2::Image unprocessed[2];
-} ;
-#endif
-
-void CameraStereoFlyCapture2::captureImage(cv::Mat & left, cv::Mat & right, float & fx, float & baseline, float & cx, float & cy)
-{
-#ifdef WITH_FLYCAPTURE2
-	left = cv::Mat();
-	right = cv::Mat();
-	fx = 0.0f;
-	baseline = 0.0f;
-	cx = 0.0f;
-	cy = 0.0f;
-
-	if(camera_ && triclopsCtx_ && camera_->IsConnected())
-	{
-		// grab image from camera.
-		// this image contains both right and left images
-		FlyCapture2::Image grabbedImage;
-		if(camera_->RetrieveBuffer(&grabbedImage) == FlyCapture2::PGRERROR_OK)
-		{
-			// right and left image extracted from grabbed image
-			ImageContainer imageCont;
-
-			// generate triclops input from grabbed image
-			FlyCapture2::Image imageRawRight;
-			FlyCapture2::Image imageRawLeft;
-			FlyCapture2::Image * unprocessedImage = imageCont.unprocessed;
-
-			// Convert the pixel interleaved raw data to de-interleaved and color processed data
-			if(Fc2Triclops::unpackUnprocessedRawOrMono16Image(
-										   grabbedImage,
-										   true /*assume little endian*/,
-										   imageRawLeft /* right */,
-										   imageRawRight /* left */) == Fc2Triclops::ERRORTYPE_OK)
-			{
-				// convert to color
-				FlyCapture2::Image srcImgRightRef(imageRawRight);
-				FlyCapture2::Image srcImgLeftRef(imageRawLeft);
-
-				bool ok = true;;
-				if ( srcImgRightRef.SetColorProcessing(FlyCapture2::HQ_LINEAR) != FlyCapture2::PGRERROR_OK ||
-				     srcImgLeftRef.SetColorProcessing(FlyCapture2::HQ_LINEAR) != FlyCapture2::PGRERROR_OK)
-				{
-					ok = false;
-				}
-
-				if(ok)
-				{
-					FlyCapture2::Image imageColorRight;
-					FlyCapture2::Image imageColorLeft;
-					if ( srcImgRightRef.Convert(FlyCapture2::PIXEL_FORMAT_MONO8, &imageColorRight) != FlyCapture2::PGRERROR_OK ||
-						 srcImgLeftRef.Convert(FlyCapture2::PIXEL_FORMAT_BGRU, &imageColorLeft) != FlyCapture2::PGRERROR_OK)
+					list.pop_back(); // remove extension
+					double stamp = uStr2Double(uJoin(list, "."));
+					if(stamp > 0.0)
 					{
-						ok = false;
+						stamps_.push_back(stamp);
 					}
-
-					if(ok)
+					else
 					{
-						//RECTIFY RIGHT
-						TriclopsInput triclopsColorInputs;
-						triclopsBuildRGBTriclopsInput(
-							grabbedImage.GetCols(),
-							grabbedImage.GetRows(),
-							imageColorRight.GetStride(),
-							(unsigned long)grabbedImage.GetTimeStamp().seconds,
-							(unsigned long)grabbedImage.GetTimeStamp().microSeconds,
-							imageColorRight.GetData(),
-							imageColorRight.GetData(),
-							imageColorRight.GetData(),
-							&triclopsColorInputs);
-
-						triclopsRectify(triclopsCtx_, const_cast<TriclopsInput *>(&triclopsColorInputs) );
-						// Retrieve the rectified image from the triclops context
-						TriclopsImage rectifiedImage;
-						triclopsGetImage( triclopsCtx_,
-							TriImg_RECTIFIED,
-							TriCam_REFERENCE,
-							&rectifiedImage );
-
-						right = cv::Mat(rectifiedImage.nrows, rectifiedImage.ncols, CV_8UC1, rectifiedImage.data).clone();
-
-						//RECTIFY LEFT COLOR
-						triclopsBuildPackedTriclopsInput(
-							grabbedImage.GetCols(),
-							grabbedImage.GetRows(),
-							imageColorLeft.GetStride(),
-							(unsigned long)grabbedImage.GetTimeStamp().seconds,
-							(unsigned long)grabbedImage.GetTimeStamp().microSeconds,
-							imageColorLeft.GetData(),
-							&triclopsColorInputs );
-
-						cv::Mat pixelsLeftBuffer( grabbedImage.GetRows(), grabbedImage.GetCols(), CV_8UC4);
-						TriclopsPackedColorImage colorImage;
-						triclopsSetPackedColorImageBuffer(
-							triclopsCtx_,
-							TriCam_LEFT,
-							(TriclopsPackedColorPixel*)pixelsLeftBuffer.data );
-
-						triclopsRectifyPackedColorImage(
-							triclopsCtx_,
-							TriCam_LEFT,
-							&triclopsColorInputs,
-							&colorImage );
-
-						cv::cvtColor(pixelsLeftBuffer, left, CV_RGBA2RGB);
-
-						// Set calibration stuff
-						triclopsGetFocalLength(triclopsCtx_, &fx);
-						triclopsGetImageCenter(triclopsCtx_, &cy, &cx);
-						triclopsGetBaseline(triclopsCtx_, &baseline);
+						UERROR("Conversion filename to timestamp failed! (filename=%s)", filenames.at(i).c_str());
 					}
 				}
 			}
+			if(stamps_.size() != cameraRGB_->imagesCount())
+			{
+				UERROR("The stamps count is not the same as the images (%d vs %d)! "
+					   "Converting filenames to timestamps is activated.",
+						(int)stamps_.size(), cameraRGB_->imagesCount());
+				stamps_.clear();
+				success = false;
+			}
+		}
+		else if(timestampsPath_.size())
+		{
+			FILE * file = 0;
+#ifdef _MSC_VER
+			fopen_s(&file, timestampsPath_.c_str(), "r");
+#else
+			file = fopen(timestampsPath_.c_str(), "r");
+#endif
+			if(file)
+			{
+				char line[16];
+				while ( fgets (line , 16 , file) != NULL )
+				{
+					stamps_.push_back(uStr2Double(uReplaceChar(line, '\n', 0)));
+				}
+				fclose(file);
+			}
+			if(stamps_.size() != cameraRGB_->imagesCount())
+			{
+				UERROR("The stamps count is not the same as the images (%d vs %d)! Please remove "
+						"the timestamps file path if you don't want to use them (current file path=%s).",
+						(int)stamps_.size(), cameraRGB_->imagesCount(), timestampsPath_.c_str());
+				stamps_.clear();
+				success = false;
+			}
 		}
 	}
 
-#else
-	UERROR("CameraStereoFlyCapture2: RTAB-Map is not built with Triclops support!");
-#endif
+	return success;
 }
+
+bool CameraRGBDImages::isCalibrated() const
+{
+	return cameraModel_.isValid();
+}
+
+std::string CameraRGBDImages::getSerial() const
+{
+	return cameraName_;
+}
+
+SensorData CameraRGBDImages::captureImage()
+{
+	SensorData data;
+
+	double stamp;
+	if(stamps_.size())
+	{
+		stamp = stamps_.front();
+		stamps_.pop_front();
+	}
+	else
+	{
+		stamp = UTimer::now();
+	}
+	SensorData rgb, depth;
+	rgb = cameraRGB_->takeImage();
+	if(!rgb.imageRaw().empty())
+	{
+		depth = cameraDepth_->takeImage();
+		if(!depth.depthRaw().empty())
+		{
+			cv::Mat depthScaled = depth.depthRaw();
+			if(depthScaleFactor_ > 1.0)
+			{
+				depthScaled /= depthScaleFactor_;
+			}
+			data = SensorData(rgb.imageRaw(), depthScaled, cameraModel_, this->getNextSeqID(), stamp);
+		}
+	}
+	return data;
+}
+
 
 } // namespace rtabmap
