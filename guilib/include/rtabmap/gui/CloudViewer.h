@@ -42,6 +42,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <QtCore/QSettings>
 
 #include <opencv2/opencv.hpp>
+#include <set>
 
 #include <pcl/visualization/mouse_event.h>
 #include <pcl/PCLPointCloud2.h>
@@ -136,12 +137,28 @@ public:
 	void updateCameraTargetPosition(
 		const Transform & pose);
 
+	void addOrUpdateCoordinate(
+			const std::string & id,
+			const Transform & transform,
+			double scale);
+	void removeCoordinate(const std::string & id);
+	void removeAllCoordinates();
+
 	void addOrUpdateGraph(
 			const std::string & id,
 			const pcl::PointCloud<pcl::PointXYZ>::Ptr & graph,
 			const QColor & color = Qt::gray);
 	void removeGraph(const std::string & id);
 	void removeAllGraphs();
+
+	void addOrUpdateText(
+			const std::string & id,
+			const std::string & text,
+			const Transform & position,
+			double scale,
+			const QColor & color);
+	void removeText(const std::string & id);
+	void removeAllTexts();
 
 	bool isTrajectoryShown() const;
 	unsigned int getTrajectorySize() const;
@@ -190,7 +207,7 @@ public slots:
 	void setCloudVisibility(const std::string & id, bool isVisible);
 	void setCloudOpacity(const std::string & id, double opacity = 1.0);
 	void setCloudPointSize(const std::string & id, int size);
-	virtual void clear() {removeAllClouds(); clearTrajectory();}
+	virtual void clear();
 
 signals:
 	void configChanged();
@@ -200,13 +217,13 @@ protected:
 	virtual void keyPressEvent(QKeyEvent * event);
 	virtual void mousePressEvent(QMouseEvent * event);
 	virtual void mouseMoveEvent(QMouseEvent * event);
+	virtual void wheelEvent(QWheelEvent * event);
 	virtual void contextMenuEvent(QContextMenuEvent * event);
 	virtual void handleAction(QAction * event);
 	QMenu * menu() {return _menu;}
 
 private:
 	void createMenu();
-	void mouseEventOccurred (const pcl::visualization::MouseEvent &event, void* viewer_void);
 	void addGrid();
 	void removeGrid();
 
@@ -225,10 +242,14 @@ private:
     QAction * _aSetBackgroundColor;
     QMenu * _menu;
     std::set<std::string> _graphes;
+    std::set<std::string> _coordinates;
+    std::set<std::string> _texts;
     pcl::PointCloud<pcl::PointXYZ>::Ptr _trajectory;
     unsigned int _maxTrajectorySize;
     unsigned int _gridCellCount;
     float _gridCellSize;
+    cv::Vec3d _lastCameraOrientation;
+    cv::Vec3d _lastCameraPose;
     QMap<std::string, Transform> _addedClouds; // include cloud, scan, meshes
     Transform _lastPose;
     std::list<std::string> _gridLines;
