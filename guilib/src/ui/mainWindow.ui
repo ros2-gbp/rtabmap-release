@@ -27,7 +27,7 @@
      <x>0</x>
      <y>0</y>
      <width>1012</width>
-     <height>25</height>
+     <height>22</height>
     </rect>
    </property>
    <widget class="QMenu" name="menuFile">
@@ -49,19 +49,29 @@
    </widget>
    <widget class="QMenu" name="menuEdit">
     <property name="title">
-     <string>Edit</string>
+     <string> Edit</string>
     </property>
     <widget class="QMenu" name="menuAdvanced">
      <property name="title">
       <string>Advanced</string>
      </property>
+     <widget class="QMenu" name="menuExport_poses">
+      <property name="title">
+       <string>Export poses...</string>
+      </property>
+      <addaction name="actionKITTI_format_txt"/>
+      <addaction name="actionRGBD_SLAM_format_txt"/>
+      <addaction name="actionTORO_graph"/>
+     </widget>
+     <addaction name="actionOpen_working_directory"/>
      <addaction name="actionDump_the_memory"/>
      <addaction name="actionDump_the_prediction_matrix"/>
      <addaction name="actionGenerate_map"/>
-     <addaction name="actionGenerate_local_map"/>
-     <addaction name="actionGenerate_TORO_graph_graph"/>
+     <addaction name="menuExport_poses"/>
      <addaction name="actionPrint_loop_closure_IDs_to_console"/>
+     <addaction name="separator"/>
      <addaction name="actionSend_goal"/>
+     <addaction name="actionCancel_goal"/>
     </widget>
     <addaction name="actionDownload_all_clouds"/>
     <addaction name="actionDownload_graph"/>
@@ -72,7 +82,6 @@
     <addaction name="separator"/>
     <addaction name="actionDelete_memory"/>
     <addaction name="separator"/>
-    <addaction name="actionOpen_working_directory"/>
     <addaction name="menuAdvanced"/>
    </widget>
    <widget class="QMenu" name="menu6">
@@ -93,15 +102,21 @@
      </property>
      <widget class="QMenu" name="menuImage">
       <property name="title">
-       <string>Image-only</string>
+       <string>RGB camera</string>
+      </property>
+      <property name="icon">
+       <iconset resource="../GuiLib.qrc">
+        <normaloff>:/images/webcam.png</normaloff>:/images/webcam.png</iconset>
       </property>
       <addaction name="actionUsbCamera"/>
-      <addaction name="actionImageFiles"/>
-      <addaction name="actionVideo"/>
      </widget>
      <widget class="QMenu" name="menuRGB_D_camera">
       <property name="title">
        <string>RGB-D camera</string>
+      </property>
+      <property name="icon">
+       <iconset resource="../GuiLib.qrc">
+        <normaloff>:/images/kinect_xbox_360.png</normaloff>:/images/kinect_xbox_360.png</iconset>
       </property>
       <widget class="QMenu" name="menuKinect_for_Xbox_360">
        <property name="title">
@@ -148,7 +163,20 @@
        </property>
        <addaction name="actionFreenect2"/>
       </widget>
-      <widget class="QMenu" name="menuBumblebee2">
+      <addaction name="menuKinect_for_Xbox_360"/>
+      <addaction name="menuXtion_PRO_LIVE"/>
+      <addaction name="menuSense_3D_scanner"/>
+      <addaction name="menuKinect_v2"/>
+     </widget>
+     <widget class="QMenu" name="menuStereo_camera">
+      <property name="title">
+       <string>Stereo camera</string>
+      </property>
+      <property name="icon">
+       <iconset resource="../GuiLib.qrc">
+        <normaloff>:/images/bumblebee2.png</normaloff>:/images/bumblebee2.png</iconset>
+      </property>
+      <widget class="QMenu" name="menuBumblebee2_2">
        <property name="title">
         <string>Bumblebee2</string>
        </property>
@@ -159,15 +187,12 @@
        <addaction name="actionStereoDC1394"/>
        <addaction name="actionStereoFlyCapture2"/>
       </widget>
-      <addaction name="menuKinect_for_Xbox_360"/>
-      <addaction name="menuXtion_PRO_LIVE"/>
-      <addaction name="menuSense_3D_scanner"/>
-      <addaction name="menuKinect_v2"/>
-      <addaction name="menuBumblebee2"/>
+      <addaction name="menuBumblebee2_2"/>
      </widget>
      <addaction name="menuRGB_D_camera"/>
+     <addaction name="menuStereo_camera"/>
      <addaction name="menuImage"/>
-     <addaction name="actionDatabase"/>
+     <addaction name="actionMore_options"/>
     </widget>
     <addaction name="menuSelect_source"/>
     <addaction name="separator"/>
@@ -184,6 +209,8 @@
     <addaction name="separator"/>
     <addaction name="actionReset_Odometry"/>
     <addaction name="actionTrigger_a_new_map"/>
+    <addaction name="separator"/>
+    <addaction name="actionLabel_current_location"/>
    </widget>
    <widget class="QMenu" name="menuWindow">
     <property name="title">
@@ -210,6 +237,7 @@
      <addaction name="action240p"/>
     </widget>
     <addaction name="menuShow_view"/>
+    <addaction name="actionDefault_views"/>
     <addaction name="actionScreenshot"/>
     <addaction name="actionAuto_screen_capture"/>
     <addaction name="menuAspect_ratio_2"/>
@@ -772,6 +800,7 @@
    <attribute name="toolBarBreak">
     <bool>false</bool>
    </attribute>
+   <addaction name="actionDownload_all_clouds"/>
    <addaction name="actionStart"/>
    <addaction name="actionPause"/>
    <addaction name="actionStop"/>
@@ -885,7 +914,7 @@
   </action>
   <action name="actionGenerate_map">
    <property name="text">
-    <string>Generate graph map (*.dot)...</string>
+    <string>Generate graph (*.dot)...</string>
    </property>
   </action>
   <action name="actionDelete_memory">
@@ -942,37 +971,12 @@
    <property name="checkable">
     <bool>true</bool>
    </property>
+   <property name="icon">
+    <iconset resource="../GuiLib.qrc">
+     <normaloff>:/images/webcam.png</normaloff>:/images/webcam.png</iconset>
+   </property>
    <property name="text">
     <string>Usb camera</string>
-   </property>
-  </action>
-  <action name="actionImageFiles">
-   <property name="checkable">
-    <bool>true</bool>
-   </property>
-   <property name="text">
-    <string>Images...</string>
-   </property>
-  </action>
-  <action name="actionVideo">
-   <property name="checkable">
-    <bool>true</bool>
-   </property>
-   <property name="text">
-    <string>Video...</string>
-   </property>
-  </action>
-  <action name="actionDatabase">
-   <property name="checkable">
-    <bool>true</bool>
-   </property>
-   <property name="text">
-    <string>Database...</string>
-   </property>
-  </action>
-  <action name="actionGenerate_local_map">
-   <property name="text">
-    <string>Generate graph local map (*.dot)...</string>
    </property>
   </action>
   <action name="actionPrint_loop_closure_IDs_to_console">
@@ -986,6 +990,10 @@
    </property>
   </action>
   <action name="actionDownload_all_clouds">
+   <property name="icon">
+    <iconset resource="../GuiLib.qrc">
+     <normaloff>:/images/view-refresh.png</normaloff>:/images/view-refresh.png</iconset>
+   </property>
    <property name="text">
     <string>Download all clouds (update cache)</string>
    </property>
@@ -1034,11 +1042,6 @@
   <action name="actionTrigger_a_new_map">
    <property name="text">
     <string>Trigger a new map</string>
-   </property>
-  </action>
-  <action name="actionGenerate_TORO_graph_graph">
-   <property name="text">
-    <string>Generate TORO graph (*.graph)...</string>
    </property>
   </action>
   <action name="actionDownload_graph">
@@ -1194,13 +1197,54 @@
    </property>
   </action>
   <action name="actionStereoFlyCapture2">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
    <property name="text">
-    <string>StereoFlyCapture2</string>
+    <string>FlyCapture2</string>
    </property>
   </action>
   <action name="actionSend_goal">
    <property name="text">
     <string>Send a goal...</string>
+   </property>
+  </action>
+  <action name="actionCancel_goal">
+   <property name="text">
+    <string>Cancel goal</string>
+   </property>
+  </action>
+  <action name="actionDefault_views">
+   <property name="text">
+    <string>Default views</string>
+   </property>
+  </action>
+  <action name="actionMore_options">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>More options...</string>
+   </property>
+  </action>
+  <action name="actionLabel_current_location">
+   <property name="text">
+    <string>Label current location...</string>
+   </property>
+  </action>
+  <action name="actionKITTI_format_txt">
+   <property name="text">
+    <string>KITTI format (*.txt)</string>
+   </property>
+  </action>
+  <action name="actionRGBD_SLAM_format_txt">
+   <property name="text">
+    <string>RGBD-SLAM format (*.txt)</string>
+   </property>
+  </action>
+  <action name="actionTORO_graph">
+   <property name="text">
+    <string>TORO (*.graph)</string>
    </property>
   </action>
  </widget>
