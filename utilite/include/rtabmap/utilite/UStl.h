@@ -471,6 +471,15 @@ inline std::list<V> uVectorToList(const std::vector<V> & v)
 }
 
 /**
+ * Convert a std::multimap to a std::map
+ */
+template<class K, class V>
+inline std::map<K, V> uMultimapToMap(const std::multimap<K, V> & m)
+{
+	return std::map<K, V>(m.begin(), m.end());
+}
+
+/**
  * Append a list to another list.
  * @param list the list on which the other list will be appended
  * @param newItems the list of items to be appended
@@ -537,6 +546,34 @@ inline std::list<std::string> uSplit(const std::string & str, char separator = '
 		v.push_back(buf);
 	}
 	return v;
+}
+
+/**
+ * Join multiple strings into one string with optional separator.
+ * Example:
+ * @code
+ *      std::list<std::string> v;
+ *      v.push_back("Hello");
+ *      v.push_back("world!");
+ * 	    std::string joined = split(v, " ");
+ * @endcode
+ * The output string is "Hello world!"
+ * @param strings a list of strings
+ * @param separator the separator string
+ * @return the joined string
+ */
+inline std::string uJoin(const std::list<std::string> & strings, const std::string & separator = "")
+{
+	std::string out;
+	for(std::list<std::string>::const_iterator iter = strings.begin(); iter!=strings.end(); ++iter)
+	{
+		if(iter!=strings.begin() && !separator.empty())
+		{
+			out += separator;
+		}
+		out+=*iter;
+	}
+	return out;
 }
 
 /**
