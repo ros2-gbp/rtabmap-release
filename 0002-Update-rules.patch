@@ -1,22 +1,22 @@
-From e5acea8f4a3ba68008b35aaea88324d848187f18 Mon Sep 17 00:00:00 2001
+From 4e36f10603bcfd037f50de7d228ea74e884e23cf Mon Sep 17 00:00:00 2001
 From: matlabbe <matlabbe@gmail.com>
-Date: Wed, 23 Mar 2016 16:50:36 -0400
-Subject: [PATCH 1/2] Update rules
+Date: Thu, 24 Mar 2016 09:12:20 -0400
+Subject: [PATCH 2/2] Update rules
 
 ---
  debian/rules | 2 +-
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/debian/rules b/debian/rules
-index f4fe7d0..d591ba9 100755
+index d591ba9..77a2897 100755
 --- a/debian/rules
 +++ b/debian/rules
 @@ -52,7 +52,7 @@ override_dh_shlibdeps:
  	# in the install tree that was dropped by catkin, and source it.  It will
  	# set things like CMAKE_PREFIX_PATH, PKG_CONFIG_PATH, and PYTHONPATH.
  	if [ -f "/opt/ros/jade/setup.sh" ]; then . "/opt/ros/jade/setup.sh"; fi && \
--	dh_shlibdeps -l$(CURDIR)/debian/ros-jade-rtabmap//opt/ros/jade/lib/
-+	dh_shlibdeps -l$(CURDIR)/debian/ros-jade-rtabmap//opt/ros/jade/lib/:$(CURDIR)/debian/ros-jade-rtabmap//opt/ros/jade/lib/x86_64-linux-gnu/
+-	dh_shlibdeps -l$(CURDIR)/debian/ros-jade-rtabmap//opt/ros/jade/lib/:$(CURDIR)/debian/ros-jade-rtabmap//opt/ros/jade/lib/x86_64-linux-gnu/
++	dh_shlibdeps -l$(CURDIR)/debian/ros-jade-rtabmap//opt/ros/jade/lib/:$(CURDIR)/debian/ros-jade-rtabmap//opt/ros/jade/lib/x86_64-linux-gnu/:$(CURDIR)/debian/ros-indigo-rtabmap//opt/ros/jade/lib/i386-linux-gnu/
  
  override_dh_auto_install:
  	# In case we're installing to a non-standard location, look for a setup.sh
