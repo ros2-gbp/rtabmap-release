@@ -1,7 +1,7 @@
-From cee1190a242ef674c9e555f384f9c3e5c23df6ec Mon Sep 17 00:00:00 2001
+From 87ba62c6bd76cc792f6c1cdbd6293f56f878671b Mon Sep 17 00:00:00 2001
 From: matlabbe <matlabbe@gmail.com>
 Date: Thu, 24 Mar 2016 09:10:45 -0400
-Subject: [PATCH 2/2] Update rules
+Subject: [PATCH 2/3] Update rules
 
 ---
  debian/rules | 2 +-
