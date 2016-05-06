@@ -36,13 +36,362 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <pcl/features/normal_3d.h>
 #include <pcl/surface/mls.h>
 #include <pcl/surface/texture_mapping.h>
+#include <pcl/features/integral_image_normal.h>
+
+#ifndef DISABLE_VTK
 #include <pcl/surface/vtk_smoothing/vtk_mesh_quadric_decimation.h>
+#endif
+
+#if PCL_VERSION_COMPARE(<, 1, 8, 0)
+#include "pcl18/surface/organized_fast_mesh.h"
+#else
+#include <pcl/surface/organized_fast_mesh.h>
+#endif
 
 namespace rtabmap
 {
 
 namespace util3d
 {
+
+void createPolygonIndexes(
+		const std::vector<pcl::Vertices> & polygons,
+		int cloudSize,
+		std::vector<std::set<int> > & neighbors,
+		std::vector<std::set<int> > & vertexToPolygons)
+{
+	vertexToPolygons = std::vector<std::set<int> >(cloudSize);
+	neighbors = std::vector<std::set<int> >(polygons.size());
+
+	for(unsigned int i=0; i<polygons.size(); ++i)
+	{
+		std::set<int> vertices(polygons[i].vertices.begin(), polygons[i].vertices.end());
+
+		for(unsigned int j=0; j<polygons[i].vertices.size(); ++j)
+		{
+			int v = polygons[i].vertices.at(j);
+			for(std::set<int>::iterator iter=vertexToPolygons[v].begin(); iter!=vertexToPolygons[v].end(); ++iter)
+			{
+				int numSharedVertices = 0;
+				for(unsigned int k=0; k<polygons.at(*iter).vertices.size() && numSharedVertices<2; ++k)
+				{
+					if(vertices.find(polygons.at(*iter).vertices.at(k)) != vertices.end())
+					{
+						++numSharedVertices;
+					}
+				}
+				if(numSharedVertices >= 2)
+				{
+					neighbors[*iter].insert(i);
+					neighbors[i].insert(*iter);
+				}
+			}
+			vertexToPolygons[v].insert(i);
+		}
+	}
+}
+
+std::vector<pcl::Vertices> organizedFastMesh(
+		const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud,
+		double angleTolerance,
+		bool quad,
+		int trianglePixelSize,
+		const Eigen::Vector3f & viewpoint)
+{
+	UDEBUG("size=%d angle=%f quad=%d triangleSize=%d", (int)cloud->size(), angleTolerance, quad?1:0, trianglePixelSize);
+	UASSERT(cloud->is_dense == false);
+	UASSERT(cloud->width > 1 && cloud->height > 1);
+
+	pcl::OrganizedFastMesh<pcl::PointXYZRGB> ofm;
+	ofm.setTrianglePixelSize (trianglePixelSize);
+	ofm.setTriangulationType (quad?pcl::OrganizedFastMesh<pcl::PointXYZRGB>::QUAD_MESH:pcl::OrganizedFastMesh<pcl::PointXYZRGB>::TRIANGLE_RIGHT_CUT);
+	ofm.setInputCloud (cloud);
+	ofm.setAngleTolerance(angleTolerance);
+	ofm.setViewpoint(viewpoint);
+
+	std::vector<pcl::Vertices> vertices;
+	ofm.reconstruct (vertices);
+
+	if(quad)
+	{
+		//flip all polygons (right handed)
+		std::vector<pcl::Vertices> output(vertices.size());
+		for(unsigned int i=0; i<vertices.size(); ++i)
+		{
+			output[i].vertices.resize(4);
+			output[i].vertices[0] = vertices[i].vertices[0];
+			output[i].vertices[3] = vertices[i].vertices[1];
+			output[i].vertices[2] = vertices[i].vertices[2];
+			output[i].vertices[1] = vertices[i].vertices[3];
+		}
+		return output;
+	}
+
+	return vertices;
+}
+std::vector<pcl::Vertices> organizedFastMesh(
+		const pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr & cloud,
+		double angleTolerance,
+		bool quad,
+		int trianglePixelSize,
+		const Eigen::Vector3f & viewpoint)
+{
+	UDEBUG("size=%d angle=%f quad=%d triangleSize=%d", (int)cloud->size(), angleTolerance, quad?1:0, trianglePixelSize);
+	UASSERT(cloud->is_dense == false);
+	UASSERT(cloud->width > 1 && cloud->height > 1);
+
+	pcl::OrganizedFastMesh<pcl::PointXYZRGBNormal> ofm;
+	ofm.setTrianglePixelSize (trianglePixelSize);
+	ofm.setTriangulationType (quad?pcl::OrganizedFastMesh<pcl::PointXYZRGBNormal>::QUAD_MESH:pcl::OrganizedFastMesh<pcl::PointXYZRGBNormal>::TRIANGLE_RIGHT_CUT);
+	ofm.setInputCloud (cloud);
+	ofm.setAngleTolerance(angleTolerance);
+	ofm.setViewpoint(viewpoint);
+
+	std::vector<pcl::Vertices> vertices;
+	ofm.reconstruct (vertices);
+
+	if(quad)
+	{
+		//flip all polygons (right handed)
+		std::vector<pcl::Vertices> output(vertices.size());
+		for(unsigned int i=0; i<vertices.size(); ++i)
+		{
+			output[i].vertices.resize(4);
+			output[i].vertices[0] = vertices[i].vertices[0];
+			output[i].vertices[3] = vertices[i].vertices[1];
+			output[i].vertices[2] = vertices[i].vertices[2];
+			output[i].vertices[1] = vertices[i].vertices[3];
+		}
+		return output;
+	}
+
+	return vertices;
+}
+
+void appendMesh(
+		pcl::PointCloud<pcl::PointXYZRGBNormal> & cloudA,
+		std::vector<pcl::Vertices> & polygonsA,
+		const pcl::PointCloud<pcl::PointXYZRGBNormal> & cloudB,
+		const std::vector<pcl::Vertices> & polygonsB)
+{
+	UDEBUG("cloudA=%d polygonsA=%d cloudB=%d polygonsB=%d", (int)cloudA.size(), (int)polygonsA.size(), (int)cloudB.size(), (int)polygonsB.size());
+	UASSERT(!cloudA.isOrganized() && !cloudB.isOrganized());
+
+	int sizeA = cloudA.size();
+	cloudA += cloudB;
+
+	int sizePolygonsA = polygonsA.size();
+	polygonsA.resize(sizePolygonsA+polygonsB.size());
+
+	for(unsigned int i=0; i<polygonsB.size(); ++i)
+	{
+		pcl::Vertices vertices = polygonsB[i];
+		for(unsigned int j=0; j<vertices.vertices.size(); ++j)
+		{
+			vertices.vertices[j] += sizeA;
+		}
+		polygonsA[i+sizePolygonsA] = vertices;
+	}
+}
+
+void appendMesh(
+		pcl::PointCloud<pcl::PointXYZRGB> & cloudA,
+		std::vector<pcl::Vertices> & polygonsA,
+		const pcl::PointCloud<pcl::PointXYZRGB> & cloudB,
+		const std::vector<pcl::Vertices> & polygonsB)
+{
+	UDEBUG("cloudA=%d polygonsA=%d cloudB=%d polygonsB=%d", (int)cloudA.size(), (int)polygonsA.size(), (int)cloudB.size(), (int)polygonsB.size());
+	UASSERT(!cloudA.isOrganized() && !cloudB.isOrganized());
+
+	int sizeA = cloudA.size();
+	cloudA += cloudB;
+
+	int sizePolygonsA = polygonsA.size();
+	polygonsA.resize(sizePolygonsA+polygonsB.size());
+
+	for(unsigned int i=0; i<polygonsB.size(); ++i)
+	{
+		pcl::Vertices vertices = polygonsB[i];
+		for(unsigned int j=0; j<vertices.vertices.size(); ++j)
+		{
+			vertices.vertices[j] += sizeA;
+		}
+		polygonsA[i+sizePolygonsA] = vertices;
+	}
+}
+
+std::map<int, int> filterNotUsedVerticesFromMesh(
+		const pcl::PointCloud<pcl::PointXYZRGBNormal> & cloud,
+		const std::vector<pcl::Vertices> & polygons,
+		pcl::PointCloud<pcl::PointXYZRGBNormal> & outputCloud,
+		std::vector<pcl::Vertices> & outputPolygons)
+{
+	UDEBUG("size=%d polygons=%d", (int)cloud.size(), (int)polygons.size());
+	std::map<int, int> addedVertices; //<oldIndex, newIndex>
+	std::map<int, int> output; //<newIndex, oldIndex>
+	outputCloud.resize(cloud.size());
+	outputCloud.is_dense = true;
+	outputPolygons.resize(polygons.size());
+	int oi = 0;
+	for(unsigned int i=0; i<polygons.size(); ++i)
+	{
+		pcl::Vertices & v = outputPolygons[i];
+		v.vertices.resize(polygons[i].vertices.size());
+		for(unsigned int j=0; j<polygons[i].vertices.size(); ++j)
+		{
+			std::map<int, int>::iterator iter = addedVertices.find(polygons[i].vertices[j]);
+			if(iter == addedVertices.end())
+			{
+				outputCloud[oi] = cloud.at(polygons[i].vertices[j]);
+				addedVertices.insert(std::make_pair(polygons[i].vertices[j], oi));
+				output.insert(std::make_pair(oi, polygons[i].vertices[j]));
+				v.vertices[j] = oi++;
+			}
+			else
+			{
+				v.vertices[j] = iter->second;
+			}
+		}
+	}
+	outputCloud.resize(oi);
+
+	return output;
+}
+
+std::map<int, int> filterNotUsedVerticesFromMesh(
+		const pcl::PointCloud<pcl::PointXYZRGB> & cloud,
+		const std::vector<pcl::Vertices> & polygons,
+		pcl::PointCloud<pcl::PointXYZRGB> & outputCloud,
+		std::vector<pcl::Vertices> & outputPolygons)
+{
+	UDEBUG("size=%d polygons=%d", (int)cloud.size(), (int)polygons.size());
+	std::map<int, int> addedVertices; //<oldIndex, newIndex>
+	std::map<int, int> output; //<newIndex, oldIndex>
+	outputCloud.resize(cloud.size());
+	outputCloud.is_dense = true;
+	outputPolygons.resize(polygons.size());
+	int oi = 0;
+	for(unsigned int i=0; i<polygons.size(); ++i)
+	{
+		pcl::Vertices & v = outputPolygons[i];
+		v.vertices.resize(polygons[i].vertices.size());
+		for(unsigned int j=0; j<polygons[i].vertices.size(); ++j)
+		{
+			std::map<int, int>::iterator iter = addedVertices.find(polygons[i].vertices[j]);
+			if(iter == addedVertices.end())
+			{
+				outputCloud[oi] = cloud.at(polygons[i].vertices[j]);
+				addedVertices.insert(std::make_pair(polygons[i].vertices[j], oi));
+				output.insert(std::make_pair(oi, polygons[i].vertices[j]));
+				v.vertices[j] = oi++;
+			}
+			else
+			{
+				v.vertices[j] = iter->second;
+			}
+		}
+	}
+	outputCloud.resize(oi);
+
+	return output;
+}
+
+std::vector<pcl::Vertices> filterCloseVerticesFromMesh(
+		const pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
+		const std::vector<pcl::Vertices> & polygons,
+		float radius,
+		float angle, // FIXME angle not used
+		bool keepLatestInRadius)
+{
+	UDEBUG("size=%d polygons=%d radius=%f angle=%f keepLatest=%d",
+			(int)cloud->size(), (int)polygons.size(), radius, angle, keepLatestInRadius?1:0);
+	std::vector<pcl::Vertices> outputPolygons;
+	pcl::KdTreeFLANN<pcl::PointXYZRGBNormal>::Ptr kdtree(new pcl::KdTreeFLANN<pcl::PointXYZRGBNormal>);
+	kdtree->setInputCloud(cloud);
+
+	std::map<int, int> verticesDone;
+	outputPolygons = polygons;
+	for(unsigned int i=0; i<outputPolygons.size(); ++i)
+	{
+		pcl::Vertices & polygon = outputPolygons[i];
+		for(unsigned int j=0; j<polygon.vertices.size(); ++j)
+		{
+			std::map<int, int>::iterator iter = verticesDone.find(polygon.vertices[j]);
+			if(iter != verticesDone.end())
+			{
+				polygon.vertices[j] = iter->second;
+			}
+			else
+			{
+				std::vector<int> kIndices;
+				std::vector<float> kDistances;
+				kdtree->radiusSearch(polygon.vertices[j], radius, kIndices, kDistances);
+				if(kIndices.size())
+				{
+					int reference = -1;
+					for(unsigned int z=0; z<kIndices.size(); ++z)
+					{
+						if(reference == -1)
+						{
+							reference = kIndices[z];
+						}
+						else if(keepLatestInRadius)
+						{
+							if(kIndices[z] < reference)
+							{
+								reference = kIndices[z];
+							}
+						}
+						else
+						{
+							if(kIndices[z] > reference)
+							{
+								reference = kIndices[z];
+							}
+						}
+					}
+					if(reference >= 0)
+					{
+						for(unsigned int z=0; z<kIndices.size(); ++z)
+						{
+							verticesDone.insert(std::make_pair(kIndices[j], reference));
+						}
+						polygon.vertices[j] = reference;
+					}
+				}
+				else
+				{
+					verticesDone.insert(std::make_pair(polygon.vertices[j], polygon.vertices[j]));
+				}
+			}
+		}
+	}
+	return outputPolygons;
+}
+
+std::vector<pcl::Vertices> filterInvalidPolygons(const std::vector<pcl::Vertices> & polygons)
+{
+	std::vector<pcl::Vertices> output(polygons.size());
+	int oi=0;
+	for(unsigned int i=0; i<polygons.size(); ++i)
+	{
+		bool valid = true;
+		for(unsigned int j=0; j<polygons[i].vertices.size(); ++j)
+		{
+			if(polygons[i].vertices[j] == polygons[i].vertices[(j+1)%polygons[i].vertices.size()])
+			{
+				valid = false;
+				break;
+			}
+		}
+		if(valid)
+		{
+			output[oi++] = polygons[i];
+		}
+	}
+	output.resize(oi);
+	return output;
+}
 
 pcl::PolygonMesh::Ptr createMesh(
 		const pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr & cloudWithNormals,
@@ -143,24 +492,14 @@ pcl::TextureMesh::Ptr createTextureMesh(
 		const std::map<int, cv::Mat> & images,
 		const std::string & tmpDirectory)
 {
+	pcl::TextureMesh::Ptr textureMesh(new pcl::TextureMesh);
+	textureMesh->cloud = mesh->cloud;
+	textureMesh->tex_polygons.push_back(mesh->polygons);
+
 	// Original from pcl/gpu/kinfu_large_scale/tools/standalone_texture_mapping.cpp:
 	// Author: Raphael Favier, Technical University Eindhoven, (r.mysurname <aT> tue.nl)
 
-	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud (new pcl::PointCloud<pcl::PointXYZ>);
-	pcl::fromPCLPointCloud2(mesh->cloud, *cloud);
-
 	// Create the texturemesh object that will contain our UV-mapped mesh
-	pcl::TextureMesh::Ptr textureMesh(new pcl::TextureMesh);
-	textureMesh->cloud = mesh->cloud;
-	std::vector< pcl::Vertices> polygons;
-
-	// push faces into the texturemesh object
-	polygons.resize (mesh->polygons.size ());
-	for(size_t i =0; i < mesh->polygons.size (); ++i)
-	{
-		polygons[i] = mesh->polygons[i];
-	}
-	textureMesh->tex_polygons.push_back(polygons);
 
 	// create cameras
 	pcl::texture_mapping::CameraVector cameras = createTextureCameras(
@@ -216,14 +555,27 @@ pcl::TextureMesh::Ptr createTextureMesh(
 		textureMesh->tex_materials[i] = mesh_material;
 	}
 
-	// Sort faces
+	// Texture by projection
 	pcl::TextureMapping<pcl::PointXYZ> tm; // TextureMapping object that will perform the sort
 	tm.textureMeshwithMultipleCameras(*textureMesh, cameras);
 
-	// compute normals for the mesh
-	pcl::PointCloud<pcl::PointNormal>::Ptr cloudWithNormals = computeNormals(cloud, 20);
-
-	pcl::toPCLPointCloud2 (*cloudWithNormals, textureMesh->cloud);
+	// compute normals for the mesh if not already here
+	bool hasNormals = false;
+	for(unsigned int i=0; i<textureMesh->cloud.fields.size(); ++i)
+	{
+		if(textureMesh->cloud.fields[i].name.compare("normal_x") == 0)
+		{
+			hasNormals = true;
+			break;
+		}
+	}
+	if(!hasNormals)
+	{
+		pcl::PointCloud<pcl::PointXYZ>::Ptr cloud (new pcl::PointCloud<pcl::PointXYZ>);
+		pcl::fromPCLPointCloud2(textureMesh->cloud, *cloud);
+		pcl::PointCloud<pcl::PointNormal>::Ptr cloudWithNormals = computeNormals(cloud, 20);
+		pcl::toPCLPointCloud2 (*cloudWithNormals, textureMesh->cloud);
+	}
 
 	return textureMesh;
 }
@@ -232,14 +584,33 @@ pcl::PointCloud<pcl::PointNormal>::Ptr computeNormals(
 		const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud,
 		int normalKSearch)
 {
+	pcl::IndicesPtr indices(new std::vector<int>);
+	return computeNormals(cloud, indices, normalKSearch);
+}
+pcl::PointCloud<pcl::PointNormal>::Ptr computeNormals(
+		const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud,
+		const pcl::IndicesPtr & indices,
+		int normalKSearch)
+{
 	pcl::PointCloud<pcl::PointNormal>::Ptr cloud_with_normals(new pcl::PointCloud<pcl::PointNormal>);
 	pcl::search::KdTree<pcl::PointXYZ>::Ptr tree (new pcl::search::KdTree<pcl::PointXYZ>);
-	tree->setInputCloud (cloud);
+	if(indices->size())
+	{
+		tree->setInputCloud(cloud, indices);
+	}
+	else
+	{
+		tree->setInputCloud (cloud);
+	}
 
 	// Normal estimation*
 	pcl::NormalEstimationOMP<pcl::PointXYZ, pcl::Normal> n;
 	pcl::PointCloud<pcl::Normal>::Ptr normals (new pcl::PointCloud<pcl::Normal>);
 	n.setInputCloud (cloud);
+	if(indices->size())
+	{
+		n.setIndices(indices);
+	}
 	n.setSearchMethod (tree);
 	n.setKSearch (normalKSearch);
 	n.compute (*normals);
@@ -256,14 +627,33 @@ pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr computeNormals(
 		const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud,
 		int normalKSearch)
 {
+	pcl::IndicesPtr indices(new std::vector<int>);
+	return computeNormals(cloud, indices, normalKSearch);
+}
+pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr computeNormals(
+		const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud,
+		const pcl::IndicesPtr & indices,
+		int normalKSearch)
+{
 	pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud_with_normals(new pcl::PointCloud<pcl::PointXYZRGBNormal>);
 	pcl::search::KdTree<pcl::PointXYZRGB>::Ptr tree (new pcl::search::KdTree<pcl::PointXYZRGB>);
-	tree->setInputCloud (cloud);
+	if(indices->size())
+	{
+		tree->setInputCloud(cloud, indices);
+	}
+	else
+	{
+		tree->setInputCloud (cloud);
+	}
 
 	// Normal estimation*
 	pcl::NormalEstimationOMP<pcl::PointXYZRGB, pcl::Normal> n;
 	pcl::PointCloud<pcl::Normal>::Ptr normals (new pcl::PointCloud<pcl::Normal>);
 	n.setInputCloud (cloud);
+	if(indices->size())
+	{
+		n.setIndices(indices);
+	}
 	n.setSearchMethod (tree);
 	n.setKSearch (normalKSearch);
 	n.compute (*normals);
@@ -272,6 +662,43 @@ pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr computeNormals(
 	// Concatenate the XYZ and normal fields*
 	pcl::concatenateFields (*cloud, *normals, *cloud_with_normals);
 	//* cloud_with_normals = cloud + normals*/
+
+	return cloud_with_normals;
+}
+
+pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr computeFastOrganizedNormals(
+		const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud,
+		float maxDepthChangeFactor,
+		float normalSmoothingSize)
+{
+	pcl::IndicesPtr indices(new std::vector<int>);
+	return computeFastOrganizedNormals(cloud, indices, maxDepthChangeFactor, normalSmoothingSize);
+}
+pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr computeFastOrganizedNormals(
+		const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud,
+		const pcl::IndicesPtr & indices,
+		float maxDepthChangeFactor,
+		float normalSmoothingSize)
+{
+	UASSERT(cloud->isOrganized());
+
+	pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud_with_normals(new pcl::PointCloud<pcl::PointXYZRGBNormal>);
+
+	// Normal estimation
+	pcl::PointCloud<pcl::Normal>::Ptr normals (new pcl::PointCloud<pcl::Normal>);
+	pcl::IntegralImageNormalEstimation<pcl::PointXYZRGB, pcl::Normal> ne;
+	ne.setNormalEstimationMethod (ne.AVERAGE_3D_GRADIENT);
+	ne.setMaxDepthChangeFactor(maxDepthChangeFactor);
+	ne.setNormalSmoothingSize(normalSmoothingSize);
+	ne.setInputCloud(cloud);
+	if(indices->size())
+	{
+		ne.setIndices(indices);
+	}
+	ne.compute(*normals);
+
+	// Concatenate the XYZ and normal fields
+	pcl::concatenateFields (*cloud, *normals, *cloud_with_normals);
 
 	return cloud_with_normals;
 }
@@ -287,9 +714,41 @@ pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr mls(
 		float dilationVoxelSize,     // VOXEL_GRID_DILATION
 		int dilationIterations)       // VOXEL_GRID_DILATION
 {
+	pcl::IndicesPtr indices(new std::vector<int>);
+	return mls(cloud,
+			indices,
+			searchRadius,
+			polygonialOrder,
+			upsamplingMethod,
+			upsamplingRadius,
+			upsamplingStep,
+			pointDensity,
+			dilationVoxelSize,
+			dilationIterations);
+}
+
+pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr mls(
+		const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud,
+		const pcl::IndicesPtr & indices,
+		float searchRadius,
+		int polygonialOrder,
+		int upsamplingMethod, // NONE, DISTINCT_CLOUD, SAMPLE_LOCAL_PLANE, RANDOM_UNIFORM_DENSITY, VOXEL_GRID_DILATION
+		float upsamplingRadius,      // SAMPLE_LOCAL_PLANE
+		float upsamplingStep,        // SAMPLE_LOCAL_PLANE
+		int pointDensity,             // RANDOM_UNIFORM_DENSITY
+		float dilationVoxelSize,     // VOXEL_GRID_DILATION
+		int dilationIterations)       // VOXEL_GRID_DILATION
+{
 	pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud_with_normals(new pcl::PointCloud<pcl::PointXYZRGBNormal>);
 	pcl::search::KdTree<pcl::PointXYZRGB>::Ptr tree (new pcl::search::KdTree<pcl::PointXYZRGB>);
-	tree->setInputCloud (cloud);
+	if(indices->size())
+	{
+		tree->setInputCloud (cloud, indices);
+	}
+	else
+	{
+		tree->setInputCloud (cloud);
+	}
 
 	// Init object (second point type is for the normals)
 	pcl::MovingLeastSquares<pcl::PointXYZRGB, pcl::PointXYZRGBNormal> mls;
@@ -317,10 +776,60 @@ pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr mls(
 
 	// Reconstruct
 	mls.setInputCloud (cloud);
+	if(indices->size())
+	{
+		mls.setIndices(indices);
+	}
 	mls.setSearchMethod (tree);
 	mls.process (*cloud_with_normals);
 
 	return cloud_with_normals;
+}
+
+void adjustNormalsToViewPoints(
+		const std::map<int, Transform> & poses,
+		const pcl::PointCloud<pcl::PointXYZ>::Ptr & rawCloud,
+		const std::vector<int> & rawCameraIndices,
+		pcl::PointCloud<pcl::PointNormal>::Ptr & cloud)
+{
+	if(poses.size() && rawCloud->size() && rawCloud->size() == rawCameraIndices.size() && cloud->size())
+	{
+		pcl::search::KdTree<pcl::PointXYZ>::Ptr rawTree (new pcl::search::KdTree<pcl::PointXYZ>);
+		rawTree->setInputCloud (rawCloud);
+
+		for(unsigned int i=0; i<cloud->size(); ++i)
+		{
+			pcl::PointXYZ normal(cloud->points[i].normal_x, cloud->points[i].normal_y, cloud->points[i].normal_z);
+			if(pcl::isFinite(normal))
+			{
+				std::vector<int> indices;
+				std::vector<float> dist;
+				rawTree->nearestKSearch(pcl::PointXYZ(cloud->points[i].x, cloud->points[i].y, cloud->points[i].z), 1, indices, dist);
+				UASSERT(indices.size() == 1);
+				if(indices.size() && indices[0]>=0)
+				{
+					Transform p = poses.at(rawCameraIndices[indices[0]]);
+					pcl::PointXYZ viewpoint(p.x(), p.y(), p.z());
+					Eigen::Vector3f v = viewpoint.getVector3fMap() - cloud->points[i].getVector3fMap();
+
+					Eigen::Vector3f n(normal.x, normal.y, normal.z);
+
+					float result = v.dot(n);
+					if(result < 0)
+					{
+						//reverse normal
+						cloud->points[i].normal_x *= -1.0f;
+						cloud->points[i].normal_y *= -1.0f;
+						cloud->points[i].normal_z *= -1.0f;
+					}
+				}
+				else
+				{
+					UWARN("Not found camera viewpoint for point %d", i);
+				}
+			}
+		}
+	}
 }
 
 void adjustNormalsToViewPoints(
@@ -336,30 +845,34 @@ void adjustNormalsToViewPoints(
 
 		for(unsigned int i=0; i<cloud->size(); ++i)
 		{
-			std::vector<int> indices;
-			std::vector<float> dist;
-			rawTree->nearestKSearch(pcl::PointXYZ(cloud->points[i].x, cloud->points[i].y, cloud->points[i].z), 1, indices, dist);
-			UASSERT(indices.size() == 1);
-			if(indices.size() && indices[0]>=0)
+			pcl::PointXYZ normal(cloud->points[i].normal_x, cloud->points[i].normal_y, cloud->points[i].normal_z);
+			if(pcl::isFinite(normal))
 			{
-				Transform p = poses.at(rawCameraIndices[indices[0]]);
-				pcl::PointXYZ viewpoint(p.x(), p.y(), p.z());
-				Eigen::Vector3f v = viewpoint.getVector3fMap() - cloud->points[i].getVector3fMap();
-
-				Eigen::Vector3f n(cloud->points[i].normal_x, cloud->points[i].normal_y, cloud->points[i].normal_z);
-
-				float result = v.dot(n);
-				if(result < 0)
+				std::vector<int> indices;
+				std::vector<float> dist;
+				rawTree->nearestKSearch(pcl::PointXYZ(cloud->points[i].x, cloud->points[i].y, cloud->points[i].z), 1, indices, dist);
+				UASSERT(indices.size() == 1);
+				if(indices.size() && indices[0]>=0)
 				{
-					//reverse normal
-					cloud->points[i].normal_x *= -1.0f;
-					cloud->points[i].normal_y *= -1.0f;
-					cloud->points[i].normal_z *= -1.0f;
+					Transform p = poses.at(rawCameraIndices[indices[0]]);
+					pcl::PointXYZ viewpoint(p.x(), p.y(), p.z());
+					Eigen::Vector3f v = viewpoint.getVector3fMap() - cloud->points[i].getVector3fMap();
+
+					Eigen::Vector3f n(normal.x, normal.y, normal.z);
+
+					float result = v.dot(n);
+					if(result < 0)
+					{
+						//reverse normal
+						cloud->points[i].normal_x *= -1.0f;
+						cloud->points[i].normal_y *= -1.0f;
+						cloud->points[i].normal_z *= -1.0f;
+					}
 				}
-			}
-			else
-			{
-				UWARN("Not found camera viewpoint for point %d", i);
+				else
+				{
+					UWARN("Not found camera viewpoint for point %d", i);
+				}
 			}
 		}
 	}
@@ -367,11 +880,16 @@ void adjustNormalsToViewPoints(
 
 pcl::PolygonMesh::Ptr meshDecimation(const pcl::PolygonMesh::Ptr & mesh, float factor)
 {
+	pcl::PolygonMesh::Ptr output(new pcl::PolygonMesh);
+#ifndef DISABLE_VTK
 	pcl::MeshQuadricDecimationVTK mqd;
 	mqd.setTargetReductionFactor(factor);
 	mqd.setInputMesh(mesh);
-	pcl::PolygonMesh::Ptr output(new pcl::PolygonMesh);
 	mqd.process (*output);
+#else
+	UWARN("RTAB-Map is not built with VTK module so mesh decimation cannot be used!");
+	*output = *mesh;
+#endif
 	return output;
 }
 

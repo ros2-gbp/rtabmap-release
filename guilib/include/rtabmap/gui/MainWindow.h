@@ -36,11 +36,13 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/core/RtabmapEvent.h"
 #include "rtabmap/core/SensorData.h"
 #include "rtabmap/core/OdometryEvent.h"
+#include "rtabmap/core/CameraInfo.h"
 #include "rtabmap/gui/PreferencesDialog.h"
 
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl/PolygonMesh.h>
+#include <pcl/pcl_base.h>
 #include <pcl/TextureMesh.h>
 
 namespace rtabmap {
@@ -50,6 +52,7 @@ class CameraOpenni;
 class CameraFreenect;
 class OdometryThread;
 class CloudViewer;
+class LoopClosureViewer;
 }
 
 class QGraphicsScene;
@@ -66,6 +69,7 @@ class StatsToolBox;
 class ProgressDialog;
 class TwistGridWidget;
 class ExportCloudsDialog;
+class ExportScansDialog;
 class PostProcessingDialog;
 class DataRecorder;
 
@@ -105,6 +109,7 @@ public:
 public slots:
 	void processStats(const rtabmap::Statistics & stat);
 	void updateCacheFromDatabase(const QString & path);
+	void openDatabase(const QString & path);
 
 protected:
 	virtual void closeEvent(QCloseEvent* event);
@@ -158,6 +163,7 @@ private slots:
 	void updateCacheFromDatabase();
 	void downloadAllClouds();
 	void downloadPoseGraph();
+	void anchorCloudsToGroundTruth();
 	void clearTheCache();
 	void openPreferences();
 	void openPreferencesSource();
@@ -165,6 +171,7 @@ private slots:
 	void selectScreenCaptureFormat(bool checked);
 	void takeScreenshot();
 	void updateElapsedTime();
+	void processCameraInfo(const rtabmap::CameraInfo & info);
 	void processOdometry(const rtabmap::OdometryEvent & odom);
 	void applyPrefSettings(PreferencesDialog::PANEL_FLAGS flags);
 	void applyPrefSettings(const rtabmap::ParametersMap & parameters);
@@ -201,6 +208,7 @@ private slots:
 
 signals:
 	void statsReceived(const rtabmap::Statistics &);
+	void cameraInfoReceived(const rtabmap::CameraInfo &);
 	void odometryReceived(const rtabmap::OdometryEvent &);
 	void thresholdsChanged(int, int);
 	void stateChanged(MainWindow::State);
@@ -225,9 +233,12 @@ private:
 			const std::multimap<int, Link> & constraints,
 			const std::map<int, int> & mapIds,
 			const std::map<int, std::string> & labels,
+			const std::map<int, Transform> & groundTruths,
 			bool verboseProgress = false);
 	void createAndAddCloudToMap(int nodeId,	const Transform & pose, int mapId);
 	void createAndAddScanToMap(int nodeId, const Transform & pose, int mapId);
+	void createAndAddFeaturesToMap(int nodeId, const Transform & pose, int mapId);
+	Transform alignPosesToGroundTruth(std::map<int, Transform> & poses, const std::map<int, Transform> & groundTruth);
 	void drawKeypoints(const std::multimap<int, cv::KeyPoint> & refWords, const std::multimap<int, cv::KeyPoint> & loopWords);
 	void setupMainLayout(bool vertical);
 	void updateSelectSourceMenu();
@@ -236,26 +247,6 @@ private:
 	void loadFigures();
 	void exportPoses(int format);
 	QString captureScreen(bool cacheInRAM = false);
-
-	std::map<int, pcl::PointCloud<pcl::PointXYZRGB>::Ptr > getClouds(
-			const std::map<int, Transform> & poses,
-			bool regenerateClouds,
-			int regenerateDecimation,
-			float regenerateVoxelSize,
-			float regenerateMaxDepth,
-			float filteringRadius,
-			float filteringMinNeighbors) const;
-
-	bool getExportedScans(std::map<int, pcl::PointCloud<pcl::PointXYZ>::Ptr > & scans);
-	bool getExportedClouds(
-			std::map<int, pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr> & clouds,
-			std::map<int, pcl::PolygonMesh::Ptr> & meshes,
-			std::map<int, pcl::TextureMesh::Ptr> & textureMeshes,
-			bool toSave);
-	void saveClouds(const std::map<int, pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr> & clouds, bool binaryMode = true);
-	void saveMeshes(const std::map<int, pcl::PolygonMesh::Ptr> & meshes, bool binaryMode = true);
-	void saveTextureMeshes(const std::map<int, pcl::TextureMesh::Ptr> & meshes);
-	void saveScans(const std::map<int, pcl::PointCloud<pcl::PointXYZ>::Ptr> & clouds, bool binaryMode = true);
 
 private:
 	Ui_mainWindow * _ui;
@@ -268,7 +259,8 @@ private:
 	//Dialogs
 	PreferencesDialog * _preferencesDialog;
 	AboutDialog * _aboutDialog;
-	ExportCloudsDialog * _exportDialog;
+	ExportCloudsDialog * _exportCloudsDialog;
+	ExportScansDialog * _exportScansDialog;
 	PostProcessingDialog * _postProcessingDialog;
 	DataRecorder * _dataRecorder;
 
@@ -289,17 +281,22 @@ private:
 
 	QMap<int, Signature> _cachedSignatures;
 	std::map<int, Transform> _currentPosesMap; // <nodeId, pose>
+	std::map<int, Transform> _currentGTPosesMap; // <nodeId, pose>
 	std::multimap<int, Link> _currentLinksMap; // <nodeFromId, link>
 	std::map<int, int> _currentMapIds;   // <nodeId, mapId>
-	std::map<int, std::string> _curentLabels; // <nodeId, label>
-	std::map<int, pcl::PointCloud<pcl::PointXYZRGB>::Ptr > _createdClouds;
-	std::map<int, pcl::PointCloud<pcl::PointXYZ>::Ptr > _createdScans;
+	std::map<int, std::string> _currentLabels; // <nodeId, label>
+	std::map<int, std::pair<pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr, pcl::IndicesPtr> > _createdClouds;
+	std::pair<int, std::pair<pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr, pcl::IndicesPtr> > _previousCloud; // used for subtraction
+
+	std::map<int, cv::Mat> _createdScans;
 	std::map<int, std::pair<cv::Mat, cv::Mat> > _projectionLocalMaps; // <ground, obstacles>
 	std::map<int, std::pair<cv::Mat, cv::Mat> > _gridLocalMaps; // <ground, obstacles>
+
+	std::map<int, pcl::PointCloud<pcl::PointXYZRGB>::Ptr> _createdFeatures;
+
 	Transform _odometryCorrection;
 	Transform _lastOdomPose;
 	bool _processingOdometry;
-	double _lastOdomInfoUpdateTime;
 
 	QTimer * _oneSecondTimer;
 	QTime * _elapsedTime;
@@ -310,6 +307,9 @@ private:
 	PdfPlotCurve * _rawLikelihoodCurve;
 
 	ProgressDialog * _initProgressDialog;
+
+	CloudViewer * _cloudViewer;
+	LoopClosureViewer * _loopClosureViewer;
 
 	QString _graphSavingFileName;
 	QMap<int, QString> _exportPosesFileName;

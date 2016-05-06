@@ -159,7 +159,7 @@ SensorData::SensorData(
 	}
 }
 
-// RGB-D constructor + 2d laser scan
+// RGB-D constructor + laser scan
 SensorData::SensorData(
 		const cv::Mat & laserScan,
 		int laserScanMaxPts,
@@ -199,7 +199,7 @@ SensorData::SensorData(
 		_depthOrRightRaw = depth;
 	}
 
-	if(laserScan.type() == CV_32FC2)
+	if(laserScan.type() == CV_32FC2 || laserScan.type() == CV_32FC3 || laserScan.type() == CV_32FC(6))
 	{
 		_laserScanRaw = laserScan;
 	}
@@ -266,7 +266,7 @@ SensorData::SensorData(
 	}
 }
 
-// Multi-cameras RGB-D constructor + 2d laser scan
+// Multi-cameras RGB-D constructor + laser scan
 SensorData::SensorData(
 		const cv::Mat & laserScan,
 		int laserScanMaxPts,
@@ -306,7 +306,7 @@ SensorData::SensorData(
 		_depthOrRightRaw = depth;
 	}
 
-	if(laserScan.type() == CV_32FC2)
+	if(laserScan.type() == CV_32FC2 || laserScan.type() == CV_32FC3 || laserScan.type() == CV_32FC(6))
 	{
 		_laserScanRaw = laserScan;
 	}
@@ -348,7 +348,8 @@ SensorData::SensorData(
 	else if(!left.empty())
 	{
 		UASSERT(left.type() == CV_8UC1 || // Mono
-				left.type() == CV_8UC3);  // RGB
+				left.type() == CV_8UC3 || // RGB
+				left.type() == CV_16UC1); // IR
 		_imageRaw = left;
 	}
 	if(right.rows == 1)
@@ -358,7 +359,8 @@ SensorData::SensorData(
 	}
 	else if(!right.empty())
 	{
-		UASSERT(right.type() == CV_8UC1); // Mono
+		UASSERT(right.type() == CV_8UC1 || // Mono
+				right.type() == CV_16UC1);  // IR
 		_depthOrRightRaw = right;
 	}
 
@@ -412,7 +414,7 @@ SensorData::SensorData(
 		_depthOrRightRaw = right;
 	}
 
-	if(laserScan.type() == CV_32FC2)
+	if(laserScan.type() == CV_32FC2 || laserScan.type() == CV_32FC3 || laserScan.type() == CV_32FC(6))
 	{
 		_laserScanRaw = laserScan;
 	}
@@ -434,18 +436,33 @@ SensorData::SensorData(
 
 void SensorData::setUserDataRaw(const cv::Mat & userDataRaw)
 {
-	if(!_userDataRaw.empty())
+	if(!userDataRaw.empty() && (!_userDataCompressed.empty() || !_userDataRaw.empty()))
 	{
-		UWARN("Writing new user data over existing user data. This may result in data loss.");
+		UWARN("Cannot write new user data (%d bytes) over existing user "
+			  "data (%d bytes, %d compressed). Set user data of %d to null "
+			  "before setting a new one.",
+			  int(userDataRaw.total()*userDataRaw.elemSize()),
+			  int(_userDataRaw.total()*_userDataRaw.elemSize()),
+			  _userDataCompressed.cols,
+			  this->id());
+		return;
 	}
 	_userDataRaw = userDataRaw;
+	_userDataCompressed = cv::Mat();
 }
 
 void SensorData::setUserData(const cv::Mat & userData)
 {
 	if(!userData.empty() && (!_userDataCompressed.empty() || !_userDataRaw.empty()))
 	{
-		UWARN("Writing new user data over existing user data. This may result in data loss.");
+		UWARN("Cannot write new user data (%d bytes) over existing user "
+			  "data (%d bytes, %d compressed). Set user data of %d to null "
+			  "before setting a new one.",
+			  int(userData.total()*userData.elemSize()),
+			  int(_userDataRaw.total()*_userDataRaw.elemSize()),
+			  _userDataCompressed.cols,
+			  this->id());
+		return;
 	}
 	_userDataRaw = cv::Mat();
 	_userDataCompressed = cv::Mat();
@@ -466,10 +483,11 @@ void SensorData::setUserData(const cv::Mat & userData)
 
 void SensorData::uncompressData()
 {
-	uncompressData(_imageCompressed.empty()?0:&_imageRaw,
-				_depthOrRightCompressed.empty()?0:&_depthOrRightRaw,
-				_laserScanCompressed.empty()?0:&_laserScanRaw,
-				_userDataCompressed.empty()?0:&_userDataRaw);
+	cv::Mat tmpA, tmpB, tmpC, tmpD;
+	uncompressData(_imageCompressed.empty()?0:&tmpA,
+				_depthOrRightCompressed.empty()?0:&tmpB,
+				_laserScanCompressed.empty()?0:&tmpC,
+				_userDataCompressed.empty()?0:&tmpD);
 }
 
 void SensorData::uncompressData(cv::Mat * imageRaw, cv::Mat * depthRaw, cv::Mat * laserScanRaw, cv::Mat * userDataRaw)
@@ -478,6 +496,18 @@ void SensorData::uncompressData(cv::Mat * imageRaw, cv::Mat * depthRaw, cv::Mat 
 	if(imageRaw && !imageRaw->empty() && _imageRaw.empty())
 	{
 		_imageRaw = *imageRaw;
+		//backward compatibility, set image size in camera model if not set
+		if(!_imageRaw.empty() && _cameraModels.size())
+		{
+			cv::Size size(_imageRaw.cols/_cameraModels.size(), _imageRaw.rows/_cameraModels.size());
+			for(unsigned int i=0; i<_cameraModels.size(); ++i)
+			{
+				if(_cameraModels[i].isValidForProjection() && _cameraModels[i].imageWidth() == 0)
+				{
+					_cameraModels[i].setImageSize(size);
+				}
+			}
+		}
 	}
 	if(depthRaw && !depthRaw->empty() && _depthOrRightRaw.empty())
 	{

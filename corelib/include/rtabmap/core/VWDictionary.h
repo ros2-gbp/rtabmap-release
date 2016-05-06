@@ -46,7 +46,13 @@ class FlannIndex;
 class RTABMAP_EXP VWDictionary
 {
 public:
-	enum NNStrategy{kNNFlannNaive, kNNFlannKdTree, kNNFlannLSH, kNNBruteForce, kNNBruteForceGPU, kNNUndef};
+	enum NNStrategy{
+		kNNFlannNaive,
+		kNNFlannKdTree,
+		kNNFlannLSH,
+		kNNBruteForce,
+		kNNBruteForceGPU,
+		kNNUndef};
 	static const int ID_START;
 	static const int ID_INVALID;
 
@@ -63,7 +69,8 @@ public:
 			int signatureId);
 	virtual void addWord(VisualWord * vw);
 
-	virtual std::vector<int> findNN(const std::list<VisualWord *> & vws) const;
+	std::vector<int> findNN(const std::list<VisualWord *> & vws) const;
+	std::vector<int> findNN(const cv::Mat & descriptors) const;
 
 	void addWordRef(int wordId, int signatureId);
 	void removeAllWordRef(int wordId, int signatureId);
@@ -79,12 +86,13 @@ public:
 	unsigned int getIndexMemoryUsed() const;
 	void setNNStrategy(NNStrategy strategy);
 	bool isIncremental() const {return _incrementalDictionary;}
+	bool isIncrementalFlann() const {return _incrementalFlann;}
 	void setIncrementalDictionary();
 	void setFixedDictionary(const std::string & dictionaryPath);
 
 	void exportDictionary(const char * fileNameReferences, const char * fileNameDescriptors) const;
 
-	void clear();
+	void clear(bool printWarningsIfNotEmpty = true);
 	std::vector<VisualWord *> getUnusedWords() const;
 	std::vector<int> getUnusedWordIds() const;
 	unsigned int getUnusedWordsSize() const {return (int)_unusedWords.size();}
@@ -105,6 +113,7 @@ private:
 	std::string _dictionaryPath; // a pre-computed dictionary (.txt)
 	bool _newWordsComparedTogether;
 	int _lastWordId;
+	bool useDistanceL1_;
 	FlannIndex * _flannIndex;
 	cv::Mat _dataTree;
 	NNStrategy _strategy;
