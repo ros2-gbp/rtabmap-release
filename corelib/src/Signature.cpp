@@ -55,6 +55,7 @@ Signature::Signature(
 		double stamp,
 		const std::string & label,
 		const Transform & pose,
+		const Transform & groundTruthPose,
 		const SensorData & sensorData):
 	_id(id),
 	_mapId(mapId),
@@ -66,6 +67,7 @@ Signature::Signature(
 	_linksModified(true),
 	_enabled(false),
 	_pose(pose),
+	_groundTruthPose(groundTruthPose),
 	_sensorData(sensorData)
 {
 	if(_sensorData.id() == 0)
@@ -73,6 +75,23 @@ Signature::Signature(
 		_sensorData.setId(id);
 	}
 	UASSERT(_sensorData.id() == _id);
+}
+
+Signature::Signature(const SensorData & data) :
+	_id(data.id()),
+	_mapId(-1),
+	_stamp(data.stamp()),
+	_weight(0),
+	_label(""),
+	_saved(false),
+	_modified(true),
+	_linksModified(true),
+	_enabled(false),
+	_pose(Transform::getIdentity()),
+	_groundTruthPose(data.groundTruth()),
+	_sensorData(data)
+{
+
 }
 
 Signature::~Signature()
@@ -97,7 +116,8 @@ void Signature::addLinks(const std::map<int, Link> & links)
 void Signature::addLink(const Link & link)
 {
 	UDEBUG("Add link %d to %d (type=%d)", link.to(), this->id(), (int)link.type());
-	UASSERT(link.from() == this->id());
+	UASSERT_MSG(link.from() == this->id(), uFormat("%d->%d for signature %d (type=%d)", link.from(), link.to(), this->id(), link.type()).c_str());
+	UASSERT_MSG(link.to() != this->id(), uFormat("%d->%d for signature %d (type=%d)", link.from(), link.to(), this->id(), link.type()).c_str());
 	std::pair<std::map<int, Link>::iterator, bool> pair = _links.insert(std::make_pair(link.to(), link));
 	UASSERT_MSG(pair.second, uFormat("Link %d (type=%d) already added to signature %d!", link.to(), link.type(), this->id()).c_str());
 	_linksModified = true;
@@ -134,6 +154,7 @@ void Signature::removeLink(int idTo)
 	int count = (int)_links.erase(idTo);
 	if(count)
 	{
+		UDEBUG("Removed link %d from %d", idTo, this->id());
 		_linksModified = true;
 	}
 }
@@ -173,17 +194,23 @@ void Signature::changeWordsRef(int oldWordId, int activeWordId)
 	std::list<cv::KeyPoint> kps = uValues(_words, oldWordId);
 	if(kps.size())
 	{
-		std::list<pcl::PointXYZ> pts = uValues(_words3, oldWordId);
+		std::list<cv::Point3f> pts = uValues(_words3, oldWordId);
+		std::list<cv::Mat> descriptors = uValues(_wordsDescriptors, oldWordId);
 		_words.erase(oldWordId);
 		_words3.erase(oldWordId);
+		_wordsDescriptors.erase(oldWordId);
 		_wordsChanged.insert(std::make_pair(oldWordId, activeWordId));
 		for(std::list<cv::KeyPoint>::const_iterator iter=kps.begin(); iter!=kps.end(); ++iter)
 		{
 			_words.insert(std::pair<int, cv::KeyPoint>(activeWordId, (*iter)));
 		}
-		for(std::list<pcl::PointXYZ>::const_iterator iter=pts.begin(); iter!=pts.end(); ++iter)
+		for(std::list<cv::Point3f>::const_iterator iter=pts.begin(); iter!=pts.end(); ++iter)
 		{
-			_words3.insert(std::pair<int, pcl::PointXYZ>(activeWordId, (*iter)));
+			_words3.insert(std::pair<int, cv::Point3f>(activeWordId, (*iter)));
+		}
+		for(std::list<cv::Mat>::const_iterator iter=descriptors.begin(); iter!=descriptors.end(); ++iter)
+		{
+			_wordsDescriptors.insert(std::pair<int, cv::Mat>(activeWordId, (*iter)));
 		}
 	}
 }
@@ -197,12 +224,14 @@ void Signature::removeAllWords()
 {
 	_words.clear();
 	_words3.clear();
+	_wordsDescriptors.clear();
 }
 
 void Signature::removeWord(int wordId)
 {
 	_words.erase(wordId);
 	_words3.erase(wordId);
+	_wordsDescriptors.clear();
 }
 
 cv::Mat Signature::getPoseCovariance() const

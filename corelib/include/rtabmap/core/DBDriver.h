@@ -94,10 +94,19 @@ public:
 	// Mutex-protected methods of abstract versions below
 
 	bool openConnection(const std::string & url, bool overwritten = false);
-	void closeConnection();
+	void closeConnection(bool save = true);
 	bool isConnected() const;
 	long getMemoryUsed() const; // In bytes
 	std::string getDatabaseVersion() const;
+	long getImagesMemoryUsed() const;
+	long getDepthImagesMemoryUsed() const;
+	long getLaserScansMemoryUsed() const;
+	long getUserDataMemoryUsed() const;
+	long getWordsMemoryUsed() const;
+	int getLastNodesSize() const; // working memory
+	int getLastDictionarySize() const; // working memory
+	int getTotalNodesSize() const;
+	int getTotalDictionarySize() const;
 
 	void executeNoResult(const std::string & sql) const;
 
@@ -110,10 +119,11 @@ public:
 	// Specific queries...
 	void loadNodeData(std::list<Signature *> & signatures) const;
 	void getNodeData(int signatureId, SensorData & data) const;
-	bool getNodeInfo(int signatureId, Transform & pose, int & mapId, int & weight, std::string & label, double & stamp) const;
+	bool getCalibration(int signatureId, std::vector<CameraModel> & models, StereoCameraModel & stereoModel) const;
+	bool getNodeInfo(int signatureId, Transform & pose, int & mapId, int & weight, std::string & label, double & stamp, Transform & groundTruthPose) const;
 	void loadLinks(int signatureId, std::map<int, Link> & links, Link::Type type = Link::kUndef) const;
 	void getWeight(int signatureId, int & weight) const;
-	void getAllNodeIds(std::set<int> & ids, bool ignoreChildren = false) const;
+	void getAllNodeIds(std::set<int> & ids, bool ignoreChildren = false, bool ignoreBadSignatures = false) const;
 	void getAllLinks(std::multimap<int, Link> & links, bool ignoreNullLinks = true) const;
 	void getLastNodeId(int & id) const;
 	void getLastWordId(int & id) const;
@@ -126,10 +136,19 @@ protected:
 
 private:
 	virtual bool connectDatabaseQuery(const std::string & url, bool overwritten = false) = 0;
-	virtual void disconnectDatabaseQuery() = 0;
+	virtual void disconnectDatabaseQuery(bool save = true) = 0;
 	virtual bool isConnectedQuery() const = 0;
 	virtual long getMemoryUsedQuery() const = 0; // In bytes
 	virtual bool getDatabaseVersionQuery(std::string & version) const = 0;
+	virtual long getImagesMemoryUsedQuery() const = 0;
+	virtual long getDepthImagesMemoryUsedQuery() const = 0;
+	virtual long getLaserScansMemoryUsedQuery() const = 0;
+	virtual long getUserDataMemoryUsedQuery() const = 0;
+	virtual long getWordsMemoryUsedQuery() const = 0;
+	virtual int getLastNodesSizeQuery() const = 0;
+	virtual int getLastDictionarySizeQuery() const = 0;
+	virtual int getTotalNodesSizeQuery() const = 0;
+	virtual int getTotalDictionarySizeQuery() const = 0;
 
 	virtual void executeNoResultQuery(const std::string & sql) const = 0;
 
@@ -151,8 +170,9 @@ private:
 	virtual void loadLinksQuery(int signatureId, std::map<int, Link> & links, Link::Type type = Link::kUndef) const = 0;
 
 	virtual void loadNodeDataQuery(std::list<Signature *> & signatures) const = 0;
-	virtual bool getNodeInfoQuery(int signatureId, Transform & pose, int & mapId, int & weight, std::string & label, double & stamp) const = 0;
-	virtual void getAllNodeIdsQuery(std::set<int> & ids, bool ignoreChildren) const = 0;
+	virtual bool getCalibrationQuery(int signatureId, std::vector<CameraModel> & models, StereoCameraModel & stereoModel) const = 0;
+	virtual bool getNodeInfoQuery(int signatureId, Transform & pose, int & mapId, int & weight, std::string & label, double & stamp, Transform & groundTruthPose) const = 0;
+	virtual void getAllNodeIdsQuery(std::set<int> & ids, bool ignoreChildren, bool ignoreBadSignatures) const = 0;
 	virtual void getAllLinksQuery(std::multimap<int, Link> & links, bool ignoreNullLinks) const = 0;
 	virtual void getLastIdQuery(const std::string & tableName, int & id) const = 0;
 	virtual void getInvertedIndexNiQuery(int signatureId, int & ni) const = 0;

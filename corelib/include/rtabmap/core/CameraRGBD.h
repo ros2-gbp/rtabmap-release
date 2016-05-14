@@ -33,9 +33,14 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/utilite/USemaphore.h"
 #include "rtabmap/core/CameraModel.h"
 #include "rtabmap/core/Camera.h"
+#include "rtabmap/core/CameraRGB.h"
 
+#include <pcl/pcl_config.h>
+
+#ifdef HAVE_OPENNI
 #include <pcl/io/openni_camera/openni_depth_image.h>
 #include <pcl/io/openni_camera/openni_image.h>
+#endif
 
 #include <boost/signals2/connection.hpp>
 
@@ -218,18 +223,25 @@ public:
 	static bool available();
 
 	enum Type{
-		kTypeRGBDepthSD,
-		kTypeRGBDepthHD,
+		kTypeColor2DepthSD,
+		kTypeDepth2ColorSD,
+		kTypeDepth2ColorHD,
+		kTypeDepth2ColorHD2,
 		kTypeIRDepth,
-		kTypeRGBIR
+		kTypeColorIR
 	};
 
 public:
 	// default local transform z in, x right, y down));
 	CameraFreenect2(int deviceId= 0,
-					Type type = kTypeRGBDepthSD,
+					Type type = kTypeColor2DepthSD,
 					float imageRate=0.0f,
-					const Transform & localTransform = Transform::getIdentity());
+					const Transform & localTransform = Transform::getIdentity(),
+					float minDepth = 0.3f,
+					float maxDepth = 12.0f,
+					bool bilateralFiltering = true,
+					bool edgeAwareFiltering = true,
+					bool noiseFiltering = true);
 	virtual ~CameraFreenect2();
 
 	virtual bool init(const std::string & calibrationFolder = ".", const std::string & cameraName = "");
@@ -245,9 +257,13 @@ private:
 	StereoCameraModel stereoModel_;
 	libfreenect2::Freenect2 * freenect2_;
 	libfreenect2::Freenect2Device *dev_;
-	libfreenect2::PacketPipeline * pipeline_;
 	libfreenect2::SyncMultiFrameListener * listener_;
 	libfreenect2::Registration * reg_;
+	float minKinect2Depth_;
+	float maxKinect2Depth_;
+	bool bilateralFiltering_;
+	bool edgeAwareFiltering_;
+	bool noiseFiltering_;
 };
 
 
@@ -256,7 +272,7 @@ private:
 /////////////////////////
 class CameraImages;
 class RTABMAP_EXP CameraRGBDImages :
-	public Camera
+	public CameraImages
 {
 public:
 	static bool available();
@@ -265,9 +281,7 @@ public:
 	CameraRGBDImages(
 			const std::string & pathRGBImages,
 			const std::string & pathDepthImages,
-			double depthScaleFactor = 1.0,
-			bool filenamesAreTimestamps = false,
-			const std::string & timestampsPath = "", // "times.txt"
+			float depthScaleFactor = 1.0f,
 			float imageRate=0.0f,
 			const Transform & localTransform = Transform::getIdentity());
 	virtual ~CameraRGBDImages();
@@ -280,14 +294,7 @@ protected:
 	virtual SensorData captureImage();
 
 private:
-	CameraImages * cameraRGB_;
-	CameraImages * cameraDepth_;
-	double depthScaleFactor_;
-	bool filenamesAreTimestamps_;
-	std::string timestampsPath_;
-	std::list<double> stamps_;
-	CameraModel cameraModel_;
-	std::string cameraName_;
+	CameraImages cameraDepth_;
 };
 
 } // namespace rtabmap

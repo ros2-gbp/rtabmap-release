@@ -8,12 +8,11 @@
 
 #include "edge_se2MaxMixture.h"
 
-#include <GL/gl.h>
 using namespace std;
 using namespace Eigen;
 
 // ================================================
-EdgeSE2MaxMixture::EdgeSE2MaxMixture() : g2o::EdgeSE2::EdgeSE2()
+EdgeSE2MaxMixture::EdgeSE2MaxMixture()
 {
   nullHypothesisMoreLikely = false;
 }
@@ -88,13 +87,14 @@ void EdgeSE2MaxMixture::computeError()
 
 }
 
-
+/*
+#include <GL/gl.h>
 // ================================================
 #ifdef G2O_HAVE_OPENGL
   EdgeSE2MaxMixtureDrawAction::EdgeSE2MaxMixtureDrawAction(): DrawAction(typeid(EdgeSE2MaxMixture).name()){}
 
   g2o::HyperGraphElementAction* EdgeSE2MaxMixtureDrawAction::operator()(g2o::HyperGraph::HyperGraphElement* element,
-               g2o::HyperGraphElementAction::Parameters* /*params_*/){
+               g2o::HyperGraphElementAction::Parameters* ){
     if (typeid(*element).name()!=_typeName)
       return 0;
     EdgeSE2MaxMixture* e =  static_cast<EdgeSE2MaxMixture*>(element);
@@ -117,6 +117,6 @@ void EdgeSE2MaxMixture::computeError()
     return this;
   }
 #endif
-
+*/
 
 
