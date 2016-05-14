@@ -28,6 +28,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/core/CameraStereo.h"
 #include "rtabmap/core/util2d.h"
 #include "rtabmap/core/CameraRGB.h"
+#include "rtabmap/core/Version.h"
 
 #include <rtabmap/utilite/UEventsManager.h>
 #include <rtabmap/utilite/UConversion.h>
@@ -38,11 +39,11 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap/utilite/UTimer.h>
 #include <rtabmap/utilite/UMath.h>
 
-#ifdef WITH_DC1394
+#ifdef RTABMAP_DC1394
 #include <dc1394/dc1394.h>
 #endif
 
-#ifdef WITH_FLYCAPTURE2
+#ifdef RTABMAP_FLYCAPTURE2
 #include <triclops.h>
 #include <fc2triclops.h>
 #endif
@@ -55,7 +56,7 @@ namespace rtabmap
 // Inspired from ROS camera1394stereo package
 //
 
-#ifdef WITH_DC1394
+#ifdef RTABMAP_DC1394
 class DC1394Device
 {
 public:
@@ -334,7 +335,7 @@ private:
 
 bool CameraStereoDC1394::available()
 {
-#ifdef WITH_DC1394
+#ifdef RTABMAP_DC1394
 	return true;
 #else
 	return false;
@@ -345,14 +346,14 @@ CameraStereoDC1394::CameraStereoDC1394(float imageRate, const Transform & localT
 		Camera(imageRate, localTransform),
 		device_(0)
 {
-#ifdef WITH_DC1394
+#ifdef RTABMAP_DC1394
 	device_ = new DC1394Device();
 #endif
 }
 
 CameraStereoDC1394::~CameraStereoDC1394()
 {
-#ifdef WITH_DC1394
+#ifdef RTABMAP_DC1394
 	if(device_)
 	{
 		delete device_;
@@ -362,7 +363,7 @@ CameraStereoDC1394::~CameraStereoDC1394()
 
 bool CameraStereoDC1394::init(const std::string & calibrationFolder, const std::string & cameraName)
 {
-#ifdef WITH_DC1394
+#ifdef RTABMAP_DC1394
 	if(device_)
 	{
 		bool ok = device_->init();
@@ -396,12 +397,12 @@ bool CameraStereoDC1394::init(const std::string & calibrationFolder, const std::
 
 bool CameraStereoDC1394::isCalibrated() const
 {
-	return stereoModel_.isValid();
+	return stereoModel_.isValidForProjection();
 }
 
 std::string CameraStereoDC1394::getSerial() const
 {
-#ifdef WITH_DC1394
+#ifdef RTABMAP_DC1394
 	if(device_)
 	{
 		return device_->guid();
@@ -413,7 +414,7 @@ std::string CameraStereoDC1394::getSerial() const
 SensorData CameraStereoDC1394::captureImage()
 {
 	SensorData data;
-#ifdef WITH_DC1394
+#ifdef RTABMAP_DC1394
 	if(device_)
 	{
 		cv::Mat left, right;
@@ -422,10 +423,16 @@ SensorData CameraStereoDC1394::captureImage()
 		if(!left.empty() && !right.empty())
 		{
 			// Rectification
-			left = stereoModel_.left().rectifyImage(left);
-			right = stereoModel_.right().rectifyImage(right);
+			if(stereoModel_.left().isValidForRectification())
+			{
+				left = stereoModel_.left().rectifyImage(left);
+			}
+			if(stereoModel_.right().isValidForRectification())
+			{
+				right = stereoModel_.right().rectifyImage(right);
+			}
 			StereoCameraModel model;
-			if(stereoModel_.isValid())
+			if(stereoModel_.isValidForProjection())
 			{
 				model = StereoCameraModel(
 						stereoModel_.left().fx(), //fx
@@ -433,7 +440,8 @@ SensorData CameraStereoDC1394::captureImage()
 						stereoModel_.left().cx(), //cx
 						stereoModel_.left().cy(), //cy
 						stereoModel_.baseline(),
-						this->getLocalTransform());
+						this->getLocalTransform(),
+						left.size());
 			}
 			data = SensorData(left, right, model, this->getNextSeqID(), UTimer::now());
 		}
@@ -452,14 +460,14 @@ CameraStereoFlyCapture2::CameraStereoFlyCapture2(float imageRate, const Transfor
 		camera_(0),
 		triclopsCtx_(0)
 {
-#ifdef WITH_FLYCAPTURE2
+#ifdef RTABMAP_FLYCAPTURE2
 	camera_ = new FlyCapture2::Camera();
 #endif
 }
 
 CameraStereoFlyCapture2::~CameraStereoFlyCapture2()
 {
-#ifdef WITH_FLYCAPTURE2
+#ifdef RTABMAP_FLYCAPTURE2
 	// Close the camera
 	camera_->StopCapture();
 	camera_->Disconnect();
@@ -473,7 +481,7 @@ CameraStereoFlyCapture2::~CameraStereoFlyCapture2()
 
 bool CameraStereoFlyCapture2::available()
 {
-#ifdef WITH_FLYCAPTURE2
+#ifdef RTABMAP_FLYCAPTURE2
 	return true;
 #else
 	return false;
@@ -482,7 +490,7 @@ bool CameraStereoFlyCapture2::available()
 
 bool CameraStereoFlyCapture2::init(const std::string & calibrationFolder, const std::string & cameraName)
 {
-#ifdef WITH_FLYCAPTURE2
+#ifdef RTABMAP_FLYCAPTURE2
 	if(camera_)
 	{
 		// Close the camera
@@ -561,7 +569,7 @@ bool CameraStereoFlyCapture2::init(const std::string & calibrationFolder, const 
 
 bool CameraStereoFlyCapture2::isCalibrated() const
 {
-#ifdef WITH_FLYCAPTURE2
+#ifdef RTABMAP_FLYCAPTURE2
 	if(triclopsCtx_)
 	{
 		float fx, cx, cy, baseline;
@@ -576,7 +584,7 @@ bool CameraStereoFlyCapture2::isCalibrated() const
 
 std::string CameraStereoFlyCapture2::getSerial() const
 {
-#ifdef WITH_FLYCAPTURE2
+#ifdef RTABMAP_FLYCAPTURE2
 	if(camera_ && camera_->IsConnected())
 	{
 		FlyCapture2::CameraInfo camInfo;
@@ -590,7 +598,7 @@ std::string CameraStereoFlyCapture2::getSerial() const
 }
 
 // struct containing image needed for processing
-#ifdef WITH_FLYCAPTURE2
+#ifdef RTABMAP_FLYCAPTURE2
 struct ImageContainer
 {
 	FlyCapture2::Image tmp[2];
@@ -601,7 +609,7 @@ struct ImageContainer
 SensorData CameraStereoFlyCapture2::captureImage()
 {
 	SensorData data;
-#ifdef WITH_FLYCAPTURE2
+#ifdef RTABMAP_FLYCAPTURE2
 	if(camera_ && triclopsCtx_ && camera_->IsConnected())
 	{
 		// grab image from camera.
@@ -708,7 +716,8 @@ SensorData CameraStereoFlyCapture2::captureImage()
 								cx,
 								cy,
 								baseline,
-								this->getLocalTransform());
+								this->getLocalTransform(),
+								left.size());
 						data = SensorData(left, right, model, this->getNextSeqID(), UTimer::now());
 					}
 				}
@@ -733,40 +742,28 @@ bool CameraStereoImages::available()
 CameraStereoImages::CameraStereoImages(
 		const std::string & pathLeftImages,
 		const std::string & pathRightImages,
-		bool filenamesAreTimestamps,
-		const std::string & timestampsPath,
 		bool rectifyImages,
 		float imageRate,
 		const Transform & localTransform) :
-		Camera(imageRate, localTransform),
-		camera_(0),
-		camera2_(0),
-		filenamesAreTimestamps_(filenamesAreTimestamps),
-		timestampsPath_(timestampsPath),
-		rectifyImages_(rectifyImages)
+		CameraImages(pathLeftImages, imageRate, localTransform),
+		camera2_(new CameraImages(pathRightImages))
 {
-	camera_ = new CameraImages(pathLeftImages);
-	camera2_ = new CameraImages(pathRightImages);
+	this->setImagesRectified(rectifyImages);
 }
 
 CameraStereoImages::CameraStereoImages(
 		const std::string & pathLeftRightImages,
-		bool filenamesAreTimestamps,
-		const std::string & timestampsPath,
 		bool rectifyImages,
 		float imageRate,
 		const Transform & localTransform) :
-		Camera(imageRate, localTransform),
-		camera_(0),
-		camera2_(0),
-		filenamesAreTimestamps_(filenamesAreTimestamps),
-		timestampsPath_(timestampsPath),
-		rectifyImages_(rectifyImages)
+		CameraImages("", imageRate, localTransform),
+		camera2_(0)
 {
 	std::vector<std::string> paths = uListToVector(uSplit(pathLeftRightImages, uStrContains(pathLeftRightImages, ":")?':':';'));
 	if(paths.size() >= 1)
 	{
-		camera_ = new CameraImages(paths[0]);
+		this->setPath(paths[0]);
+		this->setImagesRectified(rectifyImages);
 
 		if(paths.size() >= 2)
 		{
@@ -781,20 +778,17 @@ CameraStereoImages::CameraStereoImages(
 
 CameraStereoImages::~CameraStereoImages()
 {
-	if(camera_)
-	{
-		delete camera_;
-	}
+	UDEBUG("");
 	if(camera2_)
 	{
 		delete camera2_;
 	}
+	UDEBUG("");
 }
 
 bool CameraStereoImages::init(const std::string & calibrationFolder, const std::string & cameraName)
 {
 	// look for calibration files
-	cameraName_ = cameraName;
 	if(!calibrationFolder.empty() && !cameraName.empty())
 	{
 		if(!stereoModel_.load(calibrationFolder, cameraName))
@@ -811,32 +805,35 @@ bool CameraStereoImages::init(const std::string & calibrationFolder, const std::
 					stereoModel_.baseline());
 		}
 	}
+
 	stereoModel_.setLocalTransform(this->getLocalTransform());
-	if(rectifyImages_ && !stereoModel_.isValid())
+	stereoModel_.setName(cameraName);
+	if(this->isImagesRectified() && !stereoModel_.isValidForRectification())
 	{
 		UERROR("Parameter \"rectifyImages\" is set, but no stereo model is loaded or valid.");
 		return false;
 	}
 
+	//desactivate before init as we will do it in this class instead for convenience
+	bool rectify = this->isImagesRectified();
+	this->setImagesRectified(false);
+
 	bool success = false;
-	if(camera_ == 0)
-	{
-		UERROR("Cannot initialize the camera.");
-	}
-	else if(camera_->init())
+	if(CameraImages::init())
 	{
 		if(camera2_)
 		{
+			camera2_->setBayerMode(this->getBayerMode());
 			if(camera2_->init())
 			{
-				if(camera_->imagesCount() == camera2_->imagesCount())
+				if(this->imagesCount() == camera2_->imagesCount())
 				{
 					success = true;
 				}
 				else
 				{
 					UERROR("Cameras don't have the same number of images (%d vs %d)",
-							camera_->imagesCount(), camera2_->imagesCount());
+							this->imagesCount(), camera2_->imagesCount());
 				}
 			}
 			else
@@ -849,127 +846,61 @@ bool CameraStereoImages::init(const std::string & calibrationFolder, const std::
 			success = true;
 		}
 	}
-
-	stamps_.clear();
-	if(success)
-	{
-		if(filenamesAreTimestamps_)
-		{
-			std::vector<std::string> filenames = camera_->filenames();
-			for(unsigned int i=0; i<filenames.size(); ++i)
-			{
-				// format is 12234456.12334.png
-				std::list<std::string> list = uSplit(filenames.at(i), '.');
-				if(list.size() == 3)
-				{
-					list.pop_back(); // remove extension
-					double stamp = uStr2Double(uJoin(list, "."));
-					if(stamp > 0.0)
-					{
-						stamps_.push_back(stamp);
-					}
-					else
-					{
-						UERROR("Conversion filename to timestamp failed! (filename=%s)", filenames.at(i).c_str());
-					}
-				}
-			}
-			if(stamps_.size() != camera_->imagesCount())
-			{
-				UERROR("The stamps count is not the same as the images (%d vs %d)! "
-					   "Converting filenames to timestamps is activated.",
-						(int)stamps_.size(), camera_->imagesCount());
-				stamps_.clear();
-				success = false;
-			}
-		}
-		else if(timestampsPath_.size())
-		{
-			FILE * file = 0;
-#ifdef _MSC_VER
-			fopen_s(&file, timestampsPath_.c_str(), "r");
-#else
-			file = fopen(timestampsPath_.c_str(), "r");
-#endif
-			if(file)
-			{
-				char line[16];
-				while ( fgets (line , 16 , file) != NULL )
-				{
-					stamps_.push_back(uStr2Double(uReplaceChar(line, '\n', 0)));
-				}
-				fclose(file);
-			}
-			if(stamps_.size() != camera_->imagesCount())
-			{
-				UERROR("The stamps count is not the same as the images (%d vs %d)! Please remove "
-						"the timestamps file path if you don't want to use them (current file path=%s).",
-						(int)stamps_.size(), camera_->imagesCount(), timestampsPath_.c_str());
-				stamps_.clear();
-				success = false;
-			}
-		}
-	}
-
+	this->setImagesRectified(rectify); // reset the flag
 	return success;
 }
 
 bool CameraStereoImages::isCalibrated() const
 {
-	return stereoModel_.isValid();
+	return stereoModel_.isValidForProjection();
 }
 
 std::string CameraStereoImages::getSerial() const
 {
-	return cameraName_;
+	return stereoModel_.name();
 }
 
 SensorData CameraStereoImages::captureImage()
 {
 	SensorData data;
-	if(camera_)
+
+	SensorData left, right;
+	left = CameraImages::captureImage();
+	if(!left.imageRaw().empty())
 	{
-		double stamp;
-		if(stamps_.size())
+		if(camera2_)
 		{
-			stamp = stamps_.front();
-			stamps_.pop_front();
+			right = camera2_->takeImage();
 		}
 		else
 		{
-			stamp = UTimer::now();
+			right = this->takeImage();
 		}
-		SensorData left, right;
-		left = camera_->takeImage();
-		if(!left.imageRaw().empty())
+
+		if(!right.imageRaw().empty())
 		{
-			if(camera2_)
+			// Rectification
+			cv::Mat leftImage = left.imageRaw();
+			cv::Mat rightImage = right.imageRaw();
+			if(rightImage.type() != CV_8UC1)
 			{
-				right = camera2_->takeImage();
+				cv::Mat tmp;
+				cv::cvtColor(rightImage, tmp, CV_BGR2GRAY);
+				rightImage = tmp;
 			}
-			else
+			if(this->isImagesRectified() && stereoModel_.isValidForRectification())
 			{
-				right = camera_->takeImage();
+				leftImage = stereoModel_.left().rectifyImage(leftImage);
+				rightImage = stereoModel_.right().rectifyImage(rightImage);
 			}
 
-			if(!right.imageRaw().empty())
+			if(stereoModel_.left().imageHeight() == 0 || stereoModel_.left().imageWidth() == 0)
 			{
-				// Rectification
-				cv::Mat leftImage = left.imageRaw();
-				cv::Mat rightImage = right.imageRaw();
-				if(rightImage.type() != CV_8UC1)
-				{
-					cv::Mat tmp;
-					cv::cvtColor(rightImage, tmp, CV_BGR2GRAY);
-					rightImage = tmp;
-				}
-				if(rectifyImages_ && stereoModel_.left().isValid() && stereoModel_.right().isValid())
-				{
-					leftImage = stereoModel_.left().rectifyImage(leftImage);
-					rightImage = stereoModel_.right().rectifyImage(rightImage);
-				}
-				data = SensorData(leftImage, rightImage, stereoModel_, this->getNextSeqID(), stamp);
+				stereoModel_.setImageSize(leftImage.size());
 			}
+
+			data = SensorData(left.laserScanRaw(), left.laserScanMaxPts(), 0, leftImage, rightImage, stereoModel_, left.id()/(camera2_?1:2), left.stamp());
+			data.setGroundTruth(left.groundTruth());
 		}
 	}
 	return data;
@@ -1034,8 +965,9 @@ bool CameraStereoVideo::init(const std::string & calibrationFolder, const std::s
 						stereoModel_.baseline());
 			}
 		}
+
 		stereoModel_.setLocalTransform(this->getLocalTransform());
-		if(rectifyImages_ && !stereoModel_.isValid())
+		if(rectifyImages_ && !stereoModel_.isValidForRectification())
 		{
 			UERROR("Parameter \"rectifyImages\" is set, but no stereo model is loaded or valid.");
 			return false;
@@ -1046,7 +978,7 @@ bool CameraStereoVideo::init(const std::string & calibrationFolder, const std::s
 
 bool CameraStereoVideo::isCalibrated() const
 {
-	return stereoModel_.isValid();
+	return stereoModel_.isValidForProjection();
 }
 
 std::string CameraStereoVideo::getSerial() const
@@ -1074,7 +1006,8 @@ SensorData CameraStereoVideo::captureImage()
 				rightImage = tmp;
 				rightCvt = true;
 			}
-			if(rectifyImages_ && stereoModel_.left().isValid() && stereoModel_.right().isValid())
+
+			if(rectifyImages_ && stereoModel_.left().isValidForRectification() && stereoModel_.right().isValidForRectification())
 			{
 				leftImage = stereoModel_.left().rectifyImage(leftImage);
 				rightImage = stereoModel_.right().rectifyImage(rightImage);
@@ -1087,6 +1020,12 @@ SensorData CameraStereoVideo::captureImage()
 					rightImage = rightImage.clone();
 				}
 			}
+
+			if(stereoModel_.left().imageHeight() == 0 || stereoModel_.left().imageWidth() == 0)
+			{
+				stereoModel_.setImageSize(leftImage.size());
+			}
+
 			data = SensorData(leftImage, rightImage, stereoModel_, this->getNextSeqID(), UTimer::now());
 		}
 	}

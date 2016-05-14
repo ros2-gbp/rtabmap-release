@@ -450,6 +450,23 @@ inline void uInsert(std::map<K, V> & map, const std::pair<K, V> & pair)
 }
 
 /**
+ * Insert items in the map. Contrary to the insert in the STL,
+ * if the key already exists, the value will be replaced by the new one.
+ */
+template<class K, class V>
+inline void uInsert(std::map<K, V> & map, const std::map<K, V> & items)
+{
+	for(typename std::map<K, V>::const_iterator iter=items.begin(); iter!=items.end(); ++iter)
+	{
+		std::pair<typename std::map<K, V>::iterator, bool> inserted = map.insert(*iter);
+		if(inserted.second == false)
+		{
+			inserted.first->second = iter->second;
+		}
+	}
+}
+
+/**
  * Convert a std::list to a std::vector.
  * @param list the list
  * @return the vector
@@ -494,7 +511,7 @@ inline std::map<K, V> uMultimapToMapUnique(const std::multimap<K, V> & m)
 		if(m.count(*iter) == 1)
 		{
 			typename std::multimap<K, V>::const_iterator jter=m.find(*iter);
-			mapOut.insert(std::pair<K,V>(jter->first, jter->second));
+			mapOut.insert(mapOut.end(), std::pair<K,V>(jter->first, jter->second));
 		}
 	}
 	return mapOut;
@@ -600,12 +617,47 @@ inline std::string uJoin(const std::list<std::string> & strings, const std::stri
 /**
  * Check if a character is a digit.
  * @param c the character
- * @return if the character is a digit (if c >= '0' && c <= '9')
+ * @return true if the character is a digit (if c >= '0' && c <= '9')
  */
 inline bool uIsDigit(const char c)
 {
 	return c >= '0' && c <= '9';
 }
+
+/**
+ * Check if a string is a integer number.
+ * @param str the string
+ * @return true if the string is a integer number
+ */
+inline bool uIsInteger(const std::string & str, bool checkForSign = true)
+{
+	bool isInteger = str.size()!=0;
+	for(unsigned int i=0; i<str.size() && isInteger; ++i)
+	{
+		isInteger = (checkForSign && i==0 && str[i]=='-') || uIsDigit(str[i]);
+	}
+	return isInteger;
+}
+
+/**
+ * Check if a string is a number (integer or float).
+ * @param str the string
+ * @return true if the string is a number
+ */
+inline bool uIsNumber(const std::string & str)
+{
+	std::list<std::string> list = uSplit(str, '.');
+	if(list.size() == 1)
+	{
+		return uIsInteger(str);
+	}
+	else if(list.size() == 2)
+	{
+		return uIsInteger(list.front()) && uIsInteger(list.back(), false);
+	}
+	return false;
+}
+
 
 /**
  * Split a string into number and character strings.

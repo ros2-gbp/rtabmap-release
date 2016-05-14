@@ -25,8 +25,10 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+#include <rtabmap/core/OdometryF2M.h>
 #include "rtabmap/core/OdometryThread.h"
 #include "rtabmap/core/Odometry.h"
+#include "rtabmap/core/OdometryMono.h"
 #include "rtabmap/core/OdometryInfo.h"
 #include "rtabmap/core/CameraEvent.h"
 #include "rtabmap/core/OdometryEvent.h"
@@ -63,10 +65,6 @@ void OdometryThread::handleEvent(UEvent * event)
 			if(cameraEvent->getCode() == CameraEvent::kCodeData)
 			{
 				this->addData(cameraEvent->data());
-			}
-			else if(cameraEvent->getCode() == CameraEvent::kCodeNoMoreImages)
-			{
-				this->post(new CameraEvent()); // forward the event
 			}
 		}
 		else if(event->getClassName().compare("OdometryResetEvent") == 0)
@@ -105,9 +103,9 @@ void OdometryThread::mainLoop()
 
 void OdometryThread::addData(const SensorData & data)
 {
-	if(dynamic_cast<OdometryMono*>(_odometry) == 0 && dynamic_cast<OdometryBOW*>(_odometry) == 0)
+	if(dynamic_cast<OdometryMono*>(_odometry) == 0 && dynamic_cast<OdometryF2M*>(_odometry) == 0)
 	{
-		if(data.imageRaw().empty() || data.depthOrRightRaw().empty() || (data.cameraModels().size()==0 && !data.stereoCameraModel().isValid()))
+		if(data.imageRaw().empty() || data.depthOrRightRaw().empty() || (data.cameraModels().size()==0 && !data.stereoCameraModel().isValidForProjection()))
 		{
 			ULOGGER_ERROR("Missing some information (images empty or missing calibration)!?");
 			return;
@@ -116,7 +114,7 @@ void OdometryThread::addData(const SensorData & data)
 	else
 	{
 		// Mono and BOW can accept RGB only
-		if(data.imageRaw().empty() || (data.cameraModels().size()==0 && !data.stereoCameraModel().isValid()))
+		if(data.imageRaw().empty() || (data.cameraModels().size()==0 && !data.stereoCameraModel().isValidForProjection()))
 		{
 			ULOGGER_ERROR("Missing some information (image empty or missing calibration)!?");
 			return;
