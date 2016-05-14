@@ -63,20 +63,24 @@ class RTABMAP_EXP Statistics
 	RTABMAP_STATS(Loop, Visual_inliers,);
 	RTABMAP_STATS(Loop, Last_id,);
 	RTABMAP_STATS(Loop, Optimization_max_error, m);
+	RTABMAP_STATS(Loop, Optimization_error, );
+	RTABMAP_STATS(Loop, Optimization_iterations, );
 
-	RTABMAP_STATS(LocalLoop, Time_closures,);
-	RTABMAP_STATS(LocalLoop, Space_last_closure_id,);
-	RTABMAP_STATS(LocalLoop, Space_paths,);
-	RTABMAP_STATS(LocalLoop, Space_closures_added_visually,);
-	RTABMAP_STATS(LocalLoop, Space_closures_added_icp_only,);
+	RTABMAP_STATS(Proximity, Time_detections,);
+	RTABMAP_STATS(Proximity, Space_last_detection_id,);
+	RTABMAP_STATS(Proximity, Space_paths,);
+	RTABMAP_STATS(Proximity, Space_detections_added_visually,);
+	RTABMAP_STATS(Proximity, Space_detections_added_icp_only,);
 
-	RTABMAP_STATS(OdomCorrection, Accepted,);
-	RTABMAP_STATS(OdomCorrection, Inliers,);
-	RTABMAP_STATS(OdomCorrection, Inliers_ratio,);
-	RTABMAP_STATS(OdomCorrection, Variance,);
+	RTABMAP_STATS(NeighborLinkRefining, Accepted,);
+	RTABMAP_STATS(NeighborLinkRefining, Inliers,);
+	RTABMAP_STATS(NeighborLinkRefining, Inliers_ratio,);
+	RTABMAP_STATS(NeighborLinkRefining, Variance,);
+	RTABMAP_STATS(NeighborLinkRefining, Pts,);
 
 	RTABMAP_STATS(Memory, Working_memory_size,);
 	RTABMAP_STATS(Memory, Short_time_memory_size,);
+	RTABMAP_STATS(Memory, Database_memory_used, MB);
 	RTABMAP_STATS(Memory, Signatures_removed,);
 	RTABMAP_STATS(Memory, Immunized_globally,);
 	RTABMAP_STATS(Memory, Immunized_locally,);
@@ -91,9 +95,9 @@ class RTABMAP_EXP Statistics
 	RTABMAP_STATS(Memory, Distance_travelled, m);
 
 	RTABMAP_STATS(Timing, Memory_update, ms);
-	RTABMAP_STATS(Timing, Scan_matching, ms);
-	RTABMAP_STATS(Timing, Local_detection_TIME, ms);
-	RTABMAP_STATS(Timing, Local_detection_SPACE, ms);
+	RTABMAP_STATS(Timing, Neighbor_link_refining, ms);
+	RTABMAP_STATS(Timing, Proximity_by_time, ms);
+	RTABMAP_STATS(Timing, Proximity_by_space, ms);
 	RTABMAP_STATS(Timing, Cleaning_neighbors, ms);
 	RTABMAP_STATS(Timing, Reactivation, ms);
 	RTABMAP_STATS(Timing, Add_loop_closure_link, ms);
@@ -140,7 +144,7 @@ public:
 	void setExtended(bool extended) {_extended = extended;}
 	void setRefImageId(int refImageId) {_refImageId = refImageId;}
 	void setLoopClosureId(int loopClosureId) {_loopClosureId = loopClosureId;}
-	void setLocalLoopClosureId(int localLoopClosureId) {_localLoopClosureId = localLoopClosureId;}
+	void setProximityDetectionId(int id) {_proximiyDetectionId = id;}
 
 	void setSignatures(const std::map<int, Signature> & signatures) {_signatures = signatures;}
 
@@ -154,12 +158,13 @@ public:
 	void setRawLikelihood(const std::map<int, float> & rawLikelihood) {_rawLikelihood = rawLikelihood;}
 	void setLocalPath(const std::vector<int> & localPath) {_localPath=localPath;}
 	void setCurrentGoalId(int goal) {_currentGoalId=goal;}
+	void setReducedIds(const std::map<int, int> & reducedIds) {_reducedIds = reducedIds;}
 
 	// getters
 	bool extended() const {return _extended;}
 	int refImageId() const {return _refImageId;}
 	int loopClosureId() const {return _loopClosureId;}
-	int localLoopClosureId() const {return _localLoopClosureId;}
+	int proximityDetectionId() const {return _proximiyDetectionId;}
 
 	const std::map<int, Signature> & getSignatures() const {return _signatures;}
 
@@ -173,6 +178,7 @@ public:
 	const std::map<int, float> & rawLikelihood() const {return _rawLikelihood;}
 	const std::vector<int> & localPath() const {return _localPath;}
 	int currentGoalId() const {return _currentGoalId;}
+	const std::map<int, int> & reducedIds() const {return _reducedIds;}
 
 	const std::map<std::string, float> & data() const {return _data;}
 
@@ -181,7 +187,7 @@ private:
 
 	int _refImageId;
 	int _loopClosureId;
-	int _localLoopClosureId;
+	int _proximiyDetectionId;
 
 	std::map<int, Signature> _signatures;
 
@@ -197,6 +203,8 @@ private:
 
 	std::vector<int> _localPath;
 	int _currentGoalId;
+
+	std::map<int, int> _reducedIds;
 
 	// Format for statistics (Plottable statistics must go in that map) :
 	// {"Group/Name/Unit", value}
