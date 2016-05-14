@@ -32,6 +32,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap/utilite/UConversion.h>
 #include <rtabmap/utilite/UMath.h>
 #include <rtabmap/utilite/ULogger.h>
+#include <rtabmap/utilite/UStl.h>
 #include <iomanip>
 
 namespace rtabmap {
@@ -66,6 +67,24 @@ Transform::Transform(float x, float y, float z, float roll, float pitch, float y
 	*this = fromEigen3f(t);
 }
 
+Transform::Transform(float x, float y, float z, float qx, float qy, float qz, float qw) :
+		data_(cv::Mat::zeros(3,4,CV_32FC1))
+{
+	Eigen::Matrix3f rotation = Eigen::Quaternionf(qw, qx, qy, qz).toRotationMatrix();
+	data()[0] = rotation(0,0);
+	data()[1] = rotation(0,1);
+	data()[2] = rotation(0,2);
+	data()[3] = x;
+	data()[4] = rotation(1,0);
+	data()[5] = rotation(1,1);
+	data()[6] = rotation(1,2);
+	data()[7] = y;
+	data()[8] = rotation(2,0);
+	data()[9] = rotation(2,1);
+	data()[10] = rotation(2,2);
+	data()[11] = z;
+}
+
 Transform::Transform(float x, float y, float theta)
 {
 	Eigen::Affine3f t = pcl::getTransformation (x, y, 0, 0, 0, theta);
@@ -74,7 +93,8 @@ Transform::Transform(float x, float y, float theta)
 
 bool Transform::isNull() const
 {
-	return (data()[0] == 0.0f &&
+	return (data_.empty() ||
+			(data()[0] == 0.0f &&
 			data()[1] == 0.0f &&
 			data()[2] == 0.0f &&
 			data()[3] == 0.0f &&
@@ -97,7 +117,7 @@ bool Transform::isNull() const
 			uIsNan(data()[8]) ||
 			uIsNan(data()[9]) ||
 			uIsNan(data()[10]) ||
-			uIsNan(data()[11]);
+			uIsNan(data()[11]));
 }
 
 bool Transform::isIdentity() const
@@ -153,6 +173,23 @@ Transform Transform::translation() const
 					 0,0,1, data()[11]);
 }
 
+Transform Transform::to3DoF() const
+{
+	float x,y,z,roll,pitch,yaw;
+	this->getTranslationAndEulerAngles(x,y,z,roll,pitch,yaw);
+	return Transform(x,y,0, 0,0,yaw);
+}
+
+cv::Mat Transform::rotationMatrix() const
+{
+	return data_.colRange(0, 3).clone();
+}
+
+cv::Mat Transform::translationMatrix() const
+{
+	return data_.col(3).clone();
+}
+
 void Transform::getTranslationAndEulerAngles(float & x, float & y, float & z, float & roll, float & pitch, float & yaw) const
 {
 	pcl::getTranslationAndEulerAngles(toEigen3f(), x, y, z, roll, pitch, yaw);
@@ -191,11 +228,31 @@ float Transform::getDistanceSquared(const Transform & t) const
 	return uNormSquared(this->x()-t.x(), this->y()-t.y(), this->z()-t.z());
 }
 
+Transform Transform::interpolate(float t, const Transform & other) const
+{
+	Eigen::Quaternionf qa=this->getQuaternionf();
+	Eigen::Quaternionf qb=other.getQuaternionf();
+	Eigen::Quaternionf qres = qa.slerp(t, qb);
+
+	float x = this->x() + t*(other.x() - this->x());
+	float y = this->y() + t*(other.y() - this->y());
+	float z = this->z() + t*(other.z() - this->z());
+
+	return Transform(x,y,z, qres.x(), qres.y(), qres.z(), qres.w());
+}
+
 std::string Transform::prettyPrint() const
 {
-	float x,y,z,roll,pitch,yaw;
-	getTranslationAndEulerAngles(x, y, z, roll, pitch, yaw);
-	return uFormat("xyz=%f,%f,%f rpy=%f,%f,%f", x,y,z, roll,pitch,yaw);
+	if(this->isNull())
+	{
+		return uFormat("xyz=[null] rpy=[null]");
+	}
+	else
+	{
+		float x,y,z,roll,pitch,yaw;
+		getTranslationAndEulerAngles(x, y, z, roll, pitch, yaw);
+		return uFormat("xyz=%f,%f,%f rpy=%f,%f,%f", x,y,z, roll,pitch,yaw);
+	}
 }
 
 Transform Transform::operator*(const Transform & t) const
@@ -313,6 +370,68 @@ Transform Transform::fromEigen3d(const Eigen::Isometry3d & matrix)
 	return Transform(matrix(0,0), matrix(0,1), matrix(0,2), matrix(0,3),
 					 matrix(1,0), matrix(1,1), matrix(1,2), matrix(1,3),
 					 matrix(2,0), matrix(2,1), matrix(2,2), matrix(2,3));
+}
+
+/**
+ * Format (3 values): x y z
+ * Format (6 values): x y z roll pitch yaw
+ * Format (7 values): x y z qx qy qz qw
+ * Format (9 values, 3x3 rotation): r11 r12 r13 r21 r22 r23 r31 r32 r33
+ * Format (12 values, 3x4 transform): r11 r12 r13 tx r21 r22 r23 ty r31 r32 r33 tz
+ */
+Transform Transform::fromString(const std::string & string)
+{
+	std::list<std::string> list = uSplit(string, ' ');
+	UASSERT_MSG(list.empty() || list.size() == 3 || list.size() == 6 || list.size() == 7 || list.size() == 9 || list.size() == 12,
+			uFormat("Cannot parse \"%s\"", string.c_str()).c_str());
+
+	std::vector<float> numbers(list.size());
+	int i = 0;
+	for(std::list<std::string>::iterator iter=list.begin(); iter!=list.end(); ++iter)
+	{
+		numbers[i++] = uStr2Float(*iter);
+	}
+
+	Transform t;
+	if(numbers.size() == 3)
+	{
+		t = Transform(numbers[0], numbers[1], numbers[2]);
+	}
+	else if(numbers.size() == 6)
+	{
+		t = Transform(numbers[0], numbers[1], numbers[2], numbers[3], numbers[4], numbers[5]);
+	}
+	else if(numbers.size() == 7)
+	{
+
+		t = Transform(numbers[0], numbers[1], numbers[2], numbers[3], numbers[4], numbers[5], numbers[6]);
+	}
+	else if(numbers.size() == 9)
+	{
+		t = Transform(numbers[0], numbers[1], numbers[2], 0,
+					  numbers[3], numbers[4], numbers[5], 0,
+					  numbers[6], numbers[7], numbers[8], 0);
+	}
+	else if(numbers.size() == 12)
+	{
+		t = Transform(numbers[0], numbers[1], numbers[2], numbers[3],
+					  numbers[4], numbers[5], numbers[6], numbers[7],
+					  numbers[8], numbers[9], numbers[10], numbers[11]);
+	}
+	return t;
+}
+
+/**
+ * Format (3 values): x y z
+ * Format (6 values): x y z roll pitch yaw
+ * Format (7 values): x y z qx qy qz qw
+ * Format (9 values, 3x3 rotation): r11 r12 r13 r21 r22 r23 r31 r32 r33
+ * Format (12 values, 3x4 transform): r11 r12 r13 tx r21 r22 r23 ty r31 r32 r33 tz
+ */
+bool Transform::canParseString(const std::string & string)
+{
+	std::list<std::string> list = uSplit(string, ' ');
+	return list.size() == 0 || list.size() == 3 || list.size() == 6 || list.size() == 7 || list.size() == 9 || list.size() == 12;
 }
 
 }

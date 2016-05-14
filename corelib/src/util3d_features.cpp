@@ -27,14 +27,18 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "rtabmap/core/util3d_features.h"
 
+#include "rtabmap/core/util2d.h"
 #include "rtabmap/core/util3d.h"
 #include "rtabmap/core/util3d_transforms.h"
 #include "rtabmap/core/util3d_correspondences.h"
+#include "rtabmap/core/util3d_motion_estimation.h"
 
 #include "rtabmap/core/EpipolarGeometry.h"
 
 #include <rtabmap/utilite/ULogger.h>
+#include <rtabmap/utilite/UConversion.h>
 #include <rtabmap/utilite/UMath.h>
+#include <rtabmap/utilite/UStl.h>
 
 #include <opencv2/video/tracking.hpp>
 
@@ -44,191 +48,153 @@ namespace rtabmap
 namespace util3d
 {
 
-pcl::PointCloud<pcl::PointXYZ>::Ptr generateKeypoints3DDepth(
+std::vector<cv::Point3f> generateKeypoints3DDepth(
 		const std::vector<cv::KeyPoint> & keypoints,
 		const cv::Mat & depth,
-		const CameraModel & cameraModel)
+		const CameraModel & cameraModel,
+		float minDepth,
+		float maxDepth)
 {
-	UASSERT(cameraModel.isValid());
+	UASSERT(cameraModel.isValidForProjection());
 	std::vector<CameraModel> models;
 	models.push_back(cameraModel);
-	return generateKeypoints3DDepth(keypoints, depth, models);
+	return generateKeypoints3DDepth(keypoints, depth, models, minDepth, maxDepth);
 }
 
-pcl::PointCloud<pcl::PointXYZ>::Ptr generateKeypoints3DDepth(
+std::vector<cv::Point3f> generateKeypoints3DDepth(
 		const std::vector<cv::KeyPoint> & keypoints,
 		const cv::Mat & depth,
-		const std::vector<CameraModel> & cameraModels)
+		const std::vector<CameraModel> & cameraModels,
+		float minDepth,
+		float maxDepth)
 {
 	UASSERT(!depth.empty() && (depth.type() == CV_32FC1 || depth.type() == CV_16UC1));
 	UASSERT(cameraModels.size());
-	pcl::PointCloud<pcl::PointXYZ>::Ptr keypoints3d(new pcl::PointCloud<pcl::PointXYZ>);
+	std::vector<cv::Point3f> keypoints3d;
 	if(!depth.empty())
 	{
 		UASSERT(int((depth.cols/cameraModels.size())*cameraModels.size()) == depth.cols);
 		float subImageWidth = depth.cols/cameraModels.size();
-		keypoints3d->resize(keypoints.size());
-		for(unsigned int i=0; i!=keypoints.size(); ++i)
+		keypoints3d.resize(keypoints.size());
+		float rgbToDepthFactorX = 1.0f/(cameraModels[0].imageWidth()>0?cameraModels[0].imageWidth()/subImageWidth:1);
+		float rgbToDepthFactorY = 1.0f/(cameraModels[0].imageHeight()>0?cameraModels[0].imageHeight()/depth.rows:1);
+		float bad_point = std::numeric_limits<float>::quiet_NaN ();
+		for(unsigned int i=0; i<keypoints.size(); ++i)
 		{
-			int cameraIndex = int(keypoints[i].pt.x / subImageWidth);
-			UASSERT(cameraIndex < (int)cameraModels.size());
-			pcl::PointXYZ pt = util3d::projectDepthTo3D(
-					depth,
-					keypoints[i].pt.x-subImageWidth*cameraIndex,
-					keypoints[i].pt.y,
-					cameraModels.at(cameraIndex).cx(),
-					cameraModels.at(cameraIndex).cy(),
-					cameraModels.at(cameraIndex).fx(),
-					cameraModels.at(cameraIndex).fy(),
+			float x = keypoints[i].pt.x*rgbToDepthFactorX;
+			float y = keypoints[i].pt.y*rgbToDepthFactorY;
+			int cameraIndex = int(x / subImageWidth);
+			UASSERT_MSG(cameraIndex >= 0 && cameraIndex < (int)cameraModels.size(),
+					uFormat("cameraIndex=%d, models=%d, kpt.x=%f, subImageWidth=%f (Camera model image width=%d)",
+							cameraIndex, (int)cameraModels.size(), keypoints[i].pt.x, subImageWidth, cameraModels[0].imageWidth()).c_str());
+
+			pcl::PointXYZ ptXYZ = util3d::projectDepthTo3D(
+					cameraModels.size()==1?depth:cv::Mat(depth, cv::Range::all(), cv::Range(subImageWidth*cameraIndex,subImageWidth*(cameraIndex+1))),
+					x-subImageWidth*cameraIndex,
+					y,
+					cameraModels.at(cameraIndex).cx()*rgbToDepthFactorX,
+					cameraModels.at(cameraIndex).cy()*rgbToDepthFactorY,
+					cameraModels.at(cameraIndex).fx()*rgbToDepthFactorX,
+					cameraModels.at(cameraIndex).fy()*rgbToDepthFactorY,
 					true);
 
-			if(pcl::isFinite(pt) &&
-				!cameraModels.at(cameraIndex).localTransform().isNull() &&
-			    !cameraModels.at(cameraIndex).localTransform().isIdentity())
+			cv::Point3f pt(bad_point, bad_point, bad_point);
+			if(pcl::isFinite(ptXYZ) &&
+				(minDepth < 0.0f || ptXYZ.z > minDepth) &&
+				(maxDepth <= 0.0f || ptXYZ.z <= maxDepth))
 			{
-				pt = util3d::transformPoint(pt, cameraModels.at(cameraIndex).localTransform());
+				pt = cv::Point3f(ptXYZ.x, ptXYZ.y, ptXYZ.z);
+				if(!cameraModels.at(cameraIndex).localTransform().isNull() &&
+				   !cameraModels.at(cameraIndex).localTransform().isIdentity())
+				{
+					pt = util3d::transformPoint(pt, cameraModels.at(cameraIndex).localTransform());
+				}
 			}
-			keypoints3d->at(i) = pt;
+			keypoints3d.at(i) = pt;
 		}
 	}
 	return keypoints3d;
 }
 
-pcl::PointCloud<pcl::PointXYZ>::Ptr generateKeypoints3DDisparity(
+std::vector<cv::Point3f> generateKeypoints3DDisparity(
 		const std::vector<cv::KeyPoint> & keypoints,
 		const cv::Mat & disparity,
-		const StereoCameraModel & stereoCameraModel)
+		const StereoCameraModel & stereoCameraModel,
+		float minDepth,
+		float maxDepth)
 {
 	UASSERT(!disparity.empty() && (disparity.type() == CV_16SC1 || disparity.type() == CV_32F));
-	UASSERT(stereoCameraModel.isValid());
-	pcl::PointCloud<pcl::PointXYZ>::Ptr keypoints3d(new pcl::PointCloud<pcl::PointXYZ>);
-	keypoints3d->resize(keypoints.size());
+	UASSERT(stereoCameraModel.isValidForProjection());
+	std::vector<cv::Point3f> keypoints3d;
+	keypoints3d.resize(keypoints.size());
+	float bad_point = std::numeric_limits<float>::quiet_NaN ();
 	for(unsigned int i=0; i!=keypoints.size(); ++i)
 	{
-		pcl::PointXYZ pt = util3d::projectDisparityTo3D(
+		cv::Point3f tmpPt = util3d::projectDisparityTo3D(
 				keypoints[i].pt,
 				disparity,
-				stereoCameraModel.left().cx(),
-				stereoCameraModel.left().cy(),
-				stereoCameraModel.left().fx(),
-				stereoCameraModel.baseline());
+				stereoCameraModel);
 
-		if(pcl::isFinite(pt) &&
-			!stereoCameraModel.left().localTransform().isNull() &&
-			!stereoCameraModel.left().localTransform().isIdentity())
+		cv::Point3f pt(bad_point, bad_point, bad_point);
+		if(util3d::isFinite(tmpPt) &&
+			(minDepth < 0.0f || tmpPt.z > minDepth) &&
+			(maxDepth <= 0.0f || tmpPt.z <= maxDepth))
 		{
-			pt = util3d::transformPoint(pt, stereoCameraModel.left().localTransform());
+			pt = tmpPt;
+			if(!stereoCameraModel.left().localTransform().isNull() &&
+				!stereoCameraModel.left().localTransform().isIdentity())
+			{
+				pt = util3d::transformPoint(pt, stereoCameraModel.left().localTransform());
+			}
 		}
-		keypoints3d->at(i) = pt;
+		keypoints3d.at(i) = pt;
 	}
 	return keypoints3d;
 }
 
-pcl::PointCloud<pcl::PointXYZ>::Ptr generateKeypoints3DStereo(
-		const std::vector<cv::KeyPoint> & keypoints,
-		const cv::Mat & leftImage,
-		const cv::Mat & rightImage,
-		float fx,
-		float baseline,
-		float cx,
-		float cy,
-		Transform localTransform,
-		int flowWinSize,
-		int flowMaxLevel,
-		int flowIterations,
-		double flowEps,
-		double maxCorrespondencesSlope)
-{
-	std::vector<cv::Point2f> leftCorners;
-	cv::KeyPoint::convert(keypoints, leftCorners);
-	return generateKeypoints3DStereo(
-			leftCorners,
-			leftImage,
-			rightImage,
-			fx,
-			baseline,
-			cx,
-			cy,
-			localTransform,
-			flowWinSize,
-			flowMaxLevel,
-			flowIterations,
-			flowEps,
-			maxCorrespondencesSlope);
-}
-
-pcl::PointCloud<pcl::PointXYZ>::Ptr generateKeypoints3DStereo(
+std::vector<cv::Point3f> generateKeypoints3DStereo(
 		const std::vector<cv::Point2f> & leftCorners,
-		const cv::Mat & leftImage,
-		const cv::Mat & rightImage,
-		float fx,
-		float baseline,
-		float cx,
-		float cy,
-		Transform localTransform,
-		int flowWinSize,
-		int flowMaxLevel,
-		int flowIterations,
-		double flowEps,
-		double maxCorrespondencesSlope)
+		const std::vector<cv::Point2f> & rightCorners,
+		const StereoCameraModel & model,
+		const std::vector<unsigned char> & mask,
+		float minDepth,
+		float maxDepth)
 {
-	UASSERT(!leftImage.empty() && !rightImage.empty() &&
-			leftImage.type() == CV_8UC1 && rightImage.type() == CV_8UC1 &&
-			leftImage.rows == rightImage.rows && leftImage.cols == rightImage.cols);
-	UASSERT(fx > 0.0f && baseline > 0.0f);
+	UASSERT(leftCorners.size() == rightCorners.size());
+	UASSERT(mask.size() == 0 || leftCorners.size() == mask.size());
+	UASSERT(model.left().fx()> 0.0f && model.baseline() > 0.0f);
 
-	// Find features in the new left image
-	std::vector<unsigned char> status;
-	std::vector<float> err;
-	std::vector<cv::Point2f> rightCorners;
-	UDEBUG("cv::calcOpticalFlowPyrLK() begin");
-	cv::calcOpticalFlowPyrLK(
-			leftImage,
-			rightImage,
-			leftCorners,
-			rightCorners,
-			status,
-			err,
-			cv::Size(flowWinSize, flowWinSize), flowMaxLevel,
-			cv::TermCriteria(cv::TermCriteria::COUNT+cv::TermCriteria::EPS, flowIterations, flowEps),
-			cv::OPTFLOW_LK_GET_MIN_EIGENVALS, 1e-4);
-	UDEBUG("cv::calcOpticalFlowPyrLK() end");
-
-	pcl::PointCloud<pcl::PointXYZ>::Ptr keypoints3d(new pcl::PointCloud<pcl::PointXYZ>);
-	keypoints3d->resize(leftCorners.size());
+	std::vector<cv::Point3f> keypoints3d;
+	keypoints3d.resize(leftCorners.size());
 	float bad_point = std::numeric_limits<float>::quiet_NaN ();
-	UASSERT(status.size() == leftCorners.size());
-	for(unsigned int i=0; i<status.size(); ++i)
+	for(unsigned int i=0; i<leftCorners.size(); ++i)
 	{
-		pcl::PointXYZ pt(bad_point, bad_point, bad_point);
-		if(status[i])
+		cv::Point3f pt(bad_point, bad_point, bad_point);
+		if(mask.empty() || mask[i])
 		{
 			float disparity = leftCorners[i].x - rightCorners[i].x;
-			float slope = fabs((leftCorners[i].y-rightCorners[i].y) / (leftCorners[i].x-rightCorners[i].x));
-			if(disparity > 0.0f &&
-			   (maxCorrespondencesSlope <=0 || fabs(leftCorners[i].y-rightCorners[i].y) <= 1.0f || slope <= maxCorrespondencesSlope))
+			if(disparity != 0.0f)
 			{
-				pcl::PointXYZ tmpPt = util3d::projectDisparityTo3D(
+				cv::Point3f tmpPt = util3d::projectDisparityTo3D(
 						leftCorners[i],
 						disparity,
-						cx,
-						cy,
-						fx,
-						baseline);
+						model);
 
-				if(pcl::isFinite(tmpPt))
+				if(util3d::isFinite(tmpPt) &&
+				   (minDepth < 0.0f || tmpPt.z > minDepth) &&
+				   (maxDepth <= 0.0f || tmpPt.z <= maxDepth))
 				{
 					pt = tmpPt;
-					if(!localTransform.isNull() &&
-					   !localTransform.isIdentity())
+					if(!model.localTransform().isNull() &&
+					   !model.localTransform().isIdentity())
 					{
-						pt = util3d::transformPoint(pt, localTransform);
+						pt = util3d::transformPoint(pt, model.localTransform());
 					}
 				}
 			}
 		}
 
-		keypoints3d->at(i) = pt;
+		keypoints3d.at(i) = pt;
 	}
 	return keypoints3d;
 }
@@ -237,23 +203,26 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr generateKeypoints3DStereo(
 // return 3D points in ref referential
 // If cameraTransform is not null, it will be used for triangulation instead of the camera transform computed by epipolar geometry
 // when refGuess3D is passed and cameraTransform is null, scale will be estimated, returning scaled cloud and camera transform
-std::multimap<int, pcl::PointXYZ> generateWords3DMono(
-		const std::multimap<int, cv::KeyPoint> & refWords,
-		const std::multimap<int, cv::KeyPoint> & nextWords,
+std::map<int, cv::Point3f> generateWords3DMono(
+		const std::map<int, cv::KeyPoint> & refWords,
+		const std::map<int, cv::KeyPoint> & nextWords,
 		const CameraModel & cameraModel,
 		Transform & cameraTransform,
 		int pnpIterations,
 		float pnpReprojError,
 		int pnpFlags,
+		int pnpRefineIterations,
 		float ransacParam1,
 		float ransacParam2,
-		const std::multimap<int, pcl::PointXYZ> & refGuess3D,
+		const std::map<int, cv::Point3f> & refGuess3D,
 		double * varianceOut)
 {
-	UASSERT(cameraModel.isValid());
-	std::multimap<int, pcl::PointXYZ> words3D;
+	UASSERT(cameraModel.isValidForProjection());
+	std::map<int, cv::Point3f> words3D;
 	std::list<std::pair<int, std::pair<cv::KeyPoint, cv::KeyPoint> > > pairs;
-	if(EpipolarGeometry::findPairsUnique(refWords, nextWords, pairs) > 8)
+	int pairsFound = EpipolarGeometry::findPairs(refWords, nextWords, pairs);
+	UDEBUG("pairsFound=%d/%d", pairsFound, int(refWords.size()>nextWords.size()?refWords.size():nextWords.size()));
+	if(pairsFound > 8)
 	{
 		std::vector<unsigned char> status;
 		cv::Mat F = EpipolarGeometry::findFFromWords(pairs, status, ransacParam1, ransacParam2);
@@ -333,11 +302,12 @@ std::multimap<int, pcl::PointXYZ> generateWords3DMono(
 
 					// triangulate the points
 					//std::vector<double> reprojErrors;
-					//pcl::PointCloud<pcl::PointXYZ>::Ptr cloud;
+					//std::vector<cv::Point3f> cloud;
 					//EpipolarGeometry::triangulatePoints(x_norm, xp_norm, P0, P, cloud, reprojErrors);
 					cv::Mat pts4D;
 					cv::triangulatePoints(P0, P, x_norm, xp_norm, pts4D);
 
+					UASSERT((int)indexes.size() == pts4D.cols && pts4D.rows == 4);
 					for(unsigned int i=0; i<indexes.size(); ++i)
 					{
 						//if(cloud->at(i).z > 0)
@@ -347,23 +317,24 @@ std::multimap<int, pcl::PointXYZ> generateWords3DMono(
 						pts4D.col(i) /= pts4D.at<double>(3,i);
 						if(pts4D.at<double>(2,i) > 0)
 						{
-							words3D.insert(std::make_pair(indexes[i], util3d::transformPoint(pcl::PointXYZ(pts4D.at<double>(0,i), pts4D.at<double>(1,i), pts4D.at<double>(2,i)), cameraModel.localTransform())));
+							words3D.insert(std::make_pair(indexes[i], util3d::transformPoint(cv::Point3f(pts4D.at<double>(0,i), pts4D.at<double>(1,i), pts4D.at<double>(2,i)), cameraModel.localTransform())));
 						}
 					}
 
+					UDEBUG("ref guess=%d", (int)refGuess3D.size());
 					if(refGuess3D.size())
 					{
 						// scale estimation
-						pcl::PointCloud<pcl::PointXYZ>::Ptr inliersRef(new pcl::PointCloud<pcl::PointXYZ>);
-						pcl::PointCloud<pcl::PointXYZ>::Ptr inliersRefGuess(new pcl::PointCloud<pcl::PointXYZ>);
+						std::vector<cv::Point3f> inliersRef;
+						std::vector<cv::Point3f> inliersRefGuess;
 						util3d::findCorrespondences(
 								words3D,
 								refGuess3D,
-								*inliersRef,
-								*inliersRefGuess,
+								inliersRef,
+								inliersRefGuess,
 								0);
 
-						if(inliersRef->size())
+						if(inliersRef.size())
 						{
 							// estimate the scale
 							float scale = 1.0f;
@@ -371,18 +342,18 @@ std::multimap<int, pcl::PointXYZ> generateWords3DMono(
 							if(!useCameraTransformGuess)
 							{
 								std::multimap<float, float> scales; // <variance, scale>
-								for(unsigned int i=0; i<inliersRef->size(); ++i)
+								for(unsigned int i=0; i<inliersRef.size(); ++i)
 								{
 									// using x as depth, assuming we are in global referential
-									float s = inliersRefGuess->at(i).x/inliersRef->at(i).x;
-									std::vector<float> errorSqrdDists(inliersRef->size());
-									for(unsigned int j=0; j<inliersRef->size(); ++j)
+									float s = inliersRefGuess.at(i).x/inliersRef.at(i).x;
+									std::vector<float> errorSqrdDists(inliersRef.size());
+									for(unsigned int j=0; j<inliersRef.size(); ++j)
 									{
-										pcl::PointXYZ refPt = inliersRef->at(j);
+										cv::Point3f refPt = inliersRef.at(j);
 										refPt.x *= s;
 										refPt.y *= s;
 										refPt.z *= s;
-										const pcl::PointXYZ & newPt = inliersRefGuess->at(j);
+										const cv::Point3f & newPt = inliersRefGuess.at(j);
 										errorSqrdDists[j] = uNormSquared(refPt.x-newPt.x, refPt.y-newPt.y, refPt.z-newPt.z);
 									}
 									std::sort(errorSqrdDists.begin(), errorSqrdDists.end());
@@ -398,11 +369,11 @@ std::multimap<int, pcl::PointXYZ> generateWords3DMono(
 							else
 							{
 								//compute variance at scale=1
-								std::vector<float> errorSqrdDists(inliersRef->size());
-								for(unsigned int j=0; j<inliersRef->size(); ++j)
+								std::vector<float> errorSqrdDists(inliersRef.size());
+								for(unsigned int j=0; j<inliersRef.size(); ++j)
 								{
-									const pcl::PointXYZ & refPt = inliersRef->at(j);
-									const pcl::PointXYZ & newPt = inliersRefGuess->at(j);
+									const cv::Point3f & refPt = inliersRef.at(j);
+									const cv::Point3f & newPt = inliersRefGuess.at(j);
 									errorSqrdDists[j] = uNormSquared(refPt.x-newPt.x, refPt.y-newPt.y, refPt.z-newPt.z);
 								}
 								std::sort(errorSqrdDists.begin(), errorSqrdDists.end());
@@ -420,24 +391,25 @@ std::multimap<int, pcl::PointXYZ> generateWords3DMono(
 							{
 								std::vector<cv::Point3f> objectPoints(indexes.size());
 								std::vector<cv::Point2f> imagePoints(indexes.size());
-								int oi=0;
+								int oi2=0;
+								UASSERT(indexes.size() == newCorners.size());
 								for(unsigned int i=0; i<indexes.size(); ++i)
 								{
-									std::multimap<int, pcl::PointXYZ>::iterator iter = words3D.find(indexes[i]);
-									if(pcl::isFinite(iter->second))
+									std::map<int, cv::Point3f>::iterator iter = words3D.find(indexes[i]);
+									if(iter!=words3D.end() && util3d::isFinite(iter->second))
 									{
 										iter->second.x *= scale;
 										iter->second.y *= scale;
 										iter->second.z *= scale;
-										objectPoints[oi].x = iter->second.x;
-										objectPoints[oi].y = iter->second.y;
-										objectPoints[oi].z = iter->second.z;
-										imagePoints[oi] = newCorners[i];
-										++oi;
+										objectPoints[oi2].x = iter->second.x;
+										objectPoints[oi2].y = iter->second.y;
+										objectPoints[oi2].z = iter->second.z;
+										imagePoints[oi2] = newCorners[i];
+										++oi2;
 									}
 								}
-								objectPoints.resize(oi);
-								imagePoints.resize(oi);
+								objectPoints.resize(oi2);
+								imagePoints.resize(oi2);
 
 								//PnPRansac
 								Transform guess = cameraModel.localTransform().inverse();
@@ -449,7 +421,7 @@ std::multimap<int, pcl::PointXYZ> generateWords3DMono(
 								cv::Rodrigues(R, rvec);
 								cv::Mat tvec = (cv::Mat_<double>(1,3) << (double)guess.x(), (double)guess.y(), (double)guess.z());
 								std::vector<int> inliersV;
-								cv::solvePnPRansac(
+								util3d::solvePnPRansac(
 										objectPoints,
 										imagePoints,
 										K,
@@ -459,13 +431,10 @@ std::multimap<int, pcl::PointXYZ> generateWords3DMono(
 										true,
 										pnpIterations,
 										pnpReprojError,
-#if CV_MAJOR_VERSION < 3
 										0, // min inliers
-#else
-										0.99, // confidence
-#endif
 										inliersV,
-										pnpFlags);
+										pnpFlags,
+										pnpRefineIterations);
 
 								UDEBUG("PnP inliers = %d / %d", (int)inliersV.size(), (int)objectPoints.size());
 
