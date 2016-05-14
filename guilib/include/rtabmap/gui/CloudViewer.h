@@ -73,42 +73,6 @@ public:
 		const std::string & id,
 		const Transform & pose); //including mesh
 
-	bool updateCloud(
-			const std::string & id,
-			const pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr & cloud,
-			const Transform & pose = Transform::getIdentity(),
-			const QColor & color = QColor());
-
-	bool updateCloud(
-		const std::string & id,
-		const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud,
-		const Transform & pose = Transform::getIdentity(),
-		const QColor & color = QColor());
-
-	bool updateCloud(
-		const std::string & id,
-		const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud,
-		const Transform & pose = Transform::getIdentity(),
-		const QColor & color = QColor());
-
-	bool addOrUpdateCloud(
-			const std::string & id,
-			const pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr & cloud,
-			const Transform & pose = Transform::getIdentity(),
-			const QColor & color = QColor());
-
-	bool addOrUpdateCloud(
-		const std::string & id,
-		const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud,
-		const Transform & pose = Transform::getIdentity(),
-		const QColor & color = QColor());
-
-	bool addOrUpdateCloud(
-			const std::string & id,
-			const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud,
-			const Transform & pose = Transform::getIdentity(),
-			const QColor & color = QColor());
-
 	bool addCloud(
 			const std::string & id,
 			const pcl::PCLPointCloud2Ptr & binaryCloud,
@@ -131,6 +95,12 @@ public:
 
 	bool addCloud(
 			const std::string & id,
+			const pcl::PointCloud<pcl::PointNormal>::Ptr & cloud,
+			const Transform & pose = Transform::getIdentity(),
+			const QColor & color = QColor());
+
+	bool addCloud(
+			const std::string & id,
 			const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud,
 			const Transform & pose = Transform::getIdentity(),
 			const QColor & color = QColor());
@@ -144,6 +114,12 @@ public:
 	bool addCloudMesh(
 			const std::string & id,
 			const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud,
+			const std::vector<pcl::Vertices> & polygons,
+			const Transform & pose = Transform::getIdentity());
+
+	bool addCloudMesh(
+			const std::string & id,
+			const pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr & cloud,
 			const std::vector<pcl::Vertices> & polygons,
 			const Transform & pose = Transform::getIdentity());
 
@@ -172,8 +148,22 @@ public:
 			const std::string & id,
 			const Transform & transform,
 			double scale);
+	bool updateCoordinatePose(
+			const std::string & id,
+			const Transform & transform);
 	void removeCoordinate(const std::string & id);
 	void removeAllCoordinates();
+
+	void addOrUpdateFrustum(
+			const std::string & id,
+			const Transform & transform,
+			double scale,
+			const QColor & color = QColor());
+	bool updateFrustumPose(
+			const std::string & id,
+			const Transform & pose);
+	void removeFrustum(const std::string & id);
+	void removeAllFrustums();
 
 	void addOrUpdateGraph(
 			const std::string & id,
@@ -196,6 +186,12 @@ public:
 	void setTrajectoryShown(bool shown);
 	void setTrajectorySize(unsigned int value);
 	void clearTrajectory();
+	bool isFrustumShown() const;
+	float getFrustumScale() const;
+	QColor getFrustumColor() const;
+	void setFrustumShown(bool shown);
+	void setFrustumScale(float value);
+	void setFrustumColor(QColor value);
 	void resetCamera();
 
 	void removeAllClouds(); //including meshes
@@ -208,6 +204,11 @@ public:
 	const QColor & getDefaultBackgroundColor() const;
 	const QColor & getBackgroundColor() const;
 	Transform getTargetPose() const;
+
+	void setBackfaceCulling(bool enabled, bool frontfaceCulling);
+	void setRenderingRate(double rate);
+	double getRenderingRate() const;
+
 	void getCameraPosition(
 			float & x, float & y, float & z,
 			float & focalX, float & focalY, float & focalZ,
@@ -231,6 +232,7 @@ public:
 	void setGridShown(bool shown);
 	void setGridCellCount(unsigned int count);
 	void setGridCellSize(float size);
+
 	void setWorkingDirectory(const QString & path) {_workingDirectory = path;}
 
 public slots:
@@ -268,16 +270,23 @@ private:
     QAction * _aShowTrajectory;
     QAction * _aSetTrajectorySize;
     QAction * _aClearTrajectory;
+    QAction * _aShowFrustum;
+    QAction * _aSetFrustumScale;
+    QAction * _aSetFrustumColor;
     QAction * _aShowGrid;
     QAction * _aSetGridCellCount;
     QAction * _aSetGridCellSize;
     QAction * _aSetBackgroundColor;
+    QAction * _aSetRenderingRate;
     QMenu * _menu;
     std::set<std::string> _graphes;
     std::set<std::string> _coordinates;
     std::set<std::string> _texts;
+    std::set<std::string> _frustums;
     pcl::PointCloud<pcl::PointXYZ>::Ptr _trajectory;
     unsigned int _maxTrajectorySize;
+    float _frustumScale;
+    QColor _frustumColor;
     unsigned int _gridCellCount;
     float _gridCellSize;
     cv::Vec3d _lastCameraOrientation;
@@ -289,6 +298,9 @@ private:
     QString _workingDirectory;
     QColor _defaultBgColor;
     QColor _currentBgColor;
+    bool _backfaceCulling;
+    bool _frontfaceCulling;
+    double _renderingRate;
 };
 
 } /* namespace rtabmap */

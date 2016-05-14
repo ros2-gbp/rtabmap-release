@@ -33,8 +33,6 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <map>
 #include <list>
 #include <rtabmap/core/Link.h>
-#include <rtabmap/core/Parameters.h>
-#include <rtabmap/core/Signature.h>
 
 namespace rtabmap {
 class Memory;
@@ -42,221 +40,54 @@ class Memory;
 namespace graph {
 
 ////////////////////////////////////////////
-// Graph optimizers
+// Graph utilities
 ////////////////////////////////////////////
-class RTABMAP_EXP Optimizer
-{
-public:
-	enum Type {
-		kTypeUndef = -1,
-		kTypeTORO = 0,
-		kTypeG2O = 1,
-		kTypeGTSAM = 2,
-		kTypeCVSBA = 3
-	};
-	static Optimizer * create(const ParametersMap & parameters);
-	static Optimizer * create(Optimizer::Type & type, const ParametersMap & parameters = ParametersMap());
-
-	// Get connected poses and constraints from a set of links
-	static void getConnectedGraph(
-			int fromId,
-			const std::map<int, Transform> & posesIn,
-			const std::multimap<int, Link> & linksIn, // only one link between two poses
-			std::map<int, Transform> & posesOut,
-			std::multimap<int, Link> & linksOut,
-			int depth = 0);
-
-public:
-	virtual ~Optimizer() {}
-
-	virtual Type type() const = 0;
-
-	int iterations() const {return iterations_;}
-	bool isSlam2d() const {return slam2d_;}
-	bool isCovarianceIgnored() const {return covarianceIgnored_;}
-	double epsilon() const {return epsilon_;}
-	bool isRobust() const {return robust_;}
-
-	// inherited classes should implement one of these methods
-	virtual std::map<int, Transform> optimize(
-			int rootId,
-			const std::map<int, Transform> & poses,
-			const std::multimap<int, Link> & constraints,
-			std::list<std::map<int, Transform> > * intermediateGraphes = 0);
-	virtual std::map<int, Transform> optimizeBA(
-			int rootId,
-			const std::map<int, Transform> & poses,
-			const std::multimap<int, Link> & links,
-			const std::map<int, Signature> & signatures);
-
-	virtual void parseParameters(const ParametersMap & parameters);
-
-protected:
-	Optimizer(
-			int iterations         = Parameters::defaultRGBDOptimizeIterations(),
-			bool slam2d            = Parameters::defaultRGBDOptimizeSlam2D(),
-			bool covarianceIgnored = Parameters::defaultRGBDOptimizeVarianceIgnored(),
-			double epsilon         = Parameters::defaultRGBDOptimizeEpsilon(),
-			bool robust            = Parameters::defaultRGBDOptimizeRobust());
-	Optimizer(const ParametersMap & parameters);
-
-private:
-	int iterations_;
-	bool slam2d_;
-	bool covarianceIgnored_;
-	double epsilon_;
-	bool robust_;
-};
-
-class RTABMAP_EXP TOROOptimizer : public Optimizer
-{
-public:
-	static bool saveGraph(
-			const std::string & fileName,
-			const std::map<int, Transform> & poses,
-			const std::multimap<int, Link> & edgeConstraints);
-	static bool loadGraph(
-			const std::string & fileName,
-			std::map<int, Transform> & poses,
-			std::multimap<int, Link> & edgeConstraints);
-
-public:
-	TOROOptimizer(
-			int iterations         = Parameters::defaultRGBDOptimizeIterations(),
-			bool slam2d            = Parameters::defaultRGBDOptimizeSlam2D(),
-			bool covarianceIgnored = Parameters::defaultRGBDOptimizeVarianceIgnored(),
-			double epsilon         = Parameters::defaultRGBDOptimizeEpsilon()) :
-		Optimizer(iterations, slam2d, covarianceIgnored, epsilon) {}
-	TOROOptimizer(const ParametersMap & parameters) :
-		Optimizer(parameters) {}
-	virtual ~TOROOptimizer() {}
-
-	virtual Type type() const {return kTypeTORO;}
-
-	virtual std::map<int, Transform> optimize(
-			int rootId,
-			const std::map<int, Transform> & poses,
-			const std::multimap<int, Link> & edgeConstraints,
-			std::list<std::map<int, Transform> > * intermediateGraphes = 0);
-};
-
-class RTABMAP_EXP G2OOptimizer : public Optimizer
-{
-public:
-	static bool available();
-	static bool saveGraph(
-			const std::string & fileName,
-			const std::map<int, Transform> & poses,
-			const std::multimap<int, Link> & edgeConstraints,
-			bool useRobustConstraints = false);
-
-public:
-	G2OOptimizer(
-			int iterations         = Parameters::defaultRGBDOptimizeIterations(),
-			bool slam2d            = Parameters::defaultRGBDOptimizeSlam2D(),
-			bool covarianceIgnored = Parameters::defaultRGBDOptimizeVarianceIgnored(),
-			double epsilon         = Parameters::defaultRGBDOptimizeEpsilon(),
-			bool robust            = Parameters::defaultRGBDOptimizeRobust()) :
-		Optimizer(iterations, slam2d, covarianceIgnored, epsilon, robust) {}
-
-	G2OOptimizer(const ParametersMap & parameters) :
-		Optimizer(parameters) {}
-	virtual ~G2OOptimizer() {}
-
-	virtual Type type() const {return kTypeG2O;}
-
-	virtual std::map<int, Transform> optimize(
-			int rootId,
-			const std::map<int, Transform> & poses,
-			const std::multimap<int, Link> & edgeConstraints,
-			std::list<std::map<int, Transform> > * intermediateGraphes = 0);
-};
-
-class RTABMAP_EXP GTSAMOptimizer : public Optimizer
-{
-public:
-	static bool available();
-
-public:
-	GTSAMOptimizer(
-			int iterations         = Parameters::defaultRGBDOptimizeIterations(),
-			bool slam2d            = Parameters::defaultRGBDOptimizeSlam2D(),
-			bool covarianceIgnored = Parameters::defaultRGBDOptimizeVarianceIgnored(),
-			double epsilon         = Parameters::defaultRGBDOptimizeEpsilon(),
-			bool robust            = Parameters::defaultRGBDOptimizeRobust()) :
-		Optimizer(iterations, slam2d, covarianceIgnored, epsilon, robust) {}
-
-	GTSAMOptimizer(const ParametersMap & parameters) :
-		Optimizer(parameters) {}
-	virtual ~GTSAMOptimizer() {}
-
-	virtual Type type() const {return kTypeGTSAM;}
-
-	virtual std::map<int, Transform> optimize(
-			int rootId,
-			const std::map<int, Transform> & poses,
-			const std::multimap<int, Link> & edgeConstraints,
-			std::list<std::map<int, Transform> > * intermediateGraphes = 0);
-};
-
-class RTABMAP_EXP CVSBAOptimizer : public Optimizer
-{
-public:
-	static bool available();
-
-public:
-	CVSBAOptimizer(int iterations = 100, bool slam2d = false, bool covarianceIgnored = false) :
-		Optimizer(iterations, slam2d, covarianceIgnored),
-		inlierDistance_(0.02),
-		minInliers_(10){}
-	CVSBAOptimizer(const ParametersMap & parameters) :
-		Optimizer(parameters),
-		inlierDistance_(0.02),
-		minInliers_(10){}
-	virtual ~CVSBAOptimizer() {}
-
-	virtual Type type() const {return kTypeCVSBA;}
-
-	void setInlierDistance(float inlierDistance) {inlierDistance_ = inlierDistance;}
-	void setMinInliers(int minInliers) {minInliers_ = minInliers;}
-
-	virtual std::map<int, Transform> optimizeBA(
-			int rootId,
-			const std::map<int, Transform> & poses,
-			const std::multimap<int, Link> & links,
-			const std::map<int, Signature> & signatures);
-
-private:
-	float inlierDistance_;
-	float minInliers_;
-};
 
 bool RTABMAP_EXP exportPoses(
 		const std::string & filePath,
 		int format, // 0=Raw (*.txt), 1=RGBD-SLAM (*.txt), 2=KITTI (*.txt), 3=TORO (*.graph), 4=g2o (*.g2o)
 		const std::map<int, Transform> & poses,
-		const std::multimap<int, Link> & constraints, // required for formats 3 and 4
-		const std::map<int, double> & stamps); // required for format 1
+		const std::multimap<int, Link> & constraints = std::multimap<int, Link>(), // required for formats 3 and 4
+		const std::map<int, double> & stamps = std::map<int, double>(),  // required for format 1
+		bool g2oRobust = false); // optional for format 4
 
-////////////////////////////////////////////
-// Graph utilities
-////////////////////////////////////////////
+bool RTABMAP_EXP importPoses(
+		const std::string & filePath,
+		int format, // 0=Raw, 1=RGBD-SLAM, 2=KITTI, 3=TORO, 4=g2o, GPS (t,x,y)
+		std::map<int, Transform> & poses,
+		std::multimap<int, Link> * constraints = 0, // optional for formats 3 and 4
+		std::map<int, double> * stamps = 0); // optional for format 1
+
 std::multimap<int, Link>::iterator RTABMAP_EXP findLink(
 		std::multimap<int, Link> & links,
 		int from,
-		int to);
+		int to,
+		bool checkBothWays = true);
 std::multimap<int, int>::iterator RTABMAP_EXP findLink(
 		std::multimap<int, int> & links,
 		int from,
-		int to);
+		int to,
+		bool checkBothWays = true);
 std::multimap<int, Link>::const_iterator RTABMAP_EXP findLink(
 		const std::multimap<int, Link> & links,
 		int from,
-		int to);
+		int to,
+		bool checkBothWays = true);
 std::multimap<int, int>::const_iterator RTABMAP_EXP findLink(
 		const std::multimap<int, int> & links,
 		int from,
-		int to);
+		int to,
+		bool checkBothWays = true);
+
+//Note: This assumes a coordinate system where X is forward, * Y is up, and Z is right.
+std::map<int, Transform> RTABMAP_EXP frustumPosesFiltering(
+		const std::map<int, Transform> & poses,
+		const Transform & cameraPose,
+		float horizontalFOV = 45.0f, // in degrees, xfov = atan((image_width/2)/fx)*2
+		float verticalFOV = 45.0f,   // in degrees, yfov = atan((image_height/2)/fy)*2
+		float nearClipPlaneDistance = 0.1f,
+		float farClipPlaneDistance = 100.0f,
+		bool negative = false);
 
 /**
  * Get only the the most recent or older poses in the defined radius.
@@ -284,6 +115,12 @@ std::multimap<int, int> RTABMAP_EXP radiusPosesClustering(
 		float radius,
 		float angle);
 
+void reduceGraph(
+		const std::map<int, Transform> & poses,
+		const std::multimap<int, Link> & links,
+		std::multimap<int, int> & hyperNodes, //<parent ID, child ID>
+		std::multimap<int, Link> & hyperLinks);
+
 /**
  * Perform A* path planning in the graph.
  * @param poses The graph's poses
@@ -299,6 +136,23 @@ std::list<std::pair<int, Transform> > RTABMAP_EXP computePath(
 			int from,
 			int to,
 			bool updateNewCosts = false);
+
+/**
+ * Perform Dijkstra path planning in the graph.
+ * @param poses The graph's poses
+ * @param links The graph's links (from node id -> to node id)
+ * @param from initial node
+ * @param to final node
+ * @param updateNewCosts Keep up-to-date costs while traversing the graph.
+ * @param useSameCostForAllLinks Ignore distance between nodes
+ * @return the path ids from id "from" to id "to" including initial and final nodes.
+ */
+std::list<int> RTABMAP_EXP computePath(
+			const std::multimap<int, Link> & links,
+			int from,
+			int to,
+			bool updateNewCosts = false,
+			bool useSameCostForAllLinks = false);
 
 /**
  * Perform Dijkstra path planning in the graph.
@@ -326,7 +180,6 @@ int RTABMAP_EXP findNearestNode(
  * Get nodes near the query
  * @param nodeId the query id
  * @param nodes the nodes to search for
- * @param maxNearestNeighbors Maximum nearest neighbor to get. 0 means all.
  * @param radius radius to search for (m)
  * @return the nodes with squared distance to query node.
  */
@@ -337,7 +190,8 @@ std::map<int, float> RTABMAP_EXP getNodesInRadius(
 std::map<int, Transform> RTABMAP_EXP getPosesInRadius(
 		int nodeId,
 		const std::map<int, Transform> & nodes,
-		float radius);
+		float radius,
+		float angle = 0.0f);
 
 float RTABMAP_EXP computePathLength(
 		const std::vector<std::pair<int, Transform> > & path,

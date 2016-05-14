@@ -31,30 +31,45 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/core/CameraRGBD.h"
 #include "rtabmap/core/util2d.h"
 #include "rtabmap/core/util3d.h"
+#include "rtabmap/core/util3d_surface.h"
+#include "rtabmap/core/util3d_filtering.h"
+#include "rtabmap/core/StereoDense.h"
 
 #include <rtabmap/utilite/UTimer.h>
 #include <rtabmap/utilite/ULogger.h>
+
+#include <pcl/io/io.h>
 
 namespace rtabmap
 {
 
 // ownership transferred
-CameraThread::CameraThread(Camera * camera) :
+CameraThread::CameraThread(Camera * camera, const ParametersMap & parameters) :
 		_camera(camera),
 		_mirroring(false),
 		_colorOnly(false),
-		_stereoToDepth(false)
+		_imageDecimation(1),
+		_stereoToDepth(false),
+		_scanFromDepth(false),
+		_scanDecimation(4),
+		_scanMaxDepth(4.0f),
+		_scanMinDepth(0.0f),
+		_scanVoxelSize(0.0f),
+		_scanNormalsK(0),
+		_stereoDense(new StereoBM(parameters))
 {
 	UASSERT(_camera != 0);
 }
 
 CameraThread::~CameraThread()
 {
+	UDEBUG("");
 	join(true);
 	if(_camera)
 	{
 		delete _camera;
 	}
+	delete _stereoDense;
 }
 
 void CameraThread::setImageRate(float imageRate)
@@ -67,9 +82,9 @@ void CameraThread::setImageRate(float imageRate)
 
 void CameraThread::mainLoop()
 {
-	UTimer timer;
 	UDEBUG("");
-	SensorData data = _camera->takeImage();
+	CameraInfo info;
+	SensorData data = _camera->takeImage(&info);
 
 	if(!data.imageRaw().empty())
 	{
@@ -77,12 +92,47 @@ void CameraThread::mainLoop()
 		{
 			data.setDepthOrRightRaw(cv::Mat());
 		}
+		if(_imageDecimation>1 && !data.imageRaw().empty())
+		{
+			UDEBUG("");
+			UTimer timer;
+			if(!data.depthRaw().empty() &&
+			   !(data.depthRaw().rows % _imageDecimation == 0 && data.depthRaw().cols % _imageDecimation == 0))
+			{
+				UERROR("Decimation of depth images should be exact (decimation=%d, size=(%d,%d))! "
+					   "Images won't be resized.", _imageDecimation, data.depthRaw().cols, data.depthRaw().rows);
+			}
+			else
+			{
+				data.setImageRaw(util2d::decimate(data.imageRaw(), _imageDecimation));
+				data.setDepthOrRightRaw(util2d::decimate(data.depthOrRightRaw(), _imageDecimation));
+				std::vector<CameraModel> models = data.cameraModels();
+				for(unsigned int i=0; i<models.size(); ++i)
+				{
+					if(models[i].isValidForProjection())
+					{
+						models[i] = models[i].scaled(1.0/double(_imageDecimation));
+					}
+				}
+				data.setCameraModels(models);
+				StereoCameraModel stereoModel = data.stereoCameraModel();
+				if(stereoModel.isValidForProjection())
+				{
+					stereoModel.scale(1.0/double(_imageDecimation));
+					data.setStereoCameraModel(stereoModel);
+				}
+			}
+			info.timeImageDecimation = timer.ticks();
+		}
 		if(_mirroring && data.cameraModels().size() == 1)
 		{
+			UDEBUG("");
+			UTimer timer;
 			cv::Mat tmpRgb;
 			cv::flip(data.imageRaw(), tmpRgb, 1);
 			data.setImageRaw(tmpRgb);
-			if(data.cameraModels()[0].cx())
+			UASSERT_MSG(data.cameraModels().size() <= 1 && !data.stereoCameraModel().isValidForProjection(), "Only single RGBD cameras are supported for mirroring.");
+			if(data.cameraModels().size() && data.cameraModels()[0].cx())
 			{
 				CameraModel tmpModel(
 						data.cameraModels()[0].fx(),
@@ -98,19 +148,71 @@ void CameraThread::mainLoop()
 				cv::flip(data.depthRaw(), tmpDepth, 1);
 				data.setDepthOrRightRaw(tmpDepth);
 			}
+			info.timeMirroring = timer.ticks();
 		}
-		if(_stereoToDepth && data.stereoCameraModel().isValid() && !data.rightRaw().empty())
+		if(_stereoToDepth && data.stereoCameraModel().isValidForProjection() && !data.rightRaw().empty())
 		{
+			UDEBUG("");
+			UTimer timer;
 			cv::Mat depth = util2d::depthFromDisparity(
-					util2d::disparityFromStereoImages(data.imageRaw(), data.rightRaw()),
+					_stereoDense->computeDisparity(data.imageRaw(), data.rightRaw()),
 					data.stereoCameraModel().left().fx(),
 					data.stereoCameraModel().baseline());
 			data.setCameraModel(data.stereoCameraModel().left());
 			data.setDepthOrRightRaw(depth);
 			data.setStereoCameraModel(StereoCameraModel());
+			info.timeDisparity = timer.ticks();
+			UDEBUG("Computing disparity = %f s", info.timeDisparity);
+		}
+		if(_scanFromDepth &&
+			data.cameraModels().size() &&
+			data.cameraModels().at(0).isValidForProjection() &&
+			!data.depthRaw().empty())
+		{
+			UDEBUG("");
+			if(data.laserScanRaw().empty())
+			{
+				UASSERT(_scanDecimation >= 1);
+				UTimer timer;
+				pcl::IndicesPtr validIndices(new std::vector<int>);
+				pcl::PointCloud<pcl::PointXYZ>::Ptr cloud = util3d::cloudFromSensorData(data, _scanDecimation, _scanMaxDepth, _scanMinDepth, validIndices.get());
+				float maxPoints = (data.depthRaw().rows/_scanDecimation)*(data.depthRaw().cols/_scanDecimation);
+				if(_scanVoxelSize>0.0f)
+				{
+					cloud = util3d::voxelize(cloud, validIndices, _scanVoxelSize);
+					float ratio = float(cloud->size()) / float(validIndices->size());
+					maxPoints = ratio * maxPoints;
+				}
+				else if(!cloud->is_dense)
+				{
+					pcl::PointCloud<pcl::PointXYZ>::Ptr denseCloud(new pcl::PointCloud<pcl::PointXYZ>);
+					pcl::copyPointCloud(*cloud, *validIndices, *denseCloud);
+					cloud = denseCloud;
+				}
+
+				cv::Mat scan;
+				if(_scanNormalsK>0)
+				{
+					scan = util3d::laserScanFromPointCloud(*util3d::computeNormals(cloud, _scanNormalsK));
+				}
+				else
+				{
+					scan = util3d::laserScanFromPointCloud(*cloud);
+				}
+				data.setLaserScanRaw(scan, (int)maxPoints, _scanMaxDepth);
+				info.timeScanFromDepth = timer.ticks();
+				UDEBUG("Computing scan from depth = %f s", info.timeScanFromDepth);
+			}
+			else
+			{
+				UWARN("Option to create laser scan from depth image is enabled, but "
+					  "there is already a laser scan in the captured sensor data. Scan from "
+					  "depth will not be created.");
+			}
 		}
 
-		this->post(new CameraEvent(data, _camera->getSerial()));
+		info.cameraName = _camera->getSerial();
+		this->post(new CameraEvent(data, info));
 	}
 	else if(!this->isKilled())
 	{
@@ -122,6 +224,7 @@ void CameraThread::mainLoop()
 
 void CameraThread::mainLoopKill()
 {
+	UDEBUG("");
 	if(dynamic_cast<CameraFreenect2*>(_camera) != 0)
 	{
 		int i=20;

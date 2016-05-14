@@ -29,7 +29,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "ui_postProcessingDialog.h"
 
 #include <QPushButton>
-#include <rtabmap/core/Graph.h>
+#include <rtabmap/core/Optimizer.h>
 
 namespace rtabmap {
 
@@ -39,10 +39,20 @@ PostProcessingDialog::PostProcessingDialog(QWidget * parent) :
 	_ui = new Ui_PostProcessingDialog();
 	_ui->setupUi(this);
 
-	if(!graph::CVSBAOptimizer::available())
+	if(!Optimizer::isAvailable(Optimizer::kTypeCVSBA) && !Optimizer::isAvailable(Optimizer::kTypeG2O))
 	{
 		_ui->sba->setEnabled(false);
 		_ui->sba->setChecked(false);
+	}
+	else if(!Optimizer::isAvailable(Optimizer::kTypeCVSBA))
+	{
+		_ui->comboBox_sbaType->setItemData(1, 0, Qt::UserRole - 1);
+		_ui->comboBox_sbaType->setCurrentIndex(0);
+	}
+	else if(!Optimizer::isAvailable(Optimizer::kTypeG2O))
+	{
+		_ui->comboBox_sbaType->setItemData(0, 0, Qt::UserRole - 1);
+		_ui->comboBox_sbaType->setCurrentIndex(1);
 	}
 
 	restoreDefaults();
@@ -57,20 +67,27 @@ PostProcessingDialog::PostProcessingDialog(QWidget * parent) :
 	connect(_ui->clusterRadius, SIGNAL(valueChanged(double)), this, SIGNAL(configChanged()));
 	connect(_ui->clusterAngle, SIGNAL(valueChanged(double)), this, SIGNAL(configChanged()));
 	connect(_ui->iterations, SIGNAL(valueChanged(int)), this, SIGNAL(configChanged()));
-	connect(_ui->reextractFeatures, SIGNAL(stateChanged(int)), this, SIGNAL(configChanged()));
 	connect(_ui->refineNeighborLinks, SIGNAL(stateChanged(int)), this, SIGNAL(configChanged()));
 	connect(_ui->refineLoopClosureLinks, SIGNAL(stateChanged(int)), this, SIGNAL(configChanged()));
 
 	connect(_ui->sba, SIGNAL(clicked(bool)), this, SIGNAL(configChanged()));
 	connect(_ui->sba_iterations, SIGNAL(valueChanged(int)), this, SIGNAL(configChanged()));
 	connect(_ui->sba_epsilon, SIGNAL(valueChanged(double)), this, SIGNAL(configChanged()));
-	connect(_ui->sba_minInlierDistance, SIGNAL(valueChanged(double)), this, SIGNAL(configChanged()));
-	connect(_ui->sba_minInliers, SIGNAL(valueChanged(int)), this, SIGNAL(configChanged()));
+	connect(_ui->comboBox_sbaType, SIGNAL(currentIndexChanged(int)), this, SIGNAL(configChanged()));
+	connect(_ui->comboBox_sbaType, SIGNAL(currentIndexChanged(int)), this, SLOT(updateVisibility()));
+
+	updateVisibility();
 }
 
 PostProcessingDialog::~PostProcessingDialog()
 {
 	delete _ui;
+}
+
+void PostProcessingDialog::updateVisibility()
+{
+	_ui->sba_variance->setVisible(_ui->comboBox_sbaType->currentIndex() == 0);
+	_ui->label_variance->setVisible(_ui->comboBox_sbaType->currentIndex() == 0);
 }
 
 void PostProcessingDialog::saveSettings(QSettings & settings, const QString & group) const
@@ -83,14 +100,13 @@ void PostProcessingDialog::saveSettings(QSettings & settings, const QString & gr
 	settings.setValue("cluster_radius", this->clusterRadius());
 	settings.setValue("cluster_angle", this->clusterAngle());
 	settings.setValue("iterations", this->iterations());
-	settings.setValue("reextract_features", this->isReextractFeatures());
 	settings.setValue("refine_neigbors", this->isRefineNeighborLinks());
 	settings.setValue("refine_lc", this->isRefineLoopClosureLinks());
 	settings.setValue("sba", this->isSBA());
 	settings.setValue("sba_iterations", this->sbaIterations());
 	settings.setValue("sba_epsilon", this->sbaEpsilon());
-	settings.setValue("sba_inlier_distance", this->sbaInlierDistance());
-	settings.setValue("sba_min_inliers", this->sbaMinInliers());
+	settings.setValue("sba_type", this->sbaType());
+	settings.setValue("sba_variance", this->sbaVariance());
 	if(!group.isEmpty())
 	{
 		settings.endGroup();
@@ -107,14 +123,13 @@ void PostProcessingDialog::loadSettings(QSettings & settings, const QString & gr
 	this->setClusterRadius(settings.value("cluster_radius", this->clusterRadius()).toDouble());
 	this->setClusterAngle(settings.value("cluster_angle", this->clusterAngle()).toDouble());
 	this->setIterations(settings.value("iterations", this->iterations()).toInt());
-	this->setReextractFeatures(settings.value("reextract_features", this->isReextractFeatures()).toBool());
 	this->setRefineNeighborLinks(settings.value("refine_neigbors", this->isRefineNeighborLinks()).toBool());
 	this->setRefineLoopClosureLinks(settings.value("refine_lc", this->isRefineLoopClosureLinks()).toBool());
 	this->setSBA(settings.value("sba", this->isSBA()).toBool());
 	this->setSBAIterations(settings.value("sba_iterations", this->sbaIterations()).toInt());
 	this->setSBAEpsilon(settings.value("sba_epsilon", this->sbaEpsilon()).toDouble());
-	this->setSBAInlierDistance(settings.value("sba_inlier_distance", this->sbaInlierDistance()).toDouble());
-	this->setSBAMinInliers(settings.value("sba_min_inliers", this->sbaMinInliers()).toInt());
+	this->setSBAType((Optimizer::Type)settings.value("sba_type", this->sbaType()).toInt());
+	this->setSBAVariance(settings.value("sba_variance", this->sbaVariance()).toDouble());
 	if(!group.isEmpty())
 	{
 		settings.endGroup();
@@ -127,14 +142,13 @@ void PostProcessingDialog::restoreDefaults()
 	setClusterRadius(0.5);
 	setClusterAngle(30);
 	setIterations(1);
-	setReextractFeatures(false);
 	setRefineNeighborLinks(false);
 	setRefineLoopClosureLinks(false);
 	setSBA(false);
 	setSBAIterations(20);
-	setSBAEpsilon(0.0001);
-	setSBAInlierDistance(0.05);
-	setSBAMinInliers(10);
+	setSBAEpsilon(0.0);
+	setSBAType(!Optimizer::isAvailable(Optimizer::kTypeG2O)&&Optimizer::isAvailable(Optimizer::kTypeCVSBA)?Optimizer::kTypeCVSBA:Optimizer::kTypeG2O);
+	setSBAVariance(1.0);
 }
 
 void PostProcessingDialog::updateButtonBox()
@@ -163,11 +177,6 @@ int PostProcessingDialog::iterations() const
 	return _ui->iterations->value();
 }
 
-bool PostProcessingDialog::isReextractFeatures() const
-{
-	return _ui->reextractFeatures->isChecked();
-}
-
 bool PostProcessingDialog::isRefineNeighborLinks() const
 {
 	return _ui->refineNeighborLinks->isChecked();
@@ -191,13 +200,13 @@ double PostProcessingDialog::sbaEpsilon() const
 {
 	return _ui->sba_epsilon->value();
 }
-double PostProcessingDialog::sbaInlierDistance() const
+double PostProcessingDialog::sbaVariance() const
 {
-	return _ui->sba_minInlierDistance->value();
+	return _ui->sba_variance->value();
 }
-int PostProcessingDialog::sbaMinInliers() const
+Optimizer::Type PostProcessingDialog::sbaType() const
 {
-	return _ui->sba_minInliers->value();
+	return _ui->comboBox_sbaType->currentIndex()==0?Optimizer::kTypeG2O:Optimizer::kTypeCVSBA;
 }
 
 //setters
@@ -217,10 +226,6 @@ void PostProcessingDialog::setIterations(int iterations)
 {
 	_ui->iterations->setValue(iterations);
 }
-void PostProcessingDialog::setReextractFeatures(bool on)
-{
-	_ui->reextractFeatures->setChecked(on);
-}
 void PostProcessingDialog::setRefineNeighborLinks(bool on)
 {
 	_ui->refineNeighborLinks->setChecked(on);
@@ -231,7 +236,7 @@ void PostProcessingDialog::setRefineLoopClosureLinks(bool on)
 }
 void PostProcessingDialog::setSBA(bool on)
 {
-	_ui->sba->setChecked(graph::CVSBAOptimizer::available() && on);
+	_ui->sba->setChecked(Optimizer::isAvailable(Optimizer::kTypeCVSBA) && on);
 }
 void PostProcessingDialog::setSBAIterations(int iterations)
 {
@@ -241,13 +246,20 @@ void PostProcessingDialog::setSBAEpsilon(double epsilon)
 {
 	_ui->sba_epsilon->setValue(epsilon);
 }
-void PostProcessingDialog::setSBAInlierDistance(double inlierDistance)
+void PostProcessingDialog::setSBAVariance(double variance)
 {
-	_ui->sba_minInlierDistance->setValue(inlierDistance);
+	_ui->sba_variance->setValue(variance);
 }
-void PostProcessingDialog::setSBAMinInliers(int minInliers)
+void PostProcessingDialog::setSBAType(Optimizer::Type type)
 {
-	_ui->sba_minInliers->setValue(minInliers);
+	if(type == Optimizer::kTypeCVSBA)
+	{
+		_ui->comboBox_sbaType->setCurrentIndex(1);
+	}
+	else
+	{
+		_ui->comboBox_sbaType->setCurrentIndex(0);
+	}
 }
 
 
