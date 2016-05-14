@@ -26,6 +26,7 @@ SET(SRC_FILES
     Signature.cpp
 	Features2d.cpp
 	Transform.cpp
+	GeodeticCoords.cpp
 	
 	util2d.cpp
 	
@@ -44,25 +45,39 @@ SET(SRC_FILES
 	Compression.cpp
 	Link.cpp
 	
+	Optimizer.cpp
+	OptimizerTORO.cpp
+	OptimizerG2O.cpp
+	OptimizerGTSAM.cpp
+	OptimizerCVSBA.cpp
+	
+	Registration.cpp
+	RegistrationIcp.cpp
+	RegistrationVis.cpp
+	
 	Odometry.cpp
 	OdometryThread.cpp
-	OdometryBOW.cpp
-	OdometryOpticalFlow.cpp
+	OdometryF2M.cpp
 	OdometryMono.cpp
-	OdometryICP.cpp
+	OdometryF2F.cpp
 	
-	toro3d/posegraph3.cpp
-	toro3d/treeoptimizer3_iteration.cpp
-	toro3d/treeoptimizer3.cpp
-	
-	toro3d/posegraph2.cpp
-	toro3d/treeoptimizer2.cpp
-	
+	Stereo.cpp
+	StereoDense.cpp
+	StereoCameraModel.cpp
+		
 	rtflann/ext/lz4.c
 	rtflann/ext/lz4hc.c
 	
-	sqlite3/sqlite3.c
+	sqlite3/sqlite3.c	
 )
+
+IF(OpenCV_VERSION_MAJOR EQUAL 2)
+SET(SRC_FILES
+    ${SRC_FILES}
+    opencv/Orb.cpp
+    opencv/solvepnp.cpp
+)
+ENDIF(OpenCV_VERSION_MAJOR EQUAL 2)
 
 SET(INCLUDE_DIRS
     ${PROJECT_SOURCE_DIR}/utilite/include
@@ -81,7 +96,6 @@ SET(LIBRARIES
 )
 
 IF(Freenect_FOUND)
-	ADD_DEFINITIONS("-DWITH_FREENECT")
 	IF(Freenect_DASH_INCLUDES)
 	   ADD_DEFINITIONS("-DFREENECT_DASH_INCLUDES")
 	ENDIF(Freenect_DASH_INCLUDES)
@@ -96,7 +110,6 @@ IF(Freenect_FOUND)
 ENDIF(Freenect_FOUND)
 
 IF(OpenNI2_FOUND)
-	ADD_DEFINITIONS("-DWITH_OPENNI2")
 	SET(INCLUDE_DIRS
 		${INCLUDE_DIRS}
 		${OpenNI2_INCLUDE_DIRS}
@@ -108,7 +121,6 @@ IF(OpenNI2_FOUND)
 ENDIF(OpenNI2_FOUND)
 
 IF(freenect2_FOUND)
-	ADD_DEFINITIONS("-DWITH_FREENECT2")
 	SET(INCLUDE_DIRS
 		${INCLUDE_DIRS}
 		${freenect2_INCLUDE_DIRS}
@@ -120,7 +132,6 @@ IF(freenect2_FOUND)
 ENDIF(freenect2_FOUND)
 
 IF(DC1394_FOUND)
-	ADD_DEFINITIONS("-DWITH_DC1394")
 	SET(INCLUDE_DIRS
 		${INCLUDE_DIRS}
 		${DC1394_INCLUDE_DIRS}
@@ -132,7 +143,6 @@ IF(DC1394_FOUND)
 ENDIF(DC1394_FOUND)
 
 IF(FlyCapture2_FOUND)
-	ADD_DEFINITIONS("-DWITH_FLYCAPTURE2")
 	SET(INCLUDE_DIRS
 		${INCLUDE_DIRS}
 		${FlyCapture2_INCLUDE_DIRS}
@@ -143,8 +153,19 @@ IF(FlyCapture2_FOUND)
 	)
 ENDIF(FlyCapture2_FOUND)
 
+IF(WITH_TORO)
+	SET(SRC_FILES
+    	${SRC_FILES}
+		toro3d/posegraph3.cpp
+		toro3d/treeoptimizer3_iteration.cpp
+		toro3d/treeoptimizer3.cpp
+	
+		toro3d/posegraph2.cpp
+		toro3d/treeoptimizer2.cpp
+	)
+ENDIF(WITH_TORO)
+
 IF(G2O_FOUND)
-	ADD_DEFINITIONS("-DWITH_G2O")
 	SET(INCLUDE_DIRS 
 		${INCLUDE_DIRS} 
 		${G2O_INCLUDE_DIRS}
@@ -153,22 +174,20 @@ IF(G2O_FOUND)
 		${LIBRARIES}
 		${G2O_LIBRARIES}
 	)
-	#Newest versions require std11
-	SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
 	
-	SET(SRC_FILES
-    	${SRC_FILES}
-		vertigo/g2o/edge_se2MaxMixture.cpp
-		vertigo/g2o/edge_se2Switchable.cpp
-		vertigo/g2o/edge_se3Switchable.cpp
-		vertigo/g2o/edge_switchPrior.cpp
-		vertigo/g2o/types_g2o_robust.cpp
-		vertigo/g2o/vertex_switchLinear.cpp
-	)
+	IF(WITH_VERTIGO)
+		SET(SRC_FILES
+    		${SRC_FILES}
+			vertigo/g2o/edge_se2Switchable.cpp
+			vertigo/g2o/edge_se3Switchable.cpp
+			vertigo/g2o/edge_switchPrior.cpp
+			vertigo/g2o/types_g2o_robust.cpp
+			vertigo/g2o/vertex_switchLinear.cpp
+		)
+	ENDIF(WITH_VERTIGO)
 ENDIF(G2O_FOUND)
 
 IF(GTSAM_FOUND)
-	ADD_DEFINITIONS("-DWITH_GTSAM")
 	SET(INCLUDE_DIRS 
 		${INCLUDE_DIRS} 
 		${GTSAM_INCLUDE_DIRS}
@@ -180,7 +199,6 @@ IF(GTSAM_FOUND)
 ENDIF(GTSAM_FOUND)
 
 IF(cvsba_FOUND)
-	ADD_DEFINITIONS("-DWITH_CVSBA")
 	SET(INCLUDE_DIRS 
 		${INCLUDE_DIRS} 
 		${cvsba_INCLUDE_DIRS}
@@ -209,12 +227,29 @@ SET(RESOURCES_HEADERS
 	${CMAKE_CURRENT_BINARY_DIR}/DatabaseSchema_sql.h 
 )
 
-ADD_CUSTOM_COMMAND(
-   OUTPUT ${RESOURCES_HEADERS}
-   COMMAND ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/uresourcegenerator -n rtabmap -p ${CMAKE_CURRENT_BINARY_DIR} ${RESOURCES}
-   COMMENT "[Creating resources]"
-   DEPENDS ${R} uresourcegenerator
-)
+IF(ANDROID)
+
+   IF(NOT RTABMAP_RES_TOOL)
+      find_host_program(RTABMAP_RES_TOOL rtabmap-res_tool)
+      IF(NOT RTABMAP_RES_TOOL)
+         MESSAGE( FATAL_ERROR "RTABMAP_RES_TOOL is not defined (it is the path to \"rtabmap-res_tool\" application created by a non-Android build)." )
+      ENDIF(NOT RTABMAP_RES_TOOL)
+   ENDIF(NOT RTABMAP_RES_TOOL)
+
+   ADD_CUSTOM_COMMAND(
+      OUTPUT ${RESOURCES_HEADERS}
+      COMMAND ${RTABMAP_RES_TOOL} -n rtabmap -p ${CMAKE_CURRENT_BINARY_DIR} ${RESOURCES}
+      COMMENT "[Creating resources]"
+      DEPENDS ${R}
+   )
+ELSE()
+   ADD_CUSTOM_COMMAND(
+      OUTPUT ${RESOURCES_HEADERS}
+      COMMAND ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/rtabmap-res_tool -n rtabmap -p ${CMAKE_CURRENT_BINARY_DIR} ${RESOURCES}
+      COMMENT "[Creating resources]"
+      DEPENDS ${R} res_tool
+   )
+ENDIF()
 
 ####################################
 # Generate resources files END
