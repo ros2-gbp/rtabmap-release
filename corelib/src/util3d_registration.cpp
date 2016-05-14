@@ -33,6 +33,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <pcl/registration/icp.h>
 #include <pcl/registration/transformation_estimation_2D.h>
+#include <pcl/registration/transformation_estimation_svd.h>
 #include <pcl/sample_consensus/sac_model_registration.h>
 #include <pcl/sample_consensus/ransac.h>
 #include <rtabmap/utilite/ULogger.h>
@@ -44,14 +45,26 @@ namespace util3d
 {
 
 // Get transform from cloud2 to cloud1
+Transform transformFromXYZCorrespondencesSVD(
+	const pcl::PointCloud<pcl::PointXYZ> & cloud1,
+	const pcl::PointCloud<pcl::PointXYZ> & cloud2)
+{
+	pcl::registration::TransformationEstimationSVD<pcl::PointXYZ, pcl::PointXYZ> svd;
+
+	// Perform the alignment
+	Eigen::Matrix4f matrix;
+	svd.estimateRigidTransformation(cloud1, cloud2, matrix);
+	return Transform::fromEigen4f(matrix);
+}
+
+// Get transform from cloud2 to cloud1
 Transform transformFromXYZCorrespondences(
 		const pcl::PointCloud<pcl::PointXYZ>::ConstPtr & cloud1,
 		const pcl::PointCloud<pcl::PointXYZ>::ConstPtr & cloud2,
 		double inlierThreshold,
 		int iterations,
-		bool refineModel,
-		double refineModelSigma,
-		int refineModelIterations,
+		int refineIterations,
+		double refineSigma,
 		std::vector<int> * inliersOut,
 		double * varianceOut)
 {
@@ -97,11 +110,9 @@ Transform transformFromXYZCorrespondences(
 			sac.getInliers(inliers);
 			sac.getModelCoefficients (model_coefficients);
 
-			if (refineModel)
+			if (refineIterations>0)
 			{
-				double inlier_distance_threshold_sqr = inlierThreshold * inlierThreshold;
 				double error_threshold = inlierThreshold;
-				double sigma_sqr = refineModelSigma * refineModelSigma;
 				int refine_iterations = 0;
 				bool inlier_changed = false, oscillating = false;
 				std::vector<int> new_inliers, prev_inliers = inliers;
@@ -121,7 +132,7 @@ Transform transformFromXYZCorrespondences(
 					if (new_inliers.empty ())
 					{
 						++refine_iterations;
-						if (refine_iterations >= refineModelIterations)
+						if (refine_iterations >= refineIterations)
 						{
 							break;
 						}
@@ -130,10 +141,10 @@ Transform transformFromXYZCorrespondences(
 
 					// Estimate the variance and the new threshold
 					double variance = model->computeVariance ();
-					error_threshold = sqrt (std::min (inlier_distance_threshold_sqr, sigma_sqr * variance));
+					error_threshold = std::min (inlierThreshold, refineSigma * sqrt(variance));
 
 					UDEBUG ("RANSAC refineModel: New estimated error threshold: %f (variance=%f) on iteration %d out of %d.",
-						  error_threshold, variance, refine_iterations, refineModelIterations);
+						  error_threshold, variance, refine_iterations, refineIterations);
 					inlier_changed = false;
 					std::swap (prev_inliers, new_inliers);
 
@@ -165,7 +176,7 @@ Transform transformFromXYZCorrespondences(
 						}
 					}
 				}
-				while (inlier_changed && ++refine_iterations < refineModelIterations);
+				while (inlier_changed && ++refine_iterations < refineIterations);
 
 				// If the new set of inliers is empty, we didn't do a good job refining
 				if (new_inliers.empty ())
@@ -294,19 +305,28 @@ Transform icp(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr & cloud_source,
 			  double maxCorrespondenceDistance,
 			  int maximumIterations,
 			  bool & hasConverged,
-			  pcl::PointCloud<pcl::PointXYZ> & cloud_source_registered)
+			  pcl::PointCloud<pcl::PointXYZ> & cloud_source_registered,
+			  float epsilon,
+			  bool icp2D)
 {
 	pcl::IterativeClosestPoint<pcl::PointXYZ, pcl::PointXYZ> icp;
 	// Set the input source and target
 	icp.setInputTarget (cloud_target);
 	icp.setInputSource (cloud_source);
 
+	if(icp2D)
+	{
+		pcl::registration::TransformationEstimation2D<pcl::PointXYZ, pcl::PointXYZ>::Ptr est;
+		est.reset(new pcl::registration::TransformationEstimation2D<pcl::PointXYZ, pcl::PointXYZ>);
+		icp.setTransformationEstimation(est);
+	}
+
 	// Set the max correspondence distance to 5cm (e.g., correspondences with higher distances will be ignored)
 	icp.setMaxCorrespondenceDistance (maxCorrespondenceDistance);
 	// Set the maximum number of iterations (criterion 1)
 	icp.setMaximumIterations (maximumIterations);
 	// Set the transformation epsilon (criterion 2)
-	//icp.setTransformationEpsilon (transformationEpsilon);
+	icp.setTransformationEpsilon (epsilon);
 	// Set the euclidean distance difference epsilon (criterion 3)
 	//icp.setEuclideanFitnessEpsilon (1);
 	//icp.setRANSACOutlierRejectionThreshold(maxCorrespondenceDistance);
@@ -324,12 +344,21 @@ Transform icpPointToPlane(
 		double maxCorrespondenceDistance,
 		int maximumIterations,
 		bool & hasConverged,
-		pcl::PointCloud<pcl::PointNormal> & cloud_source_registered)
+		pcl::PointCloud<pcl::PointNormal> & cloud_source_registered,
+		float epsilon,
+		bool icp2D)
 {
 	pcl::IterativeClosestPoint<pcl::PointNormal, pcl::PointNormal> icp;
 	// Set the input source and target
 	icp.setInputTarget (cloud_target);
 	icp.setInputSource (cloud_source);
+
+	if(icp2D)
+	{
+		pcl::registration::TransformationEstimation2D<pcl::PointNormal, pcl::PointNormal>::Ptr est;
+		est.reset(new pcl::registration::TransformationEstimation2D<pcl::PointNormal, pcl::PointNormal>);
+		icp.setTransformationEstimation(est);
+	}
 
 	pcl::registration::TransformationEstimationPointToPlaneLLS<pcl::PointNormal, pcl::PointNormal>::Ptr est;
 	est.reset(new pcl::registration::TransformationEstimationPointToPlaneLLS<pcl::PointNormal, pcl::PointNormal>);
@@ -340,7 +369,7 @@ Transform icpPointToPlane(
 	// Set the maximum number of iterations (criterion 1)
 	icp.setMaximumIterations (maximumIterations);
 	// Set the transformation epsilon (criterion 2)
-	//icp.setTransformationEpsilon (transformationEpsilon);
+	icp.setTransformationEpsilon (epsilon);
 	// Set the euclidean distance difference epsilon (criterion 3)
 	//icp.setEuclideanFitnessEpsilon (1);
 	//icp.setRANSACOutlierRejectionThreshold(maxCorrespondenceDistance);
@@ -350,40 +379,6 @@ Transform icpPointToPlane(
 	hasConverged = icp.hasConverged();
 	return Transform::fromEigen4f(icp.getFinalTransformation());
 }
-
-// return transform from source to target (All points must be finite!!!)
-Transform icp2D(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr & cloud_source,
-			  const pcl::PointCloud<pcl::PointXYZ>::ConstPtr & cloud_target,
-			  double maxCorrespondenceDistance,
-			  int maximumIterations,
-			  bool & hasConverged,
-			  pcl::PointCloud<pcl::PointXYZ> & cloud_source_registered)
-{
-	pcl::IterativeClosestPoint<pcl::PointXYZ, pcl::PointXYZ> icp;
-	// Set the input source and target
-	icp.setInputTarget (cloud_target);
-	icp.setInputSource (cloud_source);
-
-	pcl::registration::TransformationEstimation2D<pcl::PointXYZ, pcl::PointXYZ>::Ptr est;
-	est.reset(new pcl::registration::TransformationEstimation2D<pcl::PointXYZ, pcl::PointXYZ>);
-	icp.setTransformationEstimation(est);
-
-	// Set the max correspondence distance to 5cm (e.g., correspondences with higher distances will be ignored)
-	icp.setMaxCorrespondenceDistance (maxCorrespondenceDistance);
-	// Set the maximum number of iterations (criterion 1)
-	icp.setMaximumIterations (maximumIterations);
-	// Set the transformation epsilon (criterion 2)
-	//icp.setTransformationEpsilon (transformationEpsilon);
-	// Set the euclidean distance difference epsilon (criterion 3)
-	//icp.setEuclideanFitnessEpsilon (1);
-	//icp.setRANSACOutlierRejectionThreshold(maxCorrespondenceDistance);
-
-	// Perform the alignment
-	icp.align (cloud_source_registered);
-	hasConverged = icp.hasConverged();
-	return Transform::fromEigen4f(icp.getFinalTransformation());
-}
-
 
 // If "voxel" > 0, "samples" is ignored
 pcl::PointCloud<pcl::PointXYZ>::Ptr getICPReadyCloud(
@@ -423,7 +418,7 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr getICPReadyCloud(
 			}
 			else if(samples>0 && (int)cloud->size() > samples)
 			{
-				cloud = sampling(cloud, samples);
+				cloud = randomSampling(cloud, samples);
 			}
 
 			if(cloud->size())
@@ -438,7 +433,6 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr getICPReadyCloud(
 
 	return cloud;
 }
-
 
 }
 
