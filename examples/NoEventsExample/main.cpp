@@ -27,10 +27,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <rtabmap/core/Rtabmap.h>
 #include <rtabmap/core/CameraStereo.h>
-#include <rtabmap/core/Odometry.h>
 #include <rtabmap/utilite/UThread.h>
 #include "MapBuilder.h"
 #include <pcl/visualization/cloud_viewer.h>
+#include <rtabmap/core/OdometryF2M.h>
 #include <QApplication>
 #include <stdio.h>
 
@@ -97,15 +97,13 @@ int main(int argc, char * argv[])
 	CameraStereoImages camera(
 			pathLeftImages,
 			pathRightImages,
-			false, // no timestamps in filenames
-			"",    // no file with timestamps
 			false, // assume that images are already rectified
 			(float)cameraRate,
 			opticalRotation);
 
 	if(camera.init(calibrationDir, calibrationName))
 	{
-		OdometryBOW odom;
+		OdometryF2M odom;
 		Rtabmap rtabmap;
 		rtabmap.init();
 

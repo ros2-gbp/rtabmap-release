@@ -22,6 +22,7 @@
 #include <sstream>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -111,6 +112,11 @@ std::string uNumber2Str(double number)
 	std::stringstream s;
 	s << number;
 	return s.str();
+}
+
+int uStr2Int(const std::string & str)
+{
+	return atoi(str.c_str());
 }
 
 float uStr2Float(const std::string & str)
