@@ -47,19 +47,12 @@ class EpipolarGeometry;
 class Memory;
 class BayesFilter;
 class Signature;
-namespace graph {
 class Optimizer;
-}
 
 class RTABMAP_EXP Rtabmap
 {
 public:
 	enum VhStrategy {kVhNone, kVhEpipolar, kVhUndef};
-
-public:
-	static std::string getVersion();
-	static void readParameters(const std::string & configFile, ParametersMap & parameters);
-	static void writeParameters(const std::string & configFile, const ParametersMap & parameters);
 
 public:
 	Rtabmap();
@@ -74,7 +67,7 @@ public:
 	void init(const ParametersMap & parameters, const std::string & databasePath = "");
 	void init(const std::string & configFile = "", const std::string & databasePath = "");
 
-	void close();
+	void close(bool databaseSaved = true);
 
 	const std::string & getWorkingDir() const {return _wDir;}
 	int getLoopClosureId() const {return _loopClosureHypothesis.first;}
@@ -100,6 +93,7 @@ public:
 	const Memory * getMemory() const {return _memory;}
 	float getGoalReachedRadius() const {return _goalReachedRadius;}
 	float getLocalRadius() const {return _localRadius;}
+	const Transform & getLastLocalizationPose() const {return _lastLocalizationPose;}
 
 	float getTimeThreshold() const {return _maxTimeAllowed;} // in ms
 	void setTimeThreshold(float maxTimeAllowed); // in ms
@@ -118,8 +112,10 @@ public:
 	void dumpPrediction() const;
 	void dumpData() const;
 	void parseParameters(const ParametersMap & parameters);
+	const ParametersMap & getParameters() const {return _parameters;}
 	void setWorkingDirectory(std::string path);
 	void rejectLoopClosure(int oldId, int newId);
+	void setOptimizedPoses(const std::map<int, Transform> & poses);
 	void get3DMap(std::map<int, Signature> & signatures,
 			std::map<int, Transform> & poses,
 			std::multimap<int, Link> & constraints,
@@ -130,6 +126,7 @@ public:
 			bool optimized,
 			bool global,
 			std::map<int, Signature> * signatures = 0);
+	int detectMoreLoopClosures(float clusterRadius = 0.5f, float clusterAngle = M_PI/6.0f, int iterations = 1);
 
 	int getPathStatus() const {return _pathStatus;} // -1=failed 0=idle/executing 1=success
 	void clearPath(int status); // -1=failed 0=idle/executing 1=success
@@ -153,12 +150,17 @@ private:
 	void optimizeCurrentMap(int id,
 			bool lookInDatabase,
 			std::map<int, Transform> & optimizedPoses,
-			std::multimap<int, Link> * constraints = 0) const;
+			std::multimap<int, Link> * constraints = 0,
+			double * error = 0,
+			int * iterationsDone = 0) const;
 	std::map<int, Transform> optimizeGraph(
 			int fromId,
 			const std::set<int> & ids,
+			const std::map<int, Transform> & guessPoses,
 			bool lookInDatabase,
-			std::multimap<int, Link> * constraints = 0) const;
+			std::multimap<int, Link> * constraints = 0,
+			double * error = 0,
+			int * iterationsDone = 0) const;
 	void updateGoalIndex();
 	bool computePath(int targetNode, std::map<int, Transform> nodes, const std::multimap<int, rtabmap::Link> & constraints);
 
@@ -177,6 +179,7 @@ private:
 	float _loopRatio;
 	unsigned int _maxRetrieved;
 	unsigned int _maxLocalRetrieved;
+	bool _rawDataKept;
 	bool _statisticLogsBufferedInRAM;
 	bool _statisticLogged;
 	bool _statisticLoggedHeaders;
@@ -184,25 +187,20 @@ private:
 	float _rgbdLinearUpdate;
 	float _rgbdAngularUpdate;
 	float _newMapOdomChangeDistance;
-	int _globalLoopClosureIcpType;
-	bool _poseScanMatching;
-	bool _localLoopClosureDetectionTime;
-	bool _localLoopClosureDetectionSpace;
+	bool _neighborLinkRefining;
+	bool _proximityByTime;
+	bool _proximityBySpace;
 	bool _scanMatchingIdsSavedInLinks;
 	float _localRadius;
 	float _localImmunizationRatio;
-	int _localDetectMaxGraphDepth;
-	float _localPathFilteringRadius;
-	bool _localPathOdomPosesUsed;
+	int _proximityMaxGraphDepth;
+	float _proximityFilteringRadius;
+	bool _proximityRawPosesUsed;
+	bool _proximityScansMerged;
+	float _proximityAngle;
 	std::string _databasePath;
 	bool _optimizeFromGraphEnd;
 	float _optimizationMaxLinearError;
-	bool _reextractLoopClosureFeatures;
-	int _reextractNNType;
-	float _reextractNNDR;
-	int _reextractFeatureType;
-	int _reextractMaxWords;
-	float _reextractMaxDepth;
 	bool _startNewMapOnLoopClosure;
 	float _goalReachedRadius; // meters
 	bool _goalsSavedInUserData;
@@ -220,8 +218,8 @@ private:
 	// strategies for a type of signature or configuration.
 	EpipolarGeometry * _epipolarGeometry;
 	BayesFilter * _bayesFilter;
-	graph::Optimizer * _graphOptimizer;
-	ParametersMap _modifiedParameters;
+	Optimizer * _graphOptimizer;
+	ParametersMap _parameters;
 
 	Memory * _memory;
 
@@ -237,7 +235,7 @@ private:
 	std::map<int, Transform> _optimizedPoses;
 	std::multimap<int, Link> _constraints;
 	Transform _mapCorrection;
-	Transform _lastLocalizationPose; // for localization mode
+	Transform _lastLocalizationPose; // Corrected odometry pose. In mapping mode, this corresponds to last pose return by getLocalOptimizedPoses().
 	int _lastLocalizationNodeId; // for localization mode
 
 	// Planning stuff

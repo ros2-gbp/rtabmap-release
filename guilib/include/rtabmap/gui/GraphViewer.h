@@ -57,6 +57,7 @@ public:
 	void updateGraph(const std::map<int, Transform> & poses,
 					 const std::multimap<int, Link> & constraints,
 					 const std::map<int, int> & mapIds);
+	void updateGTGraph(const std::map<int, Transform> & poses);
 	void updateReferentialPosition(const Transform & t);
 	void updateMap(const cv::Mat & map8U, float resolution, float xMin, float yMin);
 	void updatePosterior(const std::map<int, float> & posterior);
@@ -83,9 +84,11 @@ public:
 	const QColor & getLocalLoopClosureColor() const {return _loopClosureLocalColor;}
 	const QColor & getUserLoopClosureColor() const {return _loopClosureUserColor;}
 	const QColor & getVirtualLoopClosureColor() const {return _loopClosureVirtualColor;}
+	const QColor & getNeighborMergedColor() const {return _neighborMergedColor;}
 	const QColor & getRejectedLoopClosureColor() const {return _loopClosureRejectedColor;}
 	const QColor & getLocalPathColor() const {return _localPathColor;}
 	const QColor & getGlobalPathColor() const {return _globalPathColor;}
+	const QColor & getGTColor() const {return _gtPathColor;}
 	const QColor & getIntraSessionLoopColor() const {return _loopIntraSessionColor;}
 	const QColor & getInterSessionLoopColor() const {return _loopInterSessionColor;}
 	bool isIntraInterSessionColorsEnabled() const {return _intraInterSessionColors;}
@@ -93,7 +96,12 @@ public:
 	bool isOriginVisible() const;
 	bool isReferentialVisible() const;
 	bool isLocalRadiusVisible() const;
-	float getLoopClosureOutlierThr() const;
+	float getLoopClosureOutlierThr() const {return _loopClosureOutlierThr;}
+	float getMaxLinkLength() const {return _maxLinkLength;}
+	bool isGraphVisible() const;
+	bool isGlobalPathVisible() const;
+	bool isLocalPathVisible() const;
+	bool isGtGraphVisible() const;
 
 	// setters
 	void setWorkingDirectory(const QString & path);
@@ -106,9 +114,11 @@ public:
 	void setLocalLoopClosureColor(const QColor & color);
 	void setUserLoopClosureColor(const QColor & color);
 	void setVirtualLoopClosureColor(const QColor & color);
+	void setNeighborMergedColor(const QColor & color);
 	void setRejectedLoopClosureColor(const QColor & color);
 	void setLocalPathColor(const QColor & color);
 	void setGlobalPathColor(const QColor & color);
+	void setGTColor(const QColor & color);
 	void setIntraSessionLoopColor(const QColor & color);
 	void setInterSessionLoopColor(const QColor & color);
 	void setIntraInterSessionColorsEnabled(bool enabled);
@@ -117,6 +127,11 @@ public:
 	void setReferentialVisible(bool visible);
 	void setLocalRadiusVisible(bool visible);
 	void setLoopClosureOutlierThr(float value);
+	void setMaxLinkLength(float value);
+	void setGraphVisible(bool visible);
+	void setGlobalPathVisible(bool visible);
+	void setLocalPathVisible(bool visible);
+	void setGtGraphVisible(bool visible);
 
 signals:
 	void configChanged();
@@ -137,15 +152,23 @@ private:
 	QColor _loopClosureLocalColor;
 	QColor _loopClosureUserColor;
 	QColor _loopClosureVirtualColor;
+	QColor _neighborMergedColor;
 	QColor _loopClosureRejectedColor;
 	QColor _localPathColor;
 	QColor _globalPathColor;
+	QColor _gtPathColor;
 	QColor _loopIntraSessionColor;
 	QColor _loopInterSessionColor;
 	bool _intraInterSessionColors;
 	QGraphicsItem * _root;
+	QGraphicsItem * _graphRoot;
+	QGraphicsItem * _globalPathRoot;
+	QGraphicsItem * _localPathRoot;
+	QGraphicsItem * _gtGraphRoot;
 	QMap<int, NodeItem*> _nodeItems;
 	QMultiMap<int, LinkItem*> _linkItems;
+	QMap<int, NodeItem*> _gtNodeItems;
+	QMultiMap<int, LinkItem*> _gtLinkItems;
 	QMultiMap<int, LinkItem*> _localPathLinkItems;
 	QMultiMap<int, LinkItem*> _globalPathLinkItems;
 	float _nodeRadius;
@@ -156,6 +179,7 @@ private:
 	float _gridCellSize;
 	QGraphicsEllipseItem * _localRadius;
 	float _loopClosureOutlierThr;
+	float _maxLinkLength;
 };
 
 } /* namespace rtabmap */
