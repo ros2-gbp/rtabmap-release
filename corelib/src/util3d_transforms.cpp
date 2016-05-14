@@ -68,6 +68,16 @@ pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr transformPointCloud(
 	return output;
 }
 
+cv::Point3f transformPoint(
+		const cv::Point3f & point,
+		const Transform & transform)
+{
+	cv::Point3f ret = point;
+	ret.x = transform (0, 0) * point.x + transform (0, 1) * point.y + transform (0, 2) * point.z + transform (0, 3);
+	ret.y = transform (1, 0) * point.x + transform (1, 1) * point.y + transform (1, 2) * point.z + transform (1, 3);
+	ret.z = transform (2, 0) * point.x + transform (2, 1) * point.y + transform (2, 2) * point.z + transform (2, 3);
+	return ret;
+}
 pcl::PointXYZ transformPoint(
 		const pcl::PointXYZ & pt,
 		const Transform & transform)
@@ -79,6 +89,23 @@ pcl::PointXYZRGB transformPoint(
 		const Transform & transform)
 {
 	return pcl::transformPoint(pt, transform.toEigen3f());
+}
+pcl::PointNormal transformPoint(
+		const pcl::PointNormal & point,
+		const Transform & transform)
+{
+	pcl::PointNormal ret;
+	Eigen::Matrix<float, 3, 1> pt (point.x, point.y, point.z);
+	ret.x = static_cast<float> (transform (0, 0) * pt.coeffRef (0) + transform (0, 1) * pt.coeffRef (1) + transform (0, 2) * pt.coeffRef (2) + transform (0, 3));
+	ret.y = static_cast<float> (transform (1, 0) * pt.coeffRef (0) + transform (1, 1) * pt.coeffRef (1) + transform (1, 2) * pt.coeffRef (2) + transform (1, 3));
+	ret.z = static_cast<float> (transform (2, 0) * pt.coeffRef (0) + transform (2, 1) * pt.coeffRef (1) + transform (2, 2) * pt.coeffRef (2) + transform (2, 3));
+
+	// Rotate normals
+	Eigen::Matrix<float, 3, 1> nt (point.normal_x, point.normal_y, point.normal_z);
+	ret.normal_x = static_cast<float> (transform (0, 0) * nt.coeffRef (0) + transform (0, 1) * nt.coeffRef (1) + transform (0, 2) * nt.coeffRef (2));
+	ret.normal_y = static_cast<float> (transform (1, 0) * nt.coeffRef (0) + transform (1, 1) * nt.coeffRef (1) + transform (1, 2) * nt.coeffRef (2));
+	ret.normal_z = static_cast<float> (transform (2, 0) * nt.coeffRef (0) + transform (2, 1) * nt.coeffRef (1) + transform (2, 2) * nt.coeffRef (2));
+	return ret;
 }
 
 }

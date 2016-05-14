@@ -82,10 +82,14 @@ public:
 	void setDataBufferSize(unsigned int bufferSize);
 	void createIntermediateNodes(bool enabled);
 
+	// this will delete rtabmap object if set
+	void close(bool databaseSaved);
+
 protected:
 	virtual void handleEvent(UEvent * anEvent);
 
 private:
+	virtual void mainLoopBegin();
 	virtual void mainLoop();
 	virtual void mainLoopKill();
 	void process();
@@ -106,6 +110,7 @@ private:
 	float _rate;
 	bool _createIntermediateNodes;
 	UTimer * _frameRateTimer;
+	double _previousStamp;
 
 	Rtabmap * _rtabmap;
 	bool _paused;

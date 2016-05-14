@@ -45,8 +45,6 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 namespace rtabmap
 {
 
-class Memory;
-
 class RTABMAP_EXP Signature
 {
 
@@ -58,7 +56,9 @@ public:
 			double stamp = 0.0,
 			const std::string & label = std::string(),
 			const Transform & pose = Transform(),
+			const Transform & groundTruthPose = Transform(),
 			const SensorData & sensorData = SensorData());
+	Signature(const SensorData & data);
 	virtual ~Signature();
 
 	/**
@@ -107,14 +107,18 @@ public:
 	void setEnabled(bool enabled) {_enabled = enabled;}
 	const std::multimap<int, cv::KeyPoint> & getWords() const {return _words;}
 	const std::map<int, int> & getWordsChanged() const {return _wordsChanged;}
+	const std::multimap<int, cv::Mat> & getWordsDescriptors() const {return _wordsDescriptors;}
+	void setWordsDescriptors(const std::multimap<int, cv::Mat> & descriptors) {_wordsDescriptors = descriptors;}
 
 	//metric stuff
-	void setWords3(const std::multimap<int, pcl::PointXYZ> & words3) {_words3 = words3;}
+	void setWords3(const std::multimap<int, cv::Point3f> & words3) {_words3 = words3;}
 	void setPose(const Transform & pose) {_pose = pose;}
+	void setGroundTruthPose(const Transform & pose) {_groundTruthPose = pose;}
 
-	const std::multimap<int, pcl::PointXYZ> & getWords3() const {return _words3;}
+	const std::multimap<int, cv::Point3f> & getWords3() const {return _words3;}
 	const Transform & getPose() const {return _pose;}
 	cv::Mat getPoseCovariance() const;
+	const Transform & getGroundTruthPose() const {return _groundTruthPose;}
 
 	SensorData & sensorData() {return _sensorData;}
 	const SensorData & sensorData() const {return _sensorData;}
@@ -134,11 +138,13 @@ private:
 	// times in the signature, it will be 2 times in this list)
 	// Words match with the CvSeq keypoints and descriptors
 	std::multimap<int, cv::KeyPoint> _words; // word <id, keypoint>
-	std::multimap<int, pcl::PointXYZ> _words3; // word <id, keypoint> // in base_link frame (localTransform applied))
+	std::multimap<int, cv::Point3f> _words3; // word <id, point> // in base_link frame (localTransform applied))
+	std::multimap<int, cv::Mat> _wordsDescriptors;
 	std::map<int, int> _wordsChanged; // <oldId, newId>
 	bool _enabled;
 
 	Transform _pose;
+	Transform _groundTruthPose;
 
 	SensorData _sensorData;
 };
