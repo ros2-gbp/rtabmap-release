@@ -41,12 +41,10 @@
 template<class T>
 inline bool uIsNan(const T & value)
 {
-#ifdef __APPLE__
-	return std::isnan(value);
-#elif _MSC_VER
+#if _MSC_VER
 	return _isnan(value) != 0;
 #else
-	return isnan(value);
+	return std::isnan(value);
 #endif
 }
 
@@ -935,7 +933,7 @@ inline std::vector<float> uHamming(unsigned int L)
 template <typename T>
 bool uIsInBounds(const T& value, const T& low, const T& high)
 {
-	return !(value < low) && !(value >= high);
+	return uIsFinite(value) && !(value < low) && !(value >= high);
 }
 
 #endif // UMATH_H

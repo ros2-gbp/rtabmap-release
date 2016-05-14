@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2014, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2014, cv::Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -8,7 +8,7 @@ modification, are permitted provided that the following conditions are met:
       notice, this list of conditions and the following disclaimer.
     * Redistributions in binary form must reproduce the above copyright
       notice, this list of conditions and the following disclaimer in the
-      documentation and/or other materials provided with the distribution.
+      documentation and/or other cv::Materials provided with the distribution.
     * Neither the name of the Universite de Sherbrooke nor the
       names of its contributors may be used to endorse or promote products
       derived from this software without specific prior written permission.
@@ -29,9 +29,15 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <rtabmap/utilite/ULogger.h>
 #include <rtabmap/utilite/UMath.h>
+#include <rtabmap/utilite/UConversion.h>
+#include <rtabmap/utilite/UTimer.h>
+#include <rtabmap/utilite/UStl.h>
+#include <rtabmap/core/util3d_transforms.h>
 #include <opencv2/calib3d/calib3d.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
 #include <opencv2/video/tracking.hpp>
+#include <opencv2/highgui/highgui.hpp>
+#include <map>
 
 namespace rtabmap
 {
@@ -39,6 +45,681 @@ namespace rtabmap
 namespace util2d
 {
 
+// SSD: Sum of Squared Differences
+float ssd(const cv::Mat & windowLeft, const cv::Mat & windowRight)
+{
+	UASSERT_MSG(windowLeft.type() == CV_8UC1 || windowLeft.type() == CV_32FC1 || windowLeft.type() == CV_16SC2, uFormat("Type=%d", windowLeft.type()).c_str());
+	UASSERT(windowLeft.type() == windowRight.type());
+	UASSERT_MSG(windowLeft.rows == windowRight.rows, uFormat("%d vs %d", windowLeft.rows, windowRight.rows).c_str());
+	UASSERT_MSG(windowLeft.cols == windowRight.cols, uFormat("%d vs %d", windowLeft.cols, windowRight.cols).c_str());
+
+	float score = 0.0f;
+	for(int v=0; v<windowLeft.rows; ++v)
+	{
+		for(int u=0; u<windowLeft.cols; ++u)
+		{
+			float s = 0.0f;
+			if(windowLeft.type() == CV_8UC1)
+			{
+				s = float(windowLeft.at<unsigned char>(v,u))-float(windowRight.at<unsigned char>(v,u));
+			}
+			else if(windowLeft.type() == CV_32FC1)
+			{
+				s = windowLeft.at<float>(v,u)-windowRight.at<float>(v,u);
+			}
+			else if(windowLeft.type() == CV_16SC2)
+			{
+				float sL = float(windowLeft.at<cv::Vec2s>(v,u)[0])*0.5f+float(windowLeft.at<cv::Vec2s>(v,u)[1])*0.5f;
+				float sR = float(windowRight.at<cv::Vec2s>(v,u)[0])*0.5f+float(windowRight.at<cv::Vec2s>(v,u)[1])*0.5f;
+				s = sL - sR;
+			}
+
+			score += s*s;
+		}
+	}
+	return score;
+}
+
+// SAD: Sum of Absolute intensity Differences
+float sad(const cv::Mat & windowLeft, const cv::Mat & windowRight)
+{
+	UASSERT_MSG(windowLeft.type() == CV_8UC1 || windowLeft.type() == CV_32FC1 || windowLeft.type() == CV_16SC2, uFormat("Type=%d", windowLeft.type()).c_str());
+	UASSERT(windowLeft.type() == windowRight.type());
+	UASSERT_MSG(windowLeft.rows == windowRight.rows, uFormat("%d vs %d", windowLeft.rows, windowRight.rows).c_str());
+	UASSERT_MSG(windowLeft.cols == windowRight.cols, uFormat("%d vs %d", windowLeft.cols, windowRight.cols).c_str());
+
+	float score = 0.0f;
+	for(int v=0; v<windowLeft.rows; ++v)
+	{
+		for(int u=0; u<windowLeft.cols; ++u)
+		{
+			if(windowLeft.type() == CV_8UC1)
+			{
+				score += fabs(float(windowLeft.at<unsigned char>(v,u))-float(windowRight.at<unsigned char>(v,u)));
+			}
+			else if(windowLeft.type() == CV_32FC1)
+			{
+				score += fabs(windowLeft.at<float>(v,u)-windowRight.at<float>(v,u));
+			}
+			else if(windowLeft.type() == CV_16SC2)
+			{
+				float sL = float(windowLeft.at<cv::Vec2s>(v,u)[0])*0.5f+float(windowLeft.at<cv::Vec2s>(v,u)[1])*0.5f;
+				float sR = float(windowRight.at<cv::Vec2s>(v,u)[0])*0.5f+float(windowRight.at<cv::Vec2s>(v,u)[1])*0.5f;
+				score += fabs(sL - sR);
+			}
+		}
+	}
+	return score;
+}
+
+std::vector<cv::Point2f> calcStereoCorrespondences(
+		const cv::Mat & leftImage,
+		const cv::Mat & rightImage,
+		const std::vector<cv::Point2f> & leftCorners,
+		std::vector<unsigned char> & status,
+		cv::Size winSize,
+		int maxLevel,
+		int iterations,
+		int minDisparity,
+		int maxDisparity,
+		bool ssdApproach)
+{
+	UDEBUG("winSize=(%d,%d)", winSize.width, winSize.height);
+	UDEBUG("maxLevel=%d", maxLevel);
+	UDEBUG("minDisparity=%d", minDisparity);
+	UDEBUG("maxDisparity=%d", maxDisparity);
+	UDEBUG("iterations=%d", iterations);
+	UDEBUG("ssdApproach=%d", ssdApproach?1:0);
+
+	// window should be odd
+	if(winSize.width%2 == 0)
+	{
+		winSize.width+=1;
+	}
+	if(winSize.height%2 == 0)
+	{
+		winSize.height+=1;
+	}
+
+	cv::Size halfWin((winSize.width-1)/2, (winSize.height-1)/2);
+
+	UTimer timer;
+	double pyramidTime = 0.0;
+	double disparityTime = 0.0;
+	double subpixelTime = 0.0;
+
+	std::vector<cv::Point2f> rightCorners(leftCorners.size());
+	std::vector<cv::Mat> leftPyramid, rightPyramid;
+	maxLevel =  cv::buildOpticalFlowPyramid( leftImage, leftPyramid, winSize, maxLevel, false);
+	maxLevel =  cv::buildOpticalFlowPyramid( rightImage, rightPyramid, winSize, maxLevel, false);
+	pyramidTime = timer.ticks();
+
+	status = std::vector<unsigned char>(leftCorners.size(), 0);
+	int totalIterations = 0;
+	int noSubPixel = 0;
+	int added = 0;
+	for(unsigned int i=0; i<leftCorners.size(); ++i)
+	{
+		int oi=0;
+		float bestScore = -1.0f;
+		int bestScoreIndex = -1;
+		int tmpMinDisparity = minDisparity;
+		int tmpMaxDisparity = maxDisparity;
+
+		int iterations = 0;
+		for(int level=maxLevel; level>=0; --level)
+		{
+			UASSERT(level < (int)leftPyramid.size());
+
+			cv::Point2i center(int(leftCorners[i].x/float(1<<level)), int(leftCorners[i].y/float(1<<level)));
+
+			oi=0;
+			bestScore = -1.0f;
+			bestScoreIndex = -1;
+			int localMaxDisparity = -tmpMaxDisparity / (1<<level);
+			int localMinDisparity = -tmpMinDisparity / (1<<level);
+
+			if(center.x-halfWin.width-(level==0?1:0) >=0 && center.x+halfWin.width+(level==0?1:0) < leftPyramid[level].cols &&
+			   center.y-halfWin.height >=0 && center.y+halfWin.height < leftPyramid[level].rows)
+			{
+				cv::Mat windowLeft(leftPyramid[level],
+						cv::Range(center.y-halfWin.height,center.y+halfWin.height+1),
+						cv::Range(center.x-halfWin.width,center.x+halfWin.width+1));
+				int minCol = center.x+localMaxDisparity-halfWin.width-1;
+				if(minCol < 0)
+				{
+					localMaxDisparity -= minCol;
+				}
+
+				int maxCol = center.x+localMinDisparity+halfWin.width+1;
+				if(maxCol >= leftPyramid[level].cols)
+				{
+					localMinDisparity += maxCol-leftPyramid[level].cols-1;
+				}
+
+				if(localMinDisparity < localMaxDisparity)
+				{
+					localMaxDisparity = localMinDisparity;
+				}
+				int length = localMinDisparity-localMaxDisparity+1;
+				std::vector<float> scores = std::vector<float>(length, 0.0f);
+
+				for(int d=localMinDisparity; d>localMaxDisparity; --d)
+				{
+					++iterations;
+					cv::Mat windowRight(rightPyramid[level],
+									cv::Range(center.y-halfWin.height,center.y+halfWin.height+1),
+									cv::Range(center.x+d-halfWin.width,center.x+d+halfWin.width+1));
+					scores[oi] = ssdApproach?ssd(windowLeft, windowRight):sad(windowLeft, windowRight);
+					if(scores[oi] > 0 && (bestScore < 0.0f || scores[oi] < bestScore))
+					{
+						bestScoreIndex = oi;
+						bestScore = scores[oi];
+					}
+					++oi;
+				}
+
+				if(bestScoreIndex>=0)
+				{
+					if(level>0)
+					{
+						tmpMaxDisparity = tmpMinDisparity+(bestScoreIndex+1)*(1<<level);
+						tmpMaxDisparity+=tmpMaxDisparity%level;
+						if(tmpMaxDisparity > maxDisparity)
+						{
+							tmpMaxDisparity = maxDisparity;
+						}
+						tmpMinDisparity = tmpMinDisparity+(bestScoreIndex-1)*(1<<level);
+						tmpMinDisparity -= tmpMinDisparity%level;
+						if(tmpMinDisparity < minDisparity)
+						{
+							tmpMinDisparity = minDisparity;
+						}
+					}
+				}
+			}
+		}
+		disparityTime+=timer.ticks();
+		totalIterations+=iterations;
+
+		if(bestScoreIndex>=0)
+		{
+			//subpixel refining
+			int d = -(tmpMinDisparity+bestScoreIndex);
+
+			cv::Mat windowLeft(winSize, CV_32FC1);
+			cv::Mat windowRight(winSize, CV_32FC1);
+			cv::getRectSubPix(leftPyramid[0],
+					winSize,
+					leftCorners[i],
+					windowLeft,
+					windowLeft.type());
+			if(leftCorners[i].x != float(int(leftCorners[i].x)))
+			{
+				//recompute bestScore if the pt is not integer
+				cv::getRectSubPix(rightPyramid[0],
+						winSize,
+						cv::Point2f(leftCorners[i].x+float(d), leftCorners[i].y),
+						windowRight,
+						windowRight.type());
+				bestScore = ssdApproach?ssd(windowLeft, windowRight):sad(windowLeft, windowRight);
+			}
+
+			float xc = leftCorners[i].x+float(d);
+			float vc = bestScore;
+			float step = 0.5f;
+			std::map<float, float> cache;
+			bool reject = false;
+			for(int it=0; it<iterations; ++it)
+			{
+				float x1 = xc-step;
+				float x2 = xc+step;
+				float v1 = uValue(cache, x1, 0.0f);
+				float v2 = uValue(cache, x2, 0.0f);
+				if(v1 == 0.0f)
+				{
+					cv::getRectSubPix(rightPyramid[0],
+							winSize,
+							cv::Point2f(x1, leftCorners[i].y),
+							windowRight,
+							windowRight.type());
+					v1 = ssdApproach?ssd(windowLeft, windowRight):sad(windowLeft, windowRight);
+				}
+				if(v2 == 0.0f)
+				{
+					cv::getRectSubPix(rightPyramid[0],
+							winSize,
+							cv::Point2f(x2, leftCorners[i].y),
+							windowRight,
+							windowRight.type());
+					v2 = ssdApproach?ssd(windowLeft, windowRight):sad(windowLeft, windowRight);
+				}
+
+				float previousXc = xc;
+				float previousVc = vc;
+
+				xc = v1<vc&&v1<v2?x1:v2<vc&&v2<v1?x2:xc;
+				vc = v1<vc&&v1<v2?v1:v2<vc&&v2<v1?v2:vc;
+
+				if(previousXc == xc)
+				{
+					step /= 2.0f;
+				}
+				else
+				{
+					cache.insert(std::make_pair(previousXc, previousVc));
+				}
+
+				if(xc < leftCorners[i].x+float(d)-1.0f || xc > leftCorners[i].x+float(d)+1.0f)
+				{
+					reject = true;
+					break;
+				}
+			}
+
+			rightCorners[i] = cv::Point2f(xc, leftCorners[i].y);
+			status[i] = reject?0:1;
+			if(!reject)
+			{
+				if(leftCorners[i].x+float(d) != xc)
+				{
+					++noSubPixel;
+				}
+				++added;
+			}
+		}
+		subpixelTime+=timer.ticks();
+	}
+	UDEBUG("SubPixel=%d/%d added (total=%d)", noSubPixel, added, (int)status.size());
+	UDEBUG("totalIterations=%d", totalIterations);
+	UDEBUG("Time pyramid = %f s", pyramidTime);
+	UDEBUG("Time disparity = %f s", disparityTime);
+	UDEBUG("Time sub-pixel = %f s", subpixelTime);
+
+	return rightCorners;
+}
+
+typedef float acctype;
+typedef float itemtype;
+#define  CV_DESCALE(x,n)     (((x) + (1 << ((n)-1))) >> (n))
+
+//
+// Adapted from OpenCV cv::calcOpticalFlowPyrLK() to force
+// only optical flow on x-axis (assuming that prevImg is the left
+// image and nextImg is the right image):
+// https://github.com/Itseez/opencv/blob/ddf82d0b154873510802ef75c53e628cd7b2cb13/modules/video/src/lkpyramid.cpp#L1088
+//
+// The difference is on this line:
+// https://github.com/Itseez/opencv/blob/ddf82d0b154873510802ef75c53e628cd7b2cb13/modules/video/src/lkpyramid.cpp#L683-L684
+// - cv::Point2f delta( (float)((A12*b2 - A22*b1) * D), (float)((A12*b1 - A11*b2) * D));
+// + cv::Point2f delta( (float)((A12*b2 - A22*b1) * D), 0); //<--- note the 0 for y
+//
+void calcOpticalFlowPyrLKStereo( cv::InputArray _prevImg, cv::InputArray _nextImg,
+                           cv::InputArray _prevPts, cv::InputOutputArray _nextPts,
+                           cv::OutputArray _status, cv::OutputArray _err,
+                           cv::Size winSize, int maxLevel,
+                           cv::TermCriteria criteria,
+                           int flags, double minEigThreshold )
+{
+    cv::Mat prevPtsMat = _prevPts.getMat();
+    const int derivDepth = cv::DataType<short>::depth;
+
+    CV_Assert( maxLevel >= 0 && winSize.width > 2 && winSize.height > 2 );
+
+    int level=0, i, npoints;
+    CV_Assert( (npoints = prevPtsMat.checkVector(2, CV_32F, true)) >= 0 );
+
+    if( npoints == 0 )
+    {
+        _nextPts.release();
+        _status.release();
+        _err.release();
+        return;
+    }
+
+    if( !(flags & cv::OPTFLOW_USE_INITIAL_FLOW) )
+        _nextPts.create(prevPtsMat.size(), prevPtsMat.type(), -1, true);
+
+    cv::Mat nextPtsMat = _nextPts.getMat();
+    CV_Assert( nextPtsMat.checkVector(2, CV_32F, true) == npoints );
+
+    const cv::Point2f* prevPts = prevPtsMat.ptr<cv::Point2f>();
+    cv::Point2f* nextPts = nextPtsMat.ptr<cv::Point2f>();
+
+    _status.create((int)npoints, 1, CV_8U, -1, true);
+    cv::Mat statusMat = _status.getMat(), errMat;
+    CV_Assert( statusMat.isContinuous() );
+    uchar* status = statusMat.ptr();
+    float* err = 0;
+
+    for( i = 0; i < npoints; i++ )
+        status[i] = true;
+
+    if( _err.needed() )
+    {
+        _err.create((int)npoints, 1, CV_32F, -1, true);
+        errMat = _err.getMat();
+        CV_Assert( errMat.isContinuous() );
+        err = errMat.ptr<float>();
+    }
+
+    std::vector<cv::Mat> prevPyr, nextPyr;
+    int levels1 = -1;
+    int lvlStep1 = 1;
+    int levels2 = -1;
+    int lvlStep2 = 1;
+
+
+    if(_prevImg.kind() != cv::_InputArray::STD_VECTOR_MAT)
+	{
+		//create pyramid
+		maxLevel =  cv::buildOpticalFlowPyramid(_prevImg, prevPyr, winSize, maxLevel, true);
+	}
+	else if(_prevImg.kind() == cv::_InputArray::STD_VECTOR_MAT)
+	{
+		_prevImg.getMatVector(prevPyr);
+	}
+
+	levels1 = int(prevPyr.size()) - 1;
+	CV_Assert(levels1 >= 0);
+
+	if (levels1 % 2 == 1 && prevPyr[0].channels() * 2 == prevPyr[1].channels() && prevPyr[1].depth() == derivDepth)
+	{
+		lvlStep1 = 2;
+		levels1 /= 2;
+	}
+
+	// ensure that pyramid has required padding
+	if(levels1 > 0)
+	{
+		cv::Size fullSize;
+		cv::Point ofs;
+		prevPyr[lvlStep1].locateROI(fullSize, ofs);
+		CV_Assert(ofs.x >= winSize.width && ofs.y >= winSize.height
+			&& ofs.x + prevPyr[lvlStep1].cols + winSize.width <= fullSize.width
+			&& ofs.y + prevPyr[lvlStep1].rows + winSize.height <= fullSize.height);
+	}
+
+	if(levels1 < maxLevel)
+		maxLevel = levels1;
+
+	if(_nextImg.kind() != cv::_InputArray::STD_VECTOR_MAT)
+	{
+		//create pyramid
+		maxLevel =  cv::buildOpticalFlowPyramid(_nextImg, nextPyr, winSize, maxLevel, false);
+	}
+	else if(_nextImg.kind() == cv::_InputArray::STD_VECTOR_MAT)
+    {
+        _nextImg.getMatVector(nextPyr);
+    }
+
+	levels2 = int(nextPyr.size()) - 1;
+	CV_Assert(levels2 >= 0);
+
+	if (levels2 % 2 == 1 && nextPyr[0].channels() * 2 == nextPyr[1].channels() && nextPyr[1].depth() == derivDepth)
+	{
+		lvlStep2 = 2;
+		levels2 /= 2;
+	}
+
+	// ensure that pyramid has required padding
+	if(levels2 > 0)
+	{
+		cv::Size fullSize;
+		cv::Point ofs;
+		nextPyr[lvlStep2].locateROI(fullSize, ofs);
+		CV_Assert(ofs.x >= winSize.width && ofs.y >= winSize.height
+			&& ofs.x + nextPyr[lvlStep2].cols + winSize.width <= fullSize.width
+			&& ofs.y + nextPyr[lvlStep2].rows + winSize.height <= fullSize.height);
+	}
+
+	if(levels2 < maxLevel)
+		maxLevel = levels2;
+
+    if( (criteria.type & cv::TermCriteria::COUNT) == 0 )
+        criteria.maxCount = 30;
+    else
+        criteria.maxCount = std::min(std::max(criteria.maxCount, 0), 100);
+    if( (criteria.type & cv::TermCriteria::EPS) == 0 )
+        criteria.epsilon = 0.01;
+    else
+        criteria.epsilon = std::min(std::max(criteria.epsilon, 0.), 10.);
+    criteria.epsilon *= criteria.epsilon;
+
+    // for all pyramids
+    for( level = maxLevel; level >= 0; level-- )
+    {
+        cv::Mat derivI = prevPyr[level * lvlStep1 + 1];
+
+        CV_Assert(prevPyr[level * lvlStep1].size() == nextPyr[level * lvlStep2].size());
+        CV_Assert(prevPyr[level * lvlStep1].type() == nextPyr[level * lvlStep2].type());
+
+        const cv::Mat & prevImg = prevPyr[level * lvlStep1];
+        const cv::Mat & prevDeriv = derivI;
+        const cv::Mat & nextImg = nextPyr[level * lvlStep2];
+
+        // for all corners
+        {
+        	cv::Point2f halfWin((winSize.width-1)*0.5f, (winSize.height-1)*0.5f);
+			const cv::Mat& I = prevImg;
+			const cv::Mat& J = nextImg;
+			const cv::Mat& derivI = prevDeriv;
+
+			int j, cn = I.channels(), cn2 = cn*2;
+			cv::AutoBuffer<short> _buf(winSize.area()*(cn + cn2));
+			int derivDepth = cv::DataType<short>::depth;
+
+			cv::Mat IWinBuf(winSize, CV_MAKETYPE(derivDepth, cn), (short*)_buf);
+			cv::Mat derivIWinBuf(winSize, CV_MAKETYPE(derivDepth, cn2), (short*)_buf + winSize.area()*cn);
+
+			for( int ptidx = 0; ptidx < npoints; ptidx++ )
+			{
+				cv::Point2f prevPt = prevPts[ptidx]*(float)(1./(1 << level));
+				cv::Point2f nextPt;
+				if( level == maxLevel )
+				{
+					if( flags & cv::OPTFLOW_USE_INITIAL_FLOW )
+						nextPt = nextPts[ptidx]*(float)(1./(1 << level));
+					else
+						nextPt = prevPt;
+				}
+				else
+					nextPt = nextPts[ptidx]*2.f;
+				nextPts[ptidx] = nextPt;
+
+				cv::Point2i iprevPt, inextPt;
+				prevPt -= halfWin;
+				iprevPt.x = cvFloor(prevPt.x);
+				iprevPt.y = cvFloor(prevPt.y);
+
+				if( iprevPt.x < -winSize.width || iprevPt.x >= derivI.cols ||
+					iprevPt.y < -winSize.height || iprevPt.y >= derivI.rows )
+				{
+					if( level == 0 )
+					{
+						if( status )
+							status[ptidx] = false;
+						if( err )
+							err[ptidx] = 0;
+					}
+					continue;
+				}
+
+				float a = prevPt.x - iprevPt.x;
+				float b = prevPt.y - iprevPt.y;
+				const int W_BITS = 14, W_BITS1 = 14;
+				const float FLT_SCALE = 1.f/(1 << 20);
+				int iw00 = cvRound((1.f - a)*(1.f - b)*(1 << W_BITS));
+				int iw01 = cvRound(a*(1.f - b)*(1 << W_BITS));
+				int iw10 = cvRound((1.f - a)*b*(1 << W_BITS));
+				int iw11 = (1 << W_BITS) - iw00 - iw01 - iw10;
+
+				int dstep = (int)(derivI.step/derivI.elemSize1());
+				int stepI = (int)(I.step/I.elemSize1());
+				int stepJ = (int)(J.step/J.elemSize1());
+				acctype iA11 = 0, iA12 = 0, iA22 = 0;
+				float A11, A12, A22;
+
+				// extract the patch from the first image, compute covariation cv::Matrix of derivatives
+				int x, y;
+				for( y = 0; y < winSize.height; y++ )
+				{
+					const uchar* src = I.ptr() + (y + iprevPt.y)*stepI + iprevPt.x*cn;
+					const short* dsrc = derivI.ptr<short>() + (y + iprevPt.y)*dstep + iprevPt.x*cn2;
+
+					short* Iptr = IWinBuf.ptr<short>(y);
+					short* dIptr = derivIWinBuf.ptr<short>(y);
+
+					x = 0;
+
+					for( ; x < winSize.width*cn; x++, dsrc += 2, dIptr += 2 )
+					{
+						int ival = CV_DESCALE(src[x]*iw00 + src[x+cn]*iw01 +
+											  src[x+stepI]*iw10 + src[x+stepI+cn]*iw11, W_BITS1-5);
+						int ixval = CV_DESCALE(dsrc[0]*iw00 + dsrc[cn2]*iw01 +
+											   dsrc[dstep]*iw10 + dsrc[dstep+cn2]*iw11, W_BITS1);
+						int iyval = CV_DESCALE(dsrc[1]*iw00 + dsrc[cn2+1]*iw01 + dsrc[dstep+1]*iw10 +
+											   dsrc[dstep+cn2+1]*iw11, W_BITS1);
+
+						Iptr[x] = (short)ival;
+						dIptr[0] = (short)ixval;
+						dIptr[1] = (short)iyval;
+
+						iA11 += (itemtype)(ixval*ixval);
+						iA12 += (itemtype)(ixval*iyval);
+						iA22 += (itemtype)(iyval*iyval);
+					}
+				}
+
+				A11 = iA11*FLT_SCALE;
+				A12 = iA12*FLT_SCALE;
+				A22 = iA22*FLT_SCALE;
+
+				float D = A11*A22 - A12*A12;
+				float minEig = (A22 + A11 - std::sqrt((A11-A22)*(A11-A22) +
+								4.f*A12*A12))/(2*winSize.width*winSize.height);
+
+				if( err && (flags & cv::OPTFLOW_LK_GET_MIN_EIGENVALS) != 0 )
+					err[ptidx] = (float)minEig;
+
+				if( minEig < minEigThreshold || D < FLT_EPSILON )
+				{
+					if( level == 0 && status )
+						status[ptidx] = false;
+					continue;
+				}
+
+				D = 1.f/D;
+
+				nextPt -= halfWin;
+				cv::Point2f prevDelta;
+
+				for( j = 0; j < criteria.maxCount; j++ )
+				{
+					inextPt.x = cvFloor(nextPt.x);
+					inextPt.y = cvFloor(nextPt.y);
+
+					if( inextPt.x < -winSize.width || inextPt.x >= J.cols ||
+					   inextPt.y < -winSize.height || inextPt.y >= J.rows )
+					{
+						if( level == 0 && status )
+							status[ptidx] = false;
+						break;
+					}
+
+					a = nextPt.x - inextPt.x;
+					b = nextPt.y - inextPt.y;
+					iw00 = cvRound((1.f - a)*(1.f - b)*(1 << W_BITS));
+					iw01 = cvRound(a*(1.f - b)*(1 << W_BITS));
+					iw10 = cvRound((1.f - a)*b*(1 << W_BITS));
+					iw11 = (1 << W_BITS) - iw00 - iw01 - iw10;
+					acctype ib1 = 0, ib2 = 0;
+					float b1, b2;
+
+					for( y = 0; y < winSize.height; y++ )
+					{
+						const uchar* Jptr = J.ptr() + (y + inextPt.y)*stepJ + inextPt.x*cn;
+						const short* Iptr = IWinBuf.ptr<short>(y);
+						const short* dIptr = derivIWinBuf.ptr<short>(y);
+
+						x = 0;
+
+						for( ; x < winSize.width*cn; x++, dIptr += 2 )
+						{
+							int diff = CV_DESCALE(Jptr[x]*iw00 + Jptr[x+cn]*iw01 +
+												  Jptr[x+stepJ]*iw10 + Jptr[x+stepJ+cn]*iw11,
+												  W_BITS1-5) - Iptr[x];
+							ib1 += (itemtype)(diff*dIptr[0]);
+							ib2 += (itemtype)(diff*dIptr[1]);
+						}
+					}
+
+					b1 = ib1*FLT_SCALE;
+					b2 = ib2*FLT_SCALE;
+
+					cv::Point2f delta( (float)((A12*b2 - A22*b1) * D),
+								  0);//(float)((A12*b1 - A11*b2) * D)); // MODIFICATION
+					//delta = -delta;
+
+					nextPt += delta;
+					nextPts[ptidx] = nextPt + halfWin;
+
+					if( delta.ddot(delta) <= criteria.epsilon )
+						break;
+
+					if( j > 0 && std::abs(delta.x + prevDelta.x) < 0.01 &&
+					   std::abs(delta.y + prevDelta.y) < 0.01 )
+					{
+						nextPts[ptidx] -= delta*0.5f;
+						break;
+					}
+					prevDelta = delta;
+				}
+
+				if( status[ptidx] && err && level == 0 && (flags & cv::OPTFLOW_LK_GET_MIN_EIGENVALS) == 0 )
+				{
+					cv::Point2f nextPoint = nextPts[ptidx] - halfWin;
+					cv::Point inextPoint;
+
+					inextPoint.x = cvFloor(nextPoint.x);
+					inextPoint.y = cvFloor(nextPoint.y);
+
+					if( inextPoint.x < -winSize.width || inextPoint.x >= J.cols ||
+						inextPoint.y < -winSize.height || inextPoint.y >= J.rows )
+					{
+						if( status )
+							status[ptidx] = false;
+						continue;
+					}
+
+					float aa = nextPoint.x - inextPoint.x;
+					float bb = nextPoint.y - inextPoint.y;
+					iw00 = cvRound((1.f - aa)*(1.f - bb)*(1 << W_BITS));
+					iw01 = cvRound(aa*(1.f - bb)*(1 << W_BITS));
+					iw10 = cvRound((1.f - aa)*bb*(1 << W_BITS));
+					iw11 = (1 << W_BITS) - iw00 - iw01 - iw10;
+					float errval = 0.f;
+
+					for( y = 0; y < winSize.height; y++ )
+					{
+						const uchar* Jptr = J.ptr() + (y + inextPoint.y)*stepJ + inextPoint.x*cn;
+						const short* Iptr = IWinBuf.ptr<short>(y);
+
+						for( x = 0; x < winSize.width*cn; x++ )
+						{
+							int diff = CV_DESCALE(Jptr[x]*iw00 + Jptr[x+cn]*iw01 +
+												  Jptr[x+stepJ]*iw10 + Jptr[x+stepJ+cn]*iw11,
+												  W_BITS1-5) - Iptr[x];
+							errval += std::abs((float)diff);
+						}
+					}
+					err[ptidx] = errval * 1.f/(32*winSize.width*cn*winSize.height);
+				}
+			}
+        }
+
+    }
+}
 
 cv::Mat disparityFromStereoImages(
 		const cv::Mat & leftImage,
@@ -86,40 +767,6 @@ cv::Mat disparityFromStereoImages(
 	stereo->compute(leftMono, rightImage, disparity);
 #endif
 	return disparity;
-}
-
-cv::Mat disparityFromStereoImages(
-		const cv::Mat & leftImage,
-		const cv::Mat & rightImage,
-		const std::vector<cv::Point2f> & leftCorners,
-		int flowWinSize,
-		int flowMaxLevel,
-		int flowIterations,
-		double flowEps,
-		float maxCorrespondencesSlope)
-{
-	UASSERT(!leftImage.empty() && !rightImage.empty());
-	UASSERT(leftImage.type() == CV_8UC1 && rightImage.type() == CV_8UC1);
-	UASSERT(leftImage.cols == rightImage.cols && leftImage.rows == rightImage.rows);
-
-	// Find features in the new left image
-	std::vector<unsigned char> status;
-	std::vector<float> err;
-	std::vector<cv::Point2f> rightCorners;
-	UDEBUG("cv::calcOpticalFlowPyrLK() begin");
-	cv::calcOpticalFlowPyrLK(
-			leftImage,
-			rightImage,
-			leftCorners,
-			rightCorners,
-			status,
-			err,
-			cv::Size(flowWinSize, flowWinSize), flowMaxLevel,
-			cv::TermCriteria(cv::TermCriteria::COUNT+cv::TermCriteria::EPS, flowIterations, flowEps),
-			cv::OPTFLOW_LK_GET_MIN_EIGENVALS, 1e-4);
-	UDEBUG("cv::calcOpticalFlowPyrLK() end");
-
-	return disparityFromStereoCorrespondences(leftImage, leftCorners, rightCorners, status, maxCorrespondencesSlope);
 }
 
 cv::Mat depthFromDisparity(const cv::Mat & disparity,
@@ -205,25 +852,22 @@ cv::Mat depthFromStereoImages(
 }
 
 cv::Mat disparityFromStereoCorrespondences(
-		const cv::Mat & leftImage,
+		const cv::Size & disparitySize,
 		const std::vector<cv::Point2f> & leftCorners,
 		const std::vector<cv::Point2f> & rightCorners,
-		const std::vector<unsigned char> & mask,
-		float maxSlope)
+		const std::vector<unsigned char> & mask)
 {
-	UASSERT(!leftImage.empty() && leftCorners.size() == rightCorners.size());
+	UASSERT(leftCorners.size() == rightCorners.size());
 	UASSERT(mask.size() == 0 || mask.size() == leftCorners.size());
-	cv::Mat disparity = cv::Mat::zeros(leftImage.rows, leftImage.cols, CV_32FC1);
+	cv::Mat disparity = cv::Mat::zeros(disparitySize, CV_32FC1);
 	for(unsigned int i=0; i<leftCorners.size(); ++i)
 	{
-		if(mask.size() == 0 || mask[i])
+		if(mask.empty() || mask[i])
 		{
-			float d = leftCorners[i].x - rightCorners[i].x;
-			float slope = fabs((leftCorners[i].y - rightCorners[i].y) / (leftCorners[i].x - rightCorners[i].x));
-			if(d > 0.0f && (maxSlope <= 0 || fabs(leftCorners[i].y-rightCorners[i].y) <= 1.0f || slope <= maxSlope))
-			{
-				disparity.at<float>(int(leftCorners[i].y+0.5f), int(leftCorners[i].x+0.5f)) = d;
-			}
+			cv::Point2i dispPt(int(leftCorners[i].y+0.5f), int(leftCorners[i].x+0.5f));
+			UASSERT(dispPt.x >= 0 && dispPt.x < disparitySize.width);
+			UASSERT(dispPt.y >= 0 && dispPt.y < disparitySize.height);
+			disparity.at<float>(dispPt.y, dispPt.x) = leftCorners[i].x - rightCorners[i].x;
 		}
 	}
 	return disparity;
@@ -313,13 +957,22 @@ float getDepth(
 		const cv::Mat & depthImage,
 		float x, float y,
 		bool smoothing,
-		float maxZError)
+		float maxZError,
+		bool estWithNeighborsIfNull)
 {
 	UASSERT(!depthImage.empty());
 	UASSERT(depthImage.type() == CV_16UC1 || depthImage.type() == CV_32FC1);
 
 	int u = int(x+0.5f);
 	int v = int(y+0.5f);
+	if(u == depthImage.cols && x<float(depthImage.cols))
+	{
+		u = depthImage.cols - 1;
+	}
+	if(v == depthImage.rows && y<float(depthImage.rows))
+	{
+		v = depthImage.rows - 1;
+	}
 
 	if(!(u >=0 && u<depthImage.cols && v >=0 && v<depthImage.rows))
 	{
@@ -341,7 +994,66 @@ float getDepth(
 	int u_end = std::min(u+1, depthImage.cols-1);
 	int v_end = std::min(v+1, depthImage.rows-1);
 
-	float depth = isInMM?(float)depthImage.at<unsigned short>(v,u)*0.001f:depthImage.at<float>(v,u);
+	float depth = 0.0f;
+	if(isInMM)
+	{
+		if(depthImage.at<unsigned short>(v,u) > 0 &&
+		   depthImage.at<unsigned short>(v,u) < std::numeric_limits<unsigned short>::max())
+		{
+			depth = float(depthImage.at<unsigned short>(v,u))*0.001f;
+		}
+	}
+	else
+	{
+		depth = depthImage.at<float>(v,u);
+	}
+
+	if((depth==0.0f || !uIsFinite(depth)) && estWithNeighborsIfNull)
+	{
+		// all cells no2 must be under the zError to be accepted
+		float tmp = 0.0f;
+		int count = 0;
+		for(int uu = u_start; uu <= u_end; ++uu)
+		{
+			for(int vv = v_start; vv <= v_end; ++vv)
+			{
+				if((uu == u && vv!=v) || (uu != u && vv==v))
+				{
+					float d = 0.0f;
+					if(isInMM)
+					{
+						if(depthImage.at<unsigned short>(vv,uu) > 0 &&
+						   depthImage.at<unsigned short>(vv,uu) < std::numeric_limits<unsigned short>::max())
+						{
+							depth = float(depthImage.at<unsigned short>(vv,uu))*0.001f;
+						}
+					}
+					else
+					{
+						d = depthImage.at<float>(vv,uu);
+					}
+					if(d!=0.0f && uIsFinite(d))
+					{
+						if(tmp == 0.0f)
+						{
+							tmp = d;
+							++count;
+						}
+						else if(fabs(d - tmp) < maxZError)
+						{
+							tmp+=d;
+							++count;
+						}
+					}
+				}
+			}
+		}
+		if(count > 1)
+		{
+			depth = tmp/float(count);
+		}
+	}
+
 	if(depth!=0.0f && uIsFinite(depth))
 	{
 		if(smoothing)
@@ -354,7 +1066,20 @@ float getDepth(
 				{
 					if(!(uu == u && vv == v))
 					{
-						float d = isInMM?(float)depthImage.at<unsigned short>(vv,uu)*0.001f:depthImage.at<float>(vv,uu);
+						float d = 0.0f;
+						if(isInMM)
+						{
+							if(depthImage.at<unsigned short>(vv,uu) > 0 &&
+							   depthImage.at<unsigned short>(vv,uu) < std::numeric_limits<unsigned short>::max())
+							{
+								depth = float(depthImage.at<unsigned short>(vv,uu))*0.001f;
+							}
+						}
+						else
+						{
+							d = depthImage.at<float>(vv,uu);
+						}
+
 						// ignore if not valid or depth difference is too high
 						if(d != 0.0f && uIsFinite(d) && fabs(d - depth) < maxZError)
 						{
@@ -434,7 +1159,118 @@ cv::Mat decimate(const cv::Mat & image, int decimation)
 	return out;
 }
 
-// Registration Depth to RGB
+cv::Mat interpolate(const cv::Mat & image, int factor, float depthErrorRatio)
+{
+	UASSERT(factor >= 1);
+	cv::Mat out;
+	if(!image.empty())
+	{
+		if(factor > 1)
+		{
+			if((image.type() == CV_32FC1 || image.type()==CV_16UC1))
+			{
+				UASSERT(depthErrorRatio>0.0f);
+				out = cv::Mat::zeros(image.rows*factor, image.cols*factor, image.type());
+				for(int j=0; j<out.rows; j+=factor)
+				{
+					for(int i=0; i<out.cols; i+=factor)
+					{
+						if(i>0 && j>0)
+						{
+							float dTopLeft;
+							float dTopRight;
+							float dBottomLeft;
+							float dBottomRight;
+							if(image.type() == CV_32FC1)
+							{
+								dTopLeft = image.at<float>(j/factor-1, i/factor-1);
+								dTopRight = image.at<float>(j/factor-1, i/factor);
+								dBottomLeft = image.at<float>(j/factor, i/factor-1);
+								dBottomRight = image.at<float>(j/factor, i/factor);
+							}
+							else
+							{
+								dTopLeft = image.at<unsigned short>(j/factor-1, i/factor-1);
+								dTopRight = image.at<unsigned short>(j/factor-1, i/factor);
+								dBottomLeft = image.at<unsigned short>(j/factor, i/factor-1);
+								dBottomRight = image.at<unsigned short>(j/factor, i/factor);
+							}
+
+							if(dTopLeft>0 && dTopRight>0 && dBottomLeft>0 && dBottomRight > 0)
+							{
+								float depthError = depthErrorRatio*(dTopLeft+dTopRight+dBottomLeft+dBottomRight)/4.0f;
+								if(fabs(dTopLeft-dTopRight) <= depthError &&
+								   fabs(dTopLeft-dBottomLeft) <= depthError &&
+								   fabs(dTopLeft-dBottomRight) <= depthError)
+								{
+									// bilinear interpolation
+									// do first and last rows then columns
+									float slopeTop = (dTopRight-dTopLeft)/float(factor);
+									float slopeBottom = (dBottomRight-dBottomLeft)/float(factor);
+									if(image.type() == CV_32FC1)
+									{
+										for(int z=i-factor; z<=i; ++z)
+										{
+											out.at<float>(j-factor, z) = dTopLeft+(slopeTop*float(z-(i-factor)));
+											out.at<float>(j, z) = dBottomLeft+(slopeBottom*float(z-(i-factor)));
+										}
+									}
+									else
+									{
+										for(int z=i-factor; z<=i; ++z)
+										{
+											out.at<unsigned short>(j-factor, z) = (unsigned short)(dTopLeft+(slopeTop*float(z-(i-factor))));
+											out.at<unsigned short>(j, z) = (unsigned short)(dBottomLeft+(slopeBottom*float(z-(i-factor))));
+										}
+									}
+
+									// fill the columns
+									if(image.type() == CV_32FC1)
+									{
+										for(int z=i-factor; z<=i; ++z)
+										{
+											float top = out.at<float>(j-factor, z);
+											float bottom = out.at<float>(j, z);
+											float slope = (bottom-top)/float(factor);
+											for(int d=j-factor+1; d<j; ++d)
+											{
+												out.at<float>(d, z) = top+(slope*float(d-(j-factor)));
+											}
+										}
+									}
+									else
+									{
+										for(int z=i-factor; z<=i; ++z)
+										{
+											float top = out.at<unsigned short>(j-factor, z);
+											float bottom = out.at<unsigned short>(j, z);
+											float slope = (bottom-top)/float(factor);
+											for(int d=j-factor+1; d<j; ++d)
+											{
+												out.at<unsigned short>(d, z) = (unsigned short)(top+(slope*float(d-(j-factor))));
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			else
+			{
+				cv::resize(image, out, cv::Size(), float(factor), float(factor));
+			}
+		}
+		else
+		{
+			out = image;
+		}
+	}
+	return out;
+}
+
+// Registration Depth to RGB (return registered depth image)
 cv::Mat registerDepth(
 		const cv::Mat & depth,
 		const cv::Mat & depthK,
@@ -443,7 +1279,7 @@ cv::Mat registerDepth(
 {
 	UASSERT(!transform.isNull());
 	UASSERT(!depth.empty());
-	UASSERT(depth.type() == CV_16UC1); // mm
+	UASSERT(depth.type() == CV_16UC1 || depth.type() == CV_32FC1); // mm or m
 	UASSERT(depthK.type() == CV_64FC1 && depthK.cols == 3 && depthK.cols == 3);
 	UASSERT(colorK.type() == CV_64FC1 && colorK.cols == 3 && colorK.cols == 3);
 
@@ -462,12 +1298,13 @@ cv::Mat registerDepth(
 	P4[3] = 1;
 	cv::Mat registered = cv::Mat::zeros(depth.rows, depth.cols, depth.type());
 
+	bool depthInMM = depth.type() == CV_16UC1;
 	for(int y=0; y<depth.rows; ++y)
 	{
 		for(int x=0; x<depth.cols; ++x)
 		{
 			//filtering
-			float dz = float(depth.at<unsigned short>(y,x))*0.001f; // put in meter for projection
+			float dz = depthInMM?float(depth.at<unsigned short>(y,x))*0.001f:depth.at<float>(y,x); // put in meter for projection
 			if(dz>=0.0f)
 			{
 				// Project to 3D
@@ -483,17 +1320,136 @@ cv::Mat registerDepth(
 
 				if(uIsInBounds(dx, 0, registered.cols) && uIsInBounds(dy, 0, registered.rows))
 				{
-					unsigned short z16 = z * 1000; //mm
-					unsigned short &zReg = registered.at<unsigned short>(dy, dx);
-					if(zReg == 0 || z16 < zReg)
+					if(depthInMM)
 					{
-						zReg = z16;
+						unsigned short z16 = z * 1000; //mm
+						unsigned short &zReg = registered.at<unsigned short>(dy, dx);
+						if(zReg == 0 || z16 < zReg)
+						{
+							zReg = z16;
+						}
+					}
+					else
+					{
+						float &zReg = registered.at<float>(dy, dx);
+						if(zReg == 0 || z < zReg)
+						{
+							zReg = z;
+						}
 					}
 				}
 			}
 		}
 	}
 	return registered;
+}
+
+cv::Mat fillDepthHoles(const cv::Mat & registeredDepth, int maximumHoleSize, float errorRatio)
+{
+	UASSERT(registeredDepth.type() == CV_16UC1);
+	UASSERT(maximumHoleSize > 0);
+	cv::Mat output = registeredDepth.clone();
+	for(int y=0; y<registeredDepth.rows-2; ++y)
+	{
+		for(int x=0; x<registeredDepth.cols-2; ++x)
+		{
+			float a = registeredDepth.at<unsigned short>(y, x);
+			float bRight = registeredDepth.at<unsigned short>(y, x+1);
+			float bDown = registeredDepth.at<unsigned short>(y+1, x);
+
+			if(a > 0.0f && (bRight == 0.0f || bDown == 0.0f))
+			{
+				bool horizontalSet = bRight != 0.0f;
+				bool verticalSet = bDown != 0.0f;
+				int stepX = 0;
+				for(int h=1; h<=maximumHoleSize && (!horizontalSet || !verticalSet); ++h)
+				{
+					// horizontal
+					if(!horizontalSet)
+					{
+						if(x+1+h >= registeredDepth.cols)
+						{
+							horizontalSet = true;
+						}
+						else
+						{
+							float c = registeredDepth.at<unsigned short>(y, x+1+h);
+							if(c == 0)
+							{
+								// ignore this size
+							}
+							else
+							{
+								// fill hole
+								float depthError = errorRatio*float(a+c)/2.0f;
+								if(fabs(a-c) <= depthError)
+								{
+									//linear interpolation
+									float slope = (c-a)/float(h+1);
+									for(int z=x+1; z<x+1+h; ++z)
+									{
+										if(output.at<unsigned short>(y, z) == 0)
+										{
+											output.at<unsigned short>(y, z) = (unsigned short)(a+(slope*float(z-x)));
+										}
+										else
+										{
+											// average with the previously set value
+											output.at<unsigned short>(y, z) = (output.at<unsigned short>(y, z)+(unsigned short)(a+(slope*float(z-x))))/2;
+										}
+									}
+								}
+								horizontalSet = true;
+								stepX = h;
+							}
+						}
+					}
+
+					// vertical
+					if(!verticalSet)
+					{
+						if(y+1+h >= registeredDepth.rows)
+						{
+							verticalSet = true;
+						}
+						else
+						{
+							float c = registeredDepth.at<unsigned short>(y+1+h, x);
+							if(c == 0)
+							{
+								// ignore this size
+							}
+							else
+							{
+								// fill hole
+								float depthError = errorRatio*float(a+c)/2.0f;
+								if(fabs(a-c) <= depthError)
+								{
+									//linear interpolation
+									float slope = (c-a)/float(h+1);
+									for(int z=y+1; z<y+1+h; ++z)
+									{
+										if(output.at<unsigned short>(z, x) == 0)
+										{
+											output.at<unsigned short>(z, x) = (unsigned short)(a+(slope*float(z-y)));
+										}
+										else
+										{
+											// average with the previously set value
+											output.at<unsigned short>(z, x) = (output.at<unsigned short>(z, x)+(unsigned short)(a+(slope*float(z-y))))/2;
+										}
+									}
+								}
+								verticalSet = true;
+							}
+						}
+					}
+				}
+				x+=stepX;
+			}
+		}
+	}
+	return output;
 }
 
 void fillRegisteredDepthHoles(cv::Mat & registeredDepth, bool vertical, bool horizontal, bool fillDoubleHoles)

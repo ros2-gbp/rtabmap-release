@@ -54,7 +54,8 @@ DBReader::DBReader(const std::string & databasePath,
 	_goalsIgnored(goalsIgnored),
 	_dbDriver(0),
 	_currentId(_ids.end()),
-	_previousStamp(0)
+	_previousStamp(0),
+	_previousMapID(0)
 {
 }
 
@@ -70,7 +71,8 @@ DBReader::DBReader(const std::list<std::string> & databasePaths,
 	_goalsIgnored(goalsIgnored),
 	_dbDriver(0),
 	_currentId(_ids.end()),
-	_previousStamp(0)
+	_previousStamp(0),
+	_previousMapID(0)
 {
 }
 
@@ -94,6 +96,7 @@ bool DBReader::init(int startIndex)
 	_ids.clear();
 	_currentId=_ids.end();
 	_previousStamp = 0;
+	_previousMapID = 0;
 
 	if(_paths.size() == 0)
 	{
@@ -157,12 +160,13 @@ void DBReader::mainLoop()
 	OdometryEvent odom = this->getNextData();
 	if(odom.data().id())
 	{
-		int goalId = 0;
+		std::string goalId;
 		double previousStamp = odom.data().stamp();
 		if(previousStamp == 0)
 		{
 			odom.data().setStamp(UTimer::now());
 		}
+
 		if(!_goalsIgnored &&
 		   odom.data().userDataRaw().type() == CV_8SC1 &&
 		   odom.data().userDataRaw().cols >= 7 && // including null str ending
@@ -176,7 +180,7 @@ void DBReader::mainLoop()
 				std::list<std::string> strs = uSplit(goalStr, ':');
 				if(strs.size() == 2)
 				{
-					goalId = atoi(strs.rbegin()->c_str());
+					goalId = *strs.rbegin();
 					odom.data().setUserData(cv::Mat());
 				}
 			}
@@ -196,8 +200,9 @@ void DBReader::mainLoop()
 			this->post(new CameraEvent(odom.data()));
 		}
 
-		if(goalId > 0)
+		if(!goalId.empty())
 		{
+			double delay = 0.0;
 			if(!_ignoreGoalDelay && _currentId != _ids.end())
 			{
 				// get stamp for the next signature to compute the delay
@@ -206,26 +211,36 @@ void DBReader::mainLoop()
 				std::string label;
 				double stamp;
 				int mapId;
-				Transform localTransform, pose;
-				_dbDriver->getNodeInfo(*_currentId, pose, mapId, weight, label, stamp);
+				Transform localTransform, pose, groundTruth;
+				_dbDriver->getNodeInfo(*_currentId, pose, mapId, weight, label, stamp, groundTruth);
 				if(previousStamp && stamp && stamp > previousStamp)
 				{
-					double delay = stamp - previousStamp;
-					UWARN("Goal %d detected, posting it! Waiting %f seconds before sending next data...",
-							goalId, delay);
-					this->post(new RtabmapEventCmd(RtabmapEventCmd::kCmdGoal, goalId));
-					uSleep(delay*1000);
+					delay = stamp - previousStamp;
 				}
-				else
-				{
-					UWARN("Goal %d detected, posting it!", goalId);
-					this->post(new RtabmapEventCmd(RtabmapEventCmd::kCmdGoal, goalId));
-				}
+			}
+
+			if(delay > 0.0)
+			{
+				UWARN("Goal \"%s\" detected, posting it! Waiting %f seconds before sending next data...",
+					   goalId.c_str(), delay);
 			}
 			else
 			{
-				UWARN("Goal %d detected, posting it!", goalId);
+				UWARN("Goal \"%s\" detected, posting it!", goalId.c_str());
+			}
+
+			if(uIsInteger(goalId))
+			{
+				this->post(new RtabmapEventCmd(RtabmapEventCmd::kCmdGoal, atoi(goalId.c_str())));
+			}
+			else
+			{
 				this->post(new RtabmapEventCmd(RtabmapEventCmd::kCmdGoal, goalId));
+			}
+
+			if(delay > 0.0)
+			{
+				uSleep(delay*1000);
 			}
 		}
 
@@ -270,7 +285,8 @@ OdometryEvent DBReader::getNextData()
 			int weight;
 			std::string label;
 			double stamp;
-			_dbDriver->getNodeInfo(*_currentId, pose, mapId, weight, label, stamp);
+			Transform groundTruth;
+			_dbDriver->getNodeInfo(*_currentId, pose, mapId, weight, label, stamp, groundTruth);
 
 			cv::Mat infMatrix = cv::Mat::eye(6,6,CV_64FC1);
 			if(!_odometryIgnored)
@@ -303,9 +319,15 @@ OdometryEvent DBReader::getNextData()
 					UERROR("The option to use database stamps is set (framerate<0), but there are no stamps saved in the database! Aborting...");
 					this->kill();
 				}
-				else if(_previousStamp > 0)
+				else if(_previousMapID == mapId && _previousStamp > 0)
 				{
 					int sleepTime = 1000.0*(stamp-_previousStamp) - 1000.0*_timer.getElapsedTime();
+					if(sleepTime > 10000)
+					{
+						UWARN("Detected long delay (%d sec, stamps = %f vs %f). Waiting a maximum of 10 seconds.",
+								sleepTime/1000, _previousStamp, stamp);
+						sleepTime = 10000;
+					}
 					if(sleepTime > 2)
 					{
 						uSleep(sleepTime-2);
@@ -322,6 +344,7 @@ OdometryEvent DBReader::getNextData()
 					UDEBUG("slept=%fs vs target=%fs", slept, stamp-_previousStamp);
 				}
 				_previousStamp = stamp;
+				_previousMapID = mapId;
 			}
 			else if(_frameRate>0.0f)
 			{
@@ -347,6 +370,7 @@ OdometryEvent DBReader::getNextData()
 				data.uncompressData();
 				data.setId(seq);
 				data.setStamp(stamp);
+				data.setGroundTruth(groundTruth);
 				UDEBUG("Laser=%d RGB/Left=%d Depth/Right=%d, UserData=%d",
 						data.laserScanRaw().empty()?0:1,
 						data.imageRaw().empty()?0:1,
