@@ -61,7 +61,8 @@ public:
 		nextIndex_(0),
 		featuresType_(0),
 		featuresDim_(0),
-		isLSH_(false)
+		isLSH_(false),
+		useDistanceL1_(false)
 	{
 	}
 	virtual ~FlannIndex()
@@ -79,7 +80,14 @@ public:
 			}
 			else
 			{
-				delete (rtflann::Index<rtflann::L2<float> >*)index_;
+				if(useDistanceL1_)
+				{
+					delete (rtflann::Index<rtflann::L1<float> >*)index_;
+				}
+				else
+				{
+					delete (rtflann::Index<rtflann::L2<float> >*)index_;
+				}
 			}
 			index_ = 0;
 		}
@@ -101,7 +109,14 @@ public:
 		}
 		else
 		{
-			return ((const rtflann::Index<rtflann::L2<float> >*)index_)->size();
+			if(useDistanceL1_)
+			{
+				return ((const rtflann::Index<rtflann::L1<float> >*)index_)->size();
+			}
+			else
+			{
+				return ((const rtflann::Index<rtflann::L2<float> >*)index_)->size();
+			}
 		}
 	}
 
@@ -118,19 +133,29 @@ public:
 		}
 		else
 		{
-			return ((const rtflann::Index<rtflann::L2<float> >*)index_)->usedMemory()/1000;
+			if(useDistanceL1_)
+			{
+				return ((const rtflann::Index<rtflann::L1<float> >*)index_)->usedMemory()/1000;
+			}
+			else
+			{
+				return ((const rtflann::Index<rtflann::L2<float> >*)index_)->usedMemory()/1000;
+			}
 		}
 	}
 
+	// Note that useDistanceL1 doesn't have any effect if LSH is used
 	void build(
 			const cv::Mat & features,
-			const rtflann::IndexParams& params)
+			const rtflann::IndexParams& params,
+			bool useDistanceL1)
 	{
 		this->release();
 		UASSERT(index_ == 0);
 		UASSERT(features.type() == CV_32FC1 || features.type() == CV_8UC1);
 		featuresType_ = features.type();
 		featuresDim_ = features.cols;
+		useDistanceL1_ = useDistanceL1;
 
 		if(featuresType_ == CV_8UC1)
 		{
@@ -141,8 +166,16 @@ public:
 		else
 		{
 			rtflann::Matrix<float> dataset((float*)features.data, features.rows, features.cols);
-			index_ = new rtflann::Index<rtflann::L2<float> >(dataset, params);
-			((rtflann::Index<rtflann::L2<float> >*)index_)->buildIndex();
+			if(useDistanceL1_)
+			{
+				index_ = new rtflann::Index<rtflann::L1<float> >(dataset, params);
+				((rtflann::Index<rtflann::L1<float> >*)index_)->buildIndex();
+			}
+			else
+			{
+				index_ = new rtflann::Index<rtflann::L2<float> >(dataset, params);
+				((rtflann::Index<rtflann::L2<float> >*)index_)->buildIndex();
+			}
 		}
 
 		if(features.rows == 1)
@@ -193,18 +226,37 @@ public:
 		else
 		{
 			rtflann::Matrix<float> point((float*)feature.data, feature.rows, feature.cols);
-			rtflann::Index<rtflann::L2<float> > * index = (rtflann::Index<rtflann::L2<float> >*)index_;
-			index->addPoints(point, 0);
-			// Rebuild index if it doubles in size
-			if(index->sizeAtBuild() * 2 < index->size()+index->removedCount())
+			if(useDistanceL1_)
 			{
-				// clean not used features
-				for(std::list<int>::iterator iter=removedIndexes_.begin(); iter!=removedIndexes_.end(); ++iter)
+				rtflann::Index<rtflann::L1<float> > * index = (rtflann::Index<rtflann::L1<float> >*)index_;
+				index->addPoints(point, 0);
+				// Rebuild index if it doubles in size
+				if(index->sizeAtBuild() * 2 < index->size()+index->removedCount())
 				{
-					addedDescriptors_.erase(*iter);
+					// clean not used features
+					for(std::list<int>::iterator iter=removedIndexes_.begin(); iter!=removedIndexes_.end(); ++iter)
+					{
+						addedDescriptors_.erase(*iter);
+					}
+					removedIndexes_.clear();
+					index->buildIndex();
 				}
-				removedIndexes_.clear();
-				index->buildIndex();
+			}
+			else
+			{
+				rtflann::Index<rtflann::L2<float> > * index = (rtflann::Index<rtflann::L2<float> >*)index_;
+				index->addPoints(point, 0);
+				// Rebuild index if it doubles in size
+				if(index->sizeAtBuild() * 2 < index->size()+index->removedCount())
+				{
+					// clean not used features
+					for(std::list<int>::iterator iter=removedIndexes_.begin(); iter!=removedIndexes_.end(); ++iter)
+					{
+						addedDescriptors_.erase(*iter);
+					}
+					removedIndexes_.clear();
+					index->buildIndex();
+				}
 			}
 		}
 
@@ -230,10 +282,15 @@ public:
 		{
 			((rtflann::Index<rtflann::Hamming<unsigned char> >*)index_)->removePoint(index);
 		}
+		else if(useDistanceL1_)
+		{
+			((rtflann::Index<rtflann::L1<float> >*)index_)->removePoint(index);
+		}
 		else
 		{
 			((rtflann::Index<rtflann::L2<float> >*)index_)->removePoint(index);
 		}
+
 		removedIndexes_.push_back(index);
 	}
 
@@ -264,7 +321,14 @@ public:
 		{
 			rtflann::Matrix<float> distsF((float*)dists.data, dists.rows, dists.cols);
 			rtflann::Matrix<float> queryF((float*)query.data, query.rows, query.cols);
-			((rtflann::Index<rtflann::L2<float> >*)index_)->knnSearch(queryF, indicesF, distsF, knn, params);
+			if(useDistanceL1_)
+			{
+				((rtflann::Index<rtflann::L1<float> >*)index_)->knnSearch(queryF, indicesF, distsF, knn, params);
+			}
+			else
+			{
+				((rtflann::Index<rtflann::L2<float> >*)index_)->knnSearch(queryF, indicesF, distsF, knn, params);
+			}
 		}
 	}
 
@@ -274,6 +338,7 @@ private:
 	int featuresType_;
 	int featuresDim_;
 	bool isLSH_;
+	bool useDistanceL1_; // true=EUCLEDIAN_L2 false=MANHATTAN_L1
 
 	// keep feature in memory until the tree is rebuilt
 	// (in case the word is deleted when removed from the VWDictionary)
@@ -292,6 +357,7 @@ VWDictionary::VWDictionary(const ParametersMap & parameters) :
 	_dictionaryPath(Parameters::defaultKpDictionaryPath()),
 	_newWordsComparedTogether(Parameters::defaultKpNewWordsComparedTogether()),
 	_lastWordId(0),
+	useDistanceL1_(false),
 	_flannIndex(new FlannIndex()),
 	_strategy(kNNBruteForce)
 {
@@ -462,43 +528,43 @@ void VWDictionary::setNNStrategy(NNStrategy strategy)
 	if(strategy!=kNNUndef)
 	{
 #if CV_MAJOR_VERSION < 3
+#ifdef HAVE_OPENCV_GPU
 		if(strategy == kNNBruteForceGPU && !cv::gpu::getCudaEnabledDeviceCount())
 		{
 			UERROR("Nearest neighobr strategy \"kNNBruteForceGPU\" chosen but no CUDA devices found! Doing \"kNNBruteForce\" instead.");
 			strategy = kNNBruteForce;
 		}
 #else
+		if(strategy == kNNBruteForceGPU)
+		{
+			UERROR("Nearest neighobr strategy \"kNNBruteForceGPU\" chosen but OpenCV is not built with GPU/cuda module! Doing \"kNNBruteForce\" instead.");
+			strategy = kNNBruteForce;
+		}
+#endif
+#else
+#if HAVE_OPENCV_CUDAFEATURES2D
 		if(strategy == kNNBruteForceGPU && !cv::cuda::getCudaEnabledDeviceCount())
 		{
 			UERROR("Nearest neighobr strategy \"kNNBruteForceGPU\" chosen but no CUDA devices found! Doing \"kNNBruteForce\" instead.");
 			strategy = kNNBruteForce;
 		}
-#endif
-#ifndef HAVE_OPENCV_CUDAFEATURES2D
+#else
 		if(strategy == kNNBruteForceGPU)
 		{
 			UERROR("Nearest neighobr strategy \"kNNBruteForceGPU\" chosen but OpenCV cudafeatures2d module is not found! Doing \"kNNBruteForce\" instead.");
 			strategy = kNNBruteForce;
 		}
 #endif
+#endif
 
-		if(RTABMAP_NONFREE == 0 && strategy == kNNFlannKdTree)
+		bool update = _strategy != strategy;
+		_strategy = strategy;
+		if(update)
 		{
-			UWARN("KdTree (%d) nearest neighbor is not available because RTAB-Map isn't built "
-				  "with OpenCV nonfree module (KdTree only used for SURF/SIFT features). "
-				  "NN strategy is not modified (current=%d).", (int)kNNFlannKdTree, (int)_strategy);
-		}
-		else
-		{
-			bool update = _strategy != strategy;
-			_strategy = strategy;
-			if(update)
-			{
-				_dataTree = cv::Mat();
-				_notIndexedWords = uKeysSet(_visualWords);
-				_removedIndexedWords.clear();
-				this->update();
-			}
+			_dataTree = cv::Mat();
+			_notIndexedWords = uKeysSet(_visualWords);
+			_removedIndexedWords.clear();
+			this->update();
 		}
 	}
 }
@@ -560,6 +626,25 @@ void VWDictionary::update()
 				{
 					VisualWord* w = uValue(_visualWords, *iter, (VisualWord*)0);
 					UASSERT(w);
+
+					cv::Mat descriptor;
+					if(w->getDescriptor().type() == CV_8U)
+					{
+						useDistanceL1_ = true;
+						if(_strategy == kNNFlannKdTree || _strategy == kNNFlannNaive)
+						{
+							w->getDescriptor().convertTo(descriptor, CV_32F);
+						}
+						else
+						{
+							descriptor = w->getDescriptor();
+						}
+					}
+					else
+					{
+						descriptor = w->getDescriptor();
+					}
+
 					int index = 0;
 					if(!_flannIndex->isBuilt())
 					{
@@ -567,15 +652,15 @@ void VWDictionary::update()
 						switch(_strategy)
 						{
 						case kNNFlannNaive:
-							_flannIndex->build(w->getDescriptor(), rtflann::LinearIndexParams());
+							_flannIndex->build(descriptor, rtflann::LinearIndexParams(), useDistanceL1_);
 							break;
 						case kNNFlannKdTree:
-							UASSERT_MSG(w->getDescriptor().type() == CV_32F, "To use KdTree dictionary, float descriptors are required!");
-							_flannIndex->build(w->getDescriptor(), rtflann::KDTreeIndexParams());
+							UASSERT_MSG(descriptor.type() == CV_32F, "To use KdTree dictionary, float descriptors are required!");
+							_flannIndex->build(descriptor, rtflann::KDTreeIndexParams(), useDistanceL1_);
 							break;
 						case kNNFlannLSH:
-							UASSERT_MSG(w->getDescriptor().type() == CV_8U, "To use LSH dictionary, binary descriptors are required!");
-							_flannIndex->build(w->getDescriptor(), rtflann::LshIndexParams(12, 20, 2));
+							UASSERT_MSG(descriptor.type() == CV_8U, "To use LSH dictionary, binary descriptors are required!");
+							_flannIndex->build(descriptor, rtflann::LshIndexParams(12, 20, 2), useDistanceL1_);
 							break;
 						default:
 							UFATAL("Not supposed to be here!");
@@ -585,9 +670,9 @@ void VWDictionary::update()
 					}
 					else
 					{
-						UASSERT(w->getDescriptor().cols == _flannIndex->featuresDim());
-						UASSERT(w->getDescriptor().type() == _flannIndex->featuresType());
-						index = _flannIndex->addPoint(w->getDescriptor());
+						UASSERT(descriptor.cols == _flannIndex->featuresDim());
+						UASSERT(descriptor.type() == _flannIndex->featuresType());
+						index = _flannIndex->addPoint(descriptor);
 					}
 					std::pair<std::map<int, int>::iterator, bool> inserted;
 					inserted = _mapIndexId.insert(std::pair<int, int>(index, w->id()));
@@ -632,7 +717,23 @@ void VWDictionary::update()
 				UTimer timer;
 				timer.start();
 
-				int type = _visualWords.begin()->second->getDescriptor().type();
+				int type;
+				if(_visualWords.begin()->second->getDescriptor().type() == CV_8U)
+				{
+					useDistanceL1_ = true;
+					if(_strategy == kNNFlannKdTree || _strategy == kNNFlannNaive)
+					{
+						type = CV_32F;
+					}
+					else
+					{
+						type = _visualWords.begin()->second->getDescriptor().type();
+					}
+				}
+				else
+				{
+					type = _visualWords.begin()->second->getDescriptor().type();
+				}
 				int dim = _visualWords.begin()->second->getDescriptor().cols;
 
 				UASSERT(type == CV_32F || type == CV_8U);
@@ -643,10 +744,27 @@ void VWDictionary::update()
 				std::map<int, VisualWord*>::const_iterator iter = _visualWords.begin();
 				for(unsigned int i=0; i < _visualWords.size(); ++i, ++iter)
 				{
-					UASSERT(iter->second->getDescriptor().cols == dim);
-					UASSERT(iter->second->getDescriptor().type() == type);
+					cv::Mat descriptor;
+					if(iter->second->getDescriptor().type() == CV_8U)
+					{
+						if(_strategy == kNNFlannKdTree || _strategy == kNNFlannNaive)
+						{
+							iter->second->getDescriptor().convertTo(descriptor, CV_32F);
+						}
+						else
+						{
+							descriptor = iter->second->getDescriptor();
+						}
+					}
+					else
+					{
+						descriptor = iter->second->getDescriptor();
+					}
 
-					iter->second->getDescriptor().copyTo(_dataTree.row(i));
+					UASSERT(descriptor.cols == dim);
+					UASSERT(descriptor.type() == type);
+
+					descriptor.copyTo(_dataTree.row(i));
 					_mapIndexId.insert(_mapIndexId.end(), std::pair<int, int>(i, iter->second->id()));
 					_mapIdIndex.insert(_mapIdIndex.end(), std::pair<int, int>(iter->second->id(), i));
 				}
@@ -657,15 +775,15 @@ void VWDictionary::update()
 				switch(_strategy)
 				{
 				case kNNFlannNaive:
-					_flannIndex->build(_dataTree, rtflann::LinearIndexParams());
+					_flannIndex->build(_dataTree, rtflann::LinearIndexParams(), useDistanceL1_);
 					break;
 				case kNNFlannKdTree:
 					UASSERT_MSG(type == CV_32F, "To use KdTree dictionary, float descriptors are required!");
-					_flannIndex->build(_dataTree, rtflann::KDTreeIndexParams());
+					_flannIndex->build(_dataTree, rtflann::KDTreeIndexParams(), useDistanceL1_);
 					break;
 				case kNNFlannLSH:
 					UASSERT_MSG(type == CV_8U, "To use LSH dictionary, binary descriptors are required!");
-					_flannIndex->build(_dataTree, rtflann::LshIndexParams(12, 20, 2));
+					_flannIndex->build(_dataTree, rtflann::LshIndexParams(12, 20, 2), useDistanceL1_);
 					break;
 				default:
 					break;
@@ -686,16 +804,19 @@ void VWDictionary::update()
 	UDEBUG("");
 }
 
-void VWDictionary::clear()
+void VWDictionary::clear(bool printWarningsIfNotEmpty)
 {
 	ULOGGER_DEBUG("");
-	if(_visualWords.size() && _incrementalDictionary)
+	if(printWarningsIfNotEmpty)
 	{
-		UWARN("Visual dictionary would be already empty here (%d words still in dictionary).", (int)_visualWords.size());
-	}
-	if(_notIndexedWords.size())
-	{
-		UWARN("Not indexed words should be empty here (%d words still not indexed)", (int)_notIndexedWords.size());
+		if(_visualWords.size() && _incrementalDictionary)
+		{
+			UWARN("Visual dictionary would be already empty here (%d words still in dictionary).", (int)_visualWords.size());
+		}
+		if(_notIndexedWords.size())
+		{
+			UWARN("Not indexed words should be empty here (%d words still not indexed)", (int)_notIndexedWords.size());
+		}
 	}
 	for(std::map<int, VisualWord *>::iterator i=_visualWords.begin(); i!=_visualWords.end(); ++i)
 	{
@@ -711,6 +832,7 @@ void VWDictionary::clear()
 	_mapIdIndex.clear();
 	_unusedWords.clear();
 	_flannIndex->release();
+	useDistanceL1_ = false;
 }
 
 int VWDictionary::getNextId()
@@ -752,19 +874,27 @@ void VWDictionary::removeAllWordRef(int wordId, int signatureId)
 	}
 }
 
-std::list<int> VWDictionary::addNewWords(const cv::Mat & descriptors,
+std::list<int> VWDictionary::addNewWords(const cv::Mat & descriptorsIn,
 							   int signatureId)
 {
 	UASSERT(signatureId > 0);
 
-	UDEBUG("id=%d descriptors=%d", signatureId, descriptors.rows);
+	UDEBUG("id=%d descriptors=%d", signatureId, descriptorsIn.rows);
 	UTimer timer;
 	std::list<int> wordIds;
-	if(descriptors.rows == 0 || descriptors.cols == 0)
+	if(descriptorsIn.rows == 0 || descriptorsIn.cols == 0)
 	{
 		UERROR("Descriptors size is null!");
 		return wordIds;
 	}
+
+	if(!_incrementalDictionary && _visualWords.empty())
+	{
+		UERROR("Dictionary mode is set to fixed but no words are in it!");
+		return wordIds;
+	}
+
+	// verify we have the same features
 	int dim = 0;
 	int type = -1;
 	if(_visualWords.size())
@@ -773,24 +903,53 @@ std::list<int> VWDictionary::addNewWords(const cv::Mat & descriptors,
 		type = _visualWords.begin()->second->getDescriptor().type();
 		UASSERT(type == CV_32F || type == CV_8U);
 	}
+	if(dim && dim != descriptorsIn.cols)
+	{
+		UERROR("Descriptors (size=%d) are not the same size as already added words in dictionary(size=%d)", descriptorsIn.cols, dim);
+		return wordIds;
+	}
+	if(type>=0 && type != descriptorsIn.type())
+	{
+		UERROR("Descriptors (type=%d) are not the same type as already added words in dictionary(type=%d)", descriptorsIn.type(), type);
+		return wordIds;
+	}
+
+	// now compare with the actual index
+	cv::Mat descriptors;
+	if(descriptorsIn.type() == CV_8U)
+	{
+		useDistanceL1_ = true;
+		if(_strategy == kNNFlannKdTree || _strategy == kNNFlannNaive)
+		{
+			descriptorsIn.convertTo(descriptors, CV_32F);
+		}
+		else
+		{
+			descriptors = descriptorsIn;
+		}
+	}
+	else
+	{
+		descriptors = descriptorsIn;
+	}
+	dim = 0;
+	type = -1;
+	if(_dataTree.rows || _flannIndex->isBuilt())
+	{
+		dim = _flannIndex->isBuilt()?_flannIndex->featuresDim():_dataTree.cols;
+		type = _flannIndex->isBuilt()?_flannIndex->featuresType():_dataTree.type();
+		UASSERT(type == CV_32F || type == CV_8U);
+	}
 
 	if(dim && dim != descriptors.cols)
 	{
 		UERROR("Descriptors (size=%d) are not the same size as already added words in dictionary(size=%d)", descriptors.cols, dim);
 		return wordIds;
 	}
-	dim = descriptors.cols;
 
 	if(type>=0 && type != descriptors.type())
 	{
 		UERROR("Descriptors (type=%d) are not the same type as already added words in dictionary(type=%d)", descriptors.type(), type);
-		return wordIds;
-	}
-	type = descriptors.type();
-
-	if(!_incrementalDictionary && _visualWords.empty())
-	{
-		UERROR("Dictionary mode is set to fixed but no words are in it!");
 		return wordIds;
 	}
 
@@ -822,16 +981,17 @@ std::list<int> VWDictionary::addNewWords(const cv::Mat & descriptors,
 		else if(_strategy == kNNBruteForce)
 		{
 			bruteForce = true;
-			cv::BFMatcher matcher(type==CV_8U?cv::NORM_HAMMING:cv::NORM_L2SQR);
+			cv::BFMatcher matcher(descriptors.type()==CV_8U?cv::NORM_HAMMING:cv::NORM_L2SQR);
 			matcher.knnMatch(descriptors, _dataTree, matches, k);
 		}
 		else if(_strategy == kNNBruteForceGPU)
 		{
 			bruteForce = true;
 #if CV_MAJOR_VERSION < 3
+#ifdef HAVE_OPENCV_GPU
 			cv::gpu::GpuMat newDescriptorsGpu(descriptors);
 			cv::gpu::GpuMat lastDescriptorsGpu(_dataTree);
-			if(type==CV_8U)
+			if(descriptors.type()==CV_8U)
 			{
 				cv::gpu::BruteForceMatcher_GPU<cv::Hamming> gpuMatcher;
 				gpuMatcher.knnMatch(newDescriptorsGpu, lastDescriptorsGpu, matches, k);
@@ -842,11 +1002,14 @@ std::list<int> VWDictionary::addNewWords(const cv::Mat & descriptors,
 				gpuMatcher.knnMatch(newDescriptorsGpu, lastDescriptorsGpu, matches, k);
 			}
 #else
+			UERROR("Cannot use brute Force GPU because OpenCV is not built with gpu module.");
+#endif
+#else
 #ifdef HAVE_OPENCV_CUDAFEATURES2D
 			cv::cuda::GpuMat newDescriptorsGpu(descriptors);
 			cv::cuda::GpuMat lastDescriptorsGpu(_dataTree);
 			cv::Ptr<cv::cuda::DescriptorMatcher> gpuMatcher;
-			if(type==CV_8U)
+			if(descriptors.type()==CV_8U)
 			{
 				gpuMatcher = cv::cuda::DescriptorMatcher::createBFMatcher(cv::NORM_HAMMING);
 				gpuMatcher->knnMatch(newDescriptorsGpu, lastDescriptorsGpu, matches, k);
@@ -856,6 +1019,8 @@ std::list<int> VWDictionary::addNewWords(const cv::Mat & descriptors,
 				gpuMatcher = cv::cuda::DescriptorMatcher::createBFMatcher(cv::NORM_L2);
 				gpuMatcher->knnMatch(newDescriptorsGpu, lastDescriptorsGpu, matches, k);
 			}
+#else
+			UERROR("Cannot use brute Force GPU because OpenCV is not built with cuda module.");
 #endif
 #endif
 		}
@@ -916,7 +1081,8 @@ std::list<int> VWDictionary::addNewWords(const cv::Mat & descriptors,
 		if(_newWordsComparedTogether && newWords.rows)
 		{
 			std::vector<std::vector<cv::DMatch> > matchesNewWords;
-			cv::BFMatcher matcher(type==CV_8U?cv::NORM_HAMMING:cv::NORM_L2SQR);
+			cv::BFMatcher matcher(descriptors.type()==CV_8U?cv::NORM_HAMMING:useDistanceL1_?cv::NORM_L1:cv::NORM_L2SQR);
+			UASSERT(descriptors.cols == newWords.cols && descriptors.type() == newWords.type());
 			matcher.knnMatch(descriptors.row(i), newWords, matchesNewWords, newWords.rows>1?2:1);
 			UASSERT(matchesNewWords.size() == 1);
 			for(unsigned int j=0; j<matchesNewWords.at(0).size(); ++j)
@@ -959,10 +1125,11 @@ std::list<int> VWDictionary::addNewWords(const cv::Mat & descriptors,
 
 			if(badDist)
 			{
-				VisualWord * vw = new VisualWord(getNextId(), descriptors.row(i), signatureId);
+				// use original descriptor
+				VisualWord * vw = new VisualWord(getNextId(), descriptorsIn.row(i), signatureId);
 				_visualWords.insert(_visualWords.end(), std::pair<int, VisualWord *>(vw->id(), vw));
 				_notIndexedWords.insert(_notIndexedWords.end(), vw->id());
-				newWords.push_back(vw->getDescriptor());
+				newWords.push_back(descriptors.row(i));
 				newWordsId.push_back(vw->id());
 				wordIds.push_back(vw->id());
 				UASSERT(vw->id()>0);
@@ -1006,30 +1173,23 @@ std::vector<int> VWDictionary::findNN(const std::list<VisualWord *> & vws) const
 {
 	UTimer timer;
 	timer.start();
-	std::vector<int> resultIds(vws.size(), 0);
-	unsigned int k=2; // k nearest neighbor
 
 	if(_visualWords.size() && vws.size())
 	{
-		int dim = _visualWords.begin()->second->getDescriptor().cols;
-		int type = _visualWords.begin()->second->getDescriptor().type();
+		int type = (*vws.begin())->getDescriptor().type();
+		int dim = (*vws.begin())->getDescriptor().cols;
 
-		if(dim != (*vws.begin())->getDescriptor().cols)
+		if(dim != _visualWords.begin()->second->getDescriptor().cols)
 		{
 			UERROR("Descriptors (size=%d) are not the same size as already added words in dictionary(size=%d)", (*vws.begin())->getDescriptor().cols, dim);
-			return resultIds;
+			return std::vector<int>(vws.size(), 0);
 		}
 
-		if(type != (*vws.begin())->getDescriptor().type())
+		if(type != _visualWords.begin()->second->getDescriptor().type())
 		{
 			UERROR("Descriptors (type=%d) are not the same type as already added words in dictionary(type=%d)", (*vws.begin())->getDescriptor().type(), type);
-			return resultIds;
+			return std::vector<int>(vws.size(), 0);
 		}
-
-		std::vector<std::vector<cv::DMatch> > matches;
-		bool bruteForce = false;
-		cv::Mat results;
-		cv::Mat dists;
 
 		// fill the request matrix
 		int index = 0;
@@ -1039,6 +1199,7 @@ std::vector<int> VWDictionary::findNN(const std::list<VisualWord *> & vws) const
 		{
 			vw = *iter;
 			UASSERT(vw);
+
 			UASSERT(vw->getDescriptor().cols == dim);
 			UASSERT(vw->getDescriptor().type() == type);
 
@@ -1046,10 +1207,82 @@ std::vector<int> VWDictionary::findNN(const std::list<VisualWord *> & vws) const
 		}
 		ULOGGER_DEBUG("Preparation time = %fs", timer.ticks());
 
+		return findNN(query);
+	}
+	return std::vector<int>(vws.size(), 0);
+}
+std::vector<int> VWDictionary::findNN(const cv::Mat & queryIn) const
+{
+	UTimer timer;
+	timer.start();
+	std::vector<int> resultIds(queryIn.rows, 0);
+	unsigned int k=2; // k nearest neighbor
+
+	if(_visualWords.size() && queryIn.rows)
+	{
+		// verify we have the same features
+		int dim = _visualWords.begin()->second->getDescriptor().cols;
+		int type = _visualWords.begin()->second->getDescriptor().type();
+		UASSERT(type == CV_32F || type == CV_8U);
+
+		if(dim != queryIn.cols)
+		{
+			UERROR("Descriptors (size=%d) are not the same size as already added words in dictionary(size=%d)", queryIn.cols, dim);
+			return resultIds;
+		}
+		if(type != queryIn.type())
+		{
+			UERROR("Descriptors (type=%d) are not the same type as already added words in dictionary(type=%d)", queryIn.type(), type);
+			return resultIds;
+		}
+
+		// now compare with the actual index
+		cv::Mat query;
+		if(queryIn.type() == CV_8U)
+		{
+			if(_strategy == kNNFlannKdTree || _strategy == kNNFlannNaive)
+			{
+				queryIn.convertTo(query, CV_32F);
+			}
+			else
+			{
+				query = queryIn;
+			}
+		}
+		else
+		{
+			query = queryIn;
+		}
+		dim = 0;
+		type = -1;
+		if(_dataTree.rows || _flannIndex->isBuilt())
+		{
+			dim = _flannIndex->isBuilt()?_flannIndex->featuresDim():_dataTree.cols;
+			type = _flannIndex->isBuilt()?_flannIndex->featuresType():_dataTree.type();
+			UASSERT(type == CV_32F || type == CV_8U);
+		}
+
+		if(dim && dim != query.cols)
+		{
+			UERROR("Descriptors (size=%d) are not the same size as already added words in dictionary(size=%d)", query.cols, dim);
+			return resultIds;
+		}
+
+		if(type>=0 && type != query.type())
+		{
+			UERROR("Descriptors (type=%d) are not the same type as already added words in dictionary(type=%d)", query.type(), type);
+			return resultIds;
+		}
+
+		std::vector<std::vector<cv::DMatch> > matches;
+		bool bruteForce = false;
+		cv::Mat results;
+		cv::Mat dists;
+
 		if(_flannIndex->isBuilt() || (!_dataTree.empty() && _dataTree.rows >= (int)k))
 		{
 			//Find nearest neighbors
-			UDEBUG("newPts.total()=%d ", query.total());
+			UDEBUG("query.rows=%d ", query.rows);
 
 			if(_strategy == kNNFlannNaive || _strategy == kNNFlannKdTree || _strategy == kNNFlannLSH)
 			{
@@ -1058,16 +1291,17 @@ std::vector<int> VWDictionary::findNN(const std::list<VisualWord *> & vws) const
 			else if(_strategy == kNNBruteForce)
 			{
 				bruteForce = true;
-				cv::BFMatcher matcher(type==CV_8U?cv::NORM_HAMMING:cv::NORM_L2SQR);
+				cv::BFMatcher matcher(query.type()==CV_8U?cv::NORM_HAMMING:cv::NORM_L2SQR);
 				matcher.knnMatch(query, _dataTree, matches, k);
 			}
 			else if(_strategy == kNNBruteForceGPU)
 			{
 				bruteForce = true;
 #if CV_MAJOR_VERSION < 3
+#ifdef HAVE_OPENCV_GPU
 				cv::gpu::GpuMat newDescriptorsGpu(query);
 				cv::gpu::GpuMat lastDescriptorsGpu(_dataTree);
-				if(type==CV_8U)
+				if(query.type()==CV_8U)
 				{
 					cv::gpu::BruteForceMatcher_GPU<cv::Hamming> gpuMatcher;
 					gpuMatcher.knnMatch(newDescriptorsGpu, lastDescriptorsGpu, matches, k);
@@ -1078,11 +1312,14 @@ std::vector<int> VWDictionary::findNN(const std::list<VisualWord *> & vws) const
 					gpuMatcher.knnMatch(newDescriptorsGpu, lastDescriptorsGpu, matches, k);
 				}
 #else
+			UERROR("Cannot use brute Force GPU because OpenCV is not built with gpu module.");
+#endif
+#else
 #ifdef HAVE_OPENCV_CUDAFEATURES2D
 				cv::cuda::GpuMat newDescriptorsGpu(query);
 				cv::cuda::GpuMat lastDescriptorsGpu(_dataTree);
 				cv::Ptr<cv::cuda::DescriptorMatcher> gpuMatcher;
-				if(type==CV_8U)
+				if(query.type()==CV_8U)
 				{
 					gpuMatcher = cv::cuda::DescriptorMatcher::createBFMatcher(cv::NORM_HAMMING);
 					gpuMatcher->knnMatchAsync(newDescriptorsGpu, lastDescriptorsGpu, matches, k);
@@ -1092,6 +1329,8 @@ std::vector<int> VWDictionary::findNN(const std::list<VisualWord *> & vws) const
 					gpuMatcher = cv::cuda::DescriptorMatcher::createBFMatcher(cv::NORM_L2);
 					gpuMatcher->knnMatchAsync(newDescriptorsGpu, lastDescriptorsGpu, matches, k);
 				}
+#else
+			UERROR("Cannot use brute Force GPU because OpenCV is not built with cuda module.");
 #endif
 #endif
 			}
@@ -1114,25 +1353,43 @@ std::vector<int> VWDictionary::findNN(const std::list<VisualWord *> & vws) const
 		std::vector<std::vector<cv::DMatch> > matchesNotIndexed;
 		if(_notIndexedWords.size())
 		{
-			cv::Mat dataNotIndexed = cv::Mat::zeros(_notIndexedWords.size(), dim, type);
+			cv::Mat dataNotIndexed = cv::Mat::zeros(_notIndexedWords.size(), query.cols, query.type());
 			unsigned int index = 0;
 			VisualWord * vw;
 			for(std::set<int>::iterator iter = _notIndexedWords.begin(); iter != _notIndexedWords.end(); ++iter, ++index)
 			{
 				vw = _visualWords.at(*iter);
-				UASSERT(vw != 0 && vw->getDescriptor().cols == dim && vw->getDescriptor().type() == type);
+
+				cv::Mat descriptor;
+				if(vw->getDescriptor().type() == CV_8U)
+				{
+					if(_strategy == kNNFlannKdTree || _strategy == kNNFlannNaive)
+					{
+						vw->getDescriptor().convertTo(descriptor, CV_32F);
+					}
+					else
+					{
+						descriptor = vw->getDescriptor();
+					}
+				}
+				else
+				{
+					descriptor = vw->getDescriptor();
+				}
+
+				UASSERT(vw != 0 && descriptor.cols == query.cols && descriptor.type() == query.type());
 				vw->getDescriptor().copyTo(dataNotIndexed.row(index));
 				mapIndexIdNotIndexed.insert(mapIndexIdNotIndexed.end(), std::pair<int,int>(index, vw->id()));
 			}
 
 			// Find nearest neighbor
 			ULOGGER_DEBUG("Searching in words not indexed...");
-			cv::BFMatcher matcher(type==CV_8U?cv::NORM_HAMMING:cv::NORM_L2SQR);
+			cv::BFMatcher matcher(query.type()==CV_8U?cv::NORM_HAMMING:useDistanceL1_?cv::NORM_L1:cv::NORM_L2SQR);
 			matcher.knnMatch(query, dataNotIndexed, matchesNotIndexed, dataNotIndexed.rows>1?2:1);
 		}
 		ULOGGER_DEBUG("Search not yet indexed words time = %fs", timer.ticks());
 
-		for(unsigned int i=0; i<vws.size(); ++i)
+		for(int i=0; i<query.rows; ++i)
 		{
 			std::multimap<float, int> fullResults; // Contains results from the kd-tree search [and the naive search in new words]
 			if(!bruteForce && dists.cols)
@@ -1289,6 +1546,17 @@ void VWDictionary::deleteUnusedWords()
 
 void VWDictionary::exportDictionary(const char * fileNameReferences, const char * fileNameDescriptors) const
 {
+	UDEBUG("");
+	if(_visualWords.empty())
+	{
+		UWARN("Dictionary is empty, cannot export it!");
+		return;
+	}
+	if(_visualWords.begin()->second->getDescriptor().type() != CV_32FC1)
+	{
+		UERROR("Exporting binary descriptors is not implemented!");
+		return;
+	}
     FILE* foutRef = 0;
     FILE* foutDesc = 0;
 #ifdef _MSC_VER
@@ -1311,10 +1579,12 @@ void VWDictionary::exportDictionary(const char * fileNameReferences, const char 
 		}
 		else
 		{
+			UDEBUG("");
 			fprintf(foutDesc, "WordID Descriptors...%d\n", (*_visualWords.begin()).second->getDescriptor().cols);
 		}
 	}
 
+	UDEBUG("Export %d words...", _visualWords.size());
     for(std::map<int, VisualWord *>::const_iterator iter=_visualWords.begin(); iter!=_visualWords.end(); ++iter)
     {
     	// References

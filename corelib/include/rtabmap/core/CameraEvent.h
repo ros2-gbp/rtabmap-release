@@ -29,6 +29,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <rtabmap/utilite/UEvent.h>
 #include "rtabmap/core/SensorData.h"
+#include "rtabmap/core/CameraInfo.h"
 
 namespace rtabmap
 {
@@ -43,11 +44,11 @@ public:
 	};
 
 public:
-	CameraEvent(const cv::Mat & image, int seq=0, double stamp = 0.0, const std::string & cameraName = "") :
+	CameraEvent(const cv::Mat & image, int seq=0, double stamp = 0.0, const std::string & cameraName = std::string()) :
 		UEvent(kCodeData),
-		data_(image, seq, stamp),
-		cameraName_(cameraName)
+		data_(image, seq, stamp)
 	{
+		cameraInfo_.cameraName = cameraName;
 	}
 
 	CameraEvent() :
@@ -55,23 +56,36 @@ public:
 	{
 	}
 
-	CameraEvent(const SensorData & data, const std::string & cameraName = "") :
+	CameraEvent(const SensorData & data) :
+		UEvent(kCodeData),
+		data_(data)
+	{
+	}
+
+	CameraEvent(const SensorData & data, const std::string & cameraName) :
+		UEvent(kCodeData),
+		data_(data)
+	{
+		cameraInfo_.cameraName = cameraName;
+	}
+	CameraEvent(const SensorData & data, const CameraInfo & cameraInfo) :
 		UEvent(kCodeData),
 		data_(data),
-		cameraName_(cameraName)
+		cameraInfo_(cameraInfo)
 	{
 	}
 
 	// Image or descriptors
 	const SensorData & data() const {return data_;}
-	const std::string & cameraName() const {return cameraName_;}
+	const std::string & cameraName() const {return cameraInfo_.cameraName;}
+	const CameraInfo & info() const {return cameraInfo_;}
 
 	virtual ~CameraEvent() {}
 	virtual std::string getClassName() const {return std::string("CameraEvent");}
 
 private:
 	SensorData data_;
-	std::string cameraName_;
+	CameraInfo cameraInfo_;
 };
 
 } // namespace rtabmap

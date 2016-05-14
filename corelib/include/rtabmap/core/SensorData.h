@@ -31,6 +31,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap/core/RtabmapExp.h>
 #include <rtabmap/core/Transform.h>
 #include <rtabmap/core/CameraModel.h>
+#include <rtabmap/core/StereoCameraModel.h>
 #include <rtabmap/core/Transform.h>
 #include <opencv2/core/core.hpp>
 #include <opencv2/features2d/features2d.hpp>
@@ -71,7 +72,7 @@ public:
 			double stamp = 0.0,
 			const cv::Mat & userData = cv::Mat());
 
-	// RGB-D constructor + 2d laser scan
+	// RGB-D constructor + laser scan
 	SensorData(
 			const cv::Mat & laserScan,
 			int laserScanMaxPts,
@@ -92,7 +93,7 @@ public:
 			double stamp = 0.0,
 			const cv::Mat & userData = cv::Mat());
 
-	// Multi-cameras RGB-D constructor + 2d laser scan
+	// Multi-cameras RGB-D constructor + laser scan
 	SensorData(
 			const cv::Mat & laserScan,
 			int laserScanMaxPts,
@@ -113,7 +114,7 @@ public:
 			double stamp = 0.0,
 			const cv::Mat & userData = cv::Mat());
 
-	// Stereo constructor + 2d laser scan
+	// Stereo constructor + laser scan
 	SensorData(
 			const cv::Mat & laserScan,
 			int laserScanMaxPts,
@@ -138,7 +139,7 @@ public:
 			_laserScanRaw.empty() &&
 			_laserScanCompressed.empty() &&
 			_cameraModels.size() == 0 &&
-			!_stereoCameraModel.isValid() &&
+			!_stereoCameraModel.isValidForProjection() &&
 			_userDataRaw.empty() &&
 			_userDataCompressed.empty() &&
 			_keypoints.size() == 0 &&
@@ -190,6 +191,9 @@ public:
 	const std::vector<cv::KeyPoint> & keypoints() const {return _keypoints;}
 	const cv::Mat & descriptors() const {return _descriptors;}
 
+	void setGroundTruth(const Transform & pose) {groundTruth_ = pose;}
+	const Transform & groundTruth() const {return groundTruth_;}
+
 private:
 	int _id;
 	double _stamp;
@@ -202,7 +206,7 @@ private:
 
 	cv::Mat _imageRaw;          // CV_8UC1 or CV_8UC3
 	cv::Mat _depthOrRightRaw;   // depth CV_16UC1 or CV_32FC1, right image CV_8UC1
-	cv::Mat _laserScanRaw;      // CV_32FC2
+	cv::Mat _laserScanRaw;      // CV_32FC2 or CV_32FC3
 
 	std::vector<CameraModel> _cameraModels;
 	StereoCameraModel _stereoCameraModel;
@@ -214,6 +218,8 @@ private:
 	// features
 	std::vector<cv::KeyPoint> _keypoints;
 	cv::Mat _descriptors;
+
+	Transform groundTruth_;
 };
 
 }

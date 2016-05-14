@@ -83,12 +83,26 @@ void RTABMAP_EXP projectCloudOnXYPlane(
 template<typename PointT>
 void segmentObstaclesFromGround(
 		const typename pcl::PointCloud<PointT>::Ptr & cloud,
+		const pcl::IndicesPtr & indices,
 		pcl::IndicesPtr & ground,
 		pcl::IndicesPtr & obstacles,
-		float normalRadiusSearch,
+		int normalKSearch,
 		float groundNormalAngle,
+		float clusterRadius,
 		int minClusterSize,
-		bool segmentFlatObstacles = false);
+		bool segmentFlatObstacles = false,
+		float maxGroundHeight = 0.0f);
+template<typename PointT>
+void segmentObstaclesFromGround(
+		const typename pcl::PointCloud<PointT>::Ptr & cloud,
+		pcl::IndicesPtr & ground,
+		pcl::IndicesPtr & obstacles,
+		int normalKSearch,
+		float groundNormalAngle,
+		float clusterRadius,
+		int minClusterSize,
+		bool segmentFlatObstacles = false,
+		float maxGroundHeight = 0.0f);
 
 template<typename PointT>
 void occupancy2DFromCloud3D(
@@ -97,7 +111,20 @@ void occupancy2DFromCloud3D(
 		cv::Mat & obstacles,
 		float cellSize = 0.05f,
 		float groundNormalAngle = M_PI_4,
-		int minClusterSize = 20);
+		int minClusterSize = 20,
+		bool segmentFlatObstacles = false,
+		float maxGroundHeight = 0.0f);
+template<typename PointT>
+void occupancy2DFromCloud3D(
+		const typename pcl::PointCloud<PointT>::Ptr & cloud,
+		const pcl::IndicesPtr & indices,
+		cv::Mat & ground,
+		cv::Mat & obstacles,
+		float cellSize = 0.05f,
+		float groundNormalAngle = M_PI_4,
+		int minClusterSize = 20,
+		bool segmentFlatObstacles = false,
+		float maxGroundHeight = 0.0f);
 
 } // namespace util3d
 } // namespace rtabmap

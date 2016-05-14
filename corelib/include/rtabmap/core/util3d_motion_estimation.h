@@ -30,8 +30,6 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <rtabmap/core/RtabmapExp.h>
 
-#include <pcl/point_cloud.h>
-#include <pcl/point_types.h>
 #include <rtabmap/core/Transform.h>
 #include <rtabmap/core/CameraModel.h>
 
@@ -42,22 +40,23 @@ namespace util3d
 {
 
 Transform RTABMAP_EXP estimateMotion3DTo2D(
-			const std::map<int, pcl::PointXYZ> & words3A,
+			const std::map<int, cv::Point3f> & words3A,
 			const std::map<int, cv::KeyPoint> & words2B,
 			const CameraModel & cameraModel,
 			int minInliers = 10,
 			int iterations = 100,
 			double reprojError = 5.,
 			int flagsPnP = 0,
+			int pnpRefineIterations = 1,
 			const Transform & guess = Transform::getIdentity(),
-			const std::map<int, pcl::PointXYZ> & words3B = std::map<int, pcl::PointXYZ>(),
-			double * varianceOut = 0,
+			const std::map<int, cv::Point3f> & words3B = std::map<int, cv::Point3f>(),
+			double * varianceOut = 0, // mean reproj error if words3B is not set
 			std::vector<int> * matchesOut = 0,
 			std::vector<int> * inliersOut = 0);
 
 Transform RTABMAP_EXP estimateMotion3DTo3D(
-			const std::map<int, pcl::PointXYZ> & words3A,
-			const std::map<int, pcl::PointXYZ> & words3B,
+			const std::map<int, cv::Point3f> & words3A,
+			const std::map<int, cv::Point3f> & words3B,
 			int minInliers = 10,
 			double inliersDistance = 0.1,
 			int iterations = 100,
@@ -65,6 +64,22 @@ Transform RTABMAP_EXP estimateMotion3DTo3D(
 			double * varianceOut = 0,
 			std::vector<int> * matchesOut = 0,
 			std::vector<int> * inliersOut = 0);
+
+void RTABMAP_EXP solvePnPRansac(
+		const std::vector<cv::Point3f> & objectPoints,
+		const std::vector<cv::Point2f> & imagePoints,
+		const cv::Mat & cameraMatrix,
+		const cv::Mat & distCoeffs,
+		cv::Mat & rvec,
+		cv::Mat & tvec,
+		bool useExtrinsicGuess,
+		int iterationsCount,
+		float reprojectionError,
+		int minInliersCount,
+		std::vector<int> & inliers,
+		int flags,
+		int refineIterations = 1,
+		float refineSigma = 3.0f);
 
 } // namespace util3d
 } // namespace rtabmap
