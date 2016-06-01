@@ -496,6 +496,7 @@ void Memory::parseParameters(const ParametersMap & parameters)
 			{
 				UWARN("Switching from Mapping to Localization mode, the database will be saved and reloaded.");
 				this->init(_dbDriver->getUrl());
+				UWARN("Switching from Mapping to Localization mode, the database is reloaded!");
 			}
 		}
 		_incrementalMemory = value;
@@ -2138,10 +2139,14 @@ Transform Memory::computeTransform(
 			// Remove descriptors, this will avoid recomputation of the correspondences in regVis
 			tmpFrom.setWordsDescriptors(std::multimap<int, cv::Mat>());
 			tmpTo.setWordsDescriptors(std::multimap<int, cv::Mat>());
-			guess = regVis.computeTransformation(tmpFrom, tmpTo, guess, info);
+			Transform t = regVis.computeTransformation(tmpFrom, tmpTo, guess, info);
 			// set back descriptors
 			tmpFrom.setWordsDescriptors(fromS.getWordsDescriptors());
 			tmpTo.setWordsDescriptors(toS.getWordsDescriptors());
+			if(!t.isNull())
+			{
+				guess = t;
+			}
 		}
 
 		if(_reextractLoopClosureFeatures)
@@ -2157,44 +2162,32 @@ Transform Memory::computeTransform(
 			tmpTo.sensorData().setFeatures(std::vector<cv::KeyPoint>(), cv::Mat());
 		}
 
-		if(guess.isNull())
-		{
-			if(!_registrationPipeline->isImageRequired())
-			{
-				UDEBUG("");
-				// no visual in the pipeline, make visual registration for guess
-				guess = regVis.computeTransformation(tmpFrom, tmpTo, guess, info);
-			}
-			else
-			{
-				UDEBUG("");
-				guess.setIdentity();
-			}
-		}
-
-		if(!guess.isNull())
+		if(guess.isNull() && !_registrationPipeline->isImageRequired())
 		{
 			UDEBUG("");
-			transform = _registrationPipeline->computeTransformation(tmpFrom, tmpTo, guess, info);
+			// no visual in the pipeline, make visual registration for guess
+			guess = regVis.computeTransformation(tmpFrom, tmpTo, guess, info);
+		}
 
-			if(!transform.isNull())
+		transform = _registrationPipeline->computeTransformation(tmpFrom, tmpTo, guess, info);
+
+		if(!transform.isNull())
+		{
+			UDEBUG("");
+			// verify if it is a 180 degree transform, well verify > 90
+			float x,y,z, roll,pitch,yaw;
+			transform.getTranslationAndEulerAngles(x,y,z, roll,pitch,yaw);
+			if(fabs(roll) > CV_PI/2 ||
+			   fabs(pitch) > CV_PI/2 ||
+			   fabs(yaw) > CV_PI/2)
 			{
-				UDEBUG("");
-				// verify if it is a 180 degree transform, well verify > 90
-				float x,y,z, roll,pitch,yaw;
-				transform.getTranslationAndEulerAngles(x,y,z, roll,pitch,yaw);
-				if(fabs(roll) > CV_PI/2 ||
-				   fabs(pitch) > CV_PI/2 ||
-				   fabs(yaw) > CV_PI/2)
+				transform.setNull();
+				std::string msg = uFormat("Too large rotation detected! (roll=%f, pitch=%f, yaw=%f)",
+						roll, pitch, yaw);
+				UINFO(msg.c_str());
+				if(info)
 				{
-					transform.setNull();
-					std::string msg = uFormat("Too large rotation detected! (roll=%f, pitch=%f, yaw=%f)",
-							roll, pitch, yaw);
-					UINFO(msg.c_str());
-					if(info)
-					{
-						info->rejectedMsg = msg;
-					}
+					info->rejectedMsg = msg;
 				}
 			}
 		}
@@ -2298,6 +2291,7 @@ Transform Memory::computeIcpTransformMulti(
 		SensorData assembledData;
 		Transform toPose = poses.at(toId);
 		std::string msg;
+		int maxPoints = fromScan.cols;
 		pcl::PointCloud<pcl::PointXYZ>::Ptr assembledToClouds(new pcl::PointCloud<pcl::PointXYZ>);
 		for(std::map<int, Transform>::const_iterator iter = poses.begin(); iter!=poses.end(); ++iter)
 		{
@@ -2309,6 +2303,10 @@ Transform Memory::computeIcpTransformMulti(
 					cv::Mat scan;
 					s->sensorData().uncompressData(0, 0, &scan);
 					pcl::PointCloud<pcl::PointXYZ>::Ptr cloud = util3d::laserScanToPointCloud(scan, toPose.inverse() * iter->second);
+					if(scan.cols > maxPoints)
+					{
+						maxPoints = scan.cols;
+					}
 					*assembledToClouds += *cloud;
 				}
 				else
@@ -2319,7 +2317,7 @@ Transform Memory::computeIcpTransformMulti(
 		}
 		if(assembledToClouds->size())
 		{
-			assembledData.setLaserScanRaw(util3d::laserScanFromPointCloud(*assembledToClouds, Transform()), fromS->sensorData().laserScanMaxPts(), fromS->sensorData().laserScanMaxRange());
+			assembledData.setLaserScanRaw(util3d::laserScanFromPointCloud(*assembledToClouds, Transform()), fromS->sensorData().laserScanMaxPts()?fromS->sensorData().laserScanMaxPts():maxPoints, fromS->sensorData().laserScanMaxRange());
 		}
 
 		Transform guess = poses.at(fromId).inverse() * poses.at(toId);
@@ -3427,7 +3425,7 @@ Signature * Memory::createSignature(const SensorData & data, const Transform & p
 		UASSERT(keypoints3D.size() == 0 || keypoints3D.size() == wordIds.size());
 		unsigned int i=0;
 		float decimationRatio = preDecimation / _imagePostDecimation;
-		double log2value = log(preDecimation)/log(2);
+		double log2value = log(double(preDecimation))/log(2.0);
 		for(std::list<int>::iterator iter=wordIds.begin(); iter!=wordIds.end() && i < keypoints.size(); ++iter, ++i)
 		{
 			cv::KeyPoint kpt = keypoints[i];
