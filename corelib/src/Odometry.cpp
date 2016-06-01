@@ -253,7 +253,7 @@ Transform Odometry::process(SensorData & data, OdometryInfo * info)
 
 		// transform back the keypoints in the original image
 		std::vector<cv::KeyPoint> kpts = decimatedData.keypoints();
-		double log2value = log(_imageDecimation)/log(2);
+		double log2value = log(double(_imageDecimation))/log(2.0);
 		for(unsigned int i=0; i<kpts.size(); ++i)
 		{
 			kpts[i].pt.x *= _imageDecimation;
@@ -401,15 +401,7 @@ Transform Odometry::process(SensorData & data, OdometryInfo * info)
 			else if(!_holonomic)
 			{
 				// arc trajectory around ICR
-				float tmpY = vyaw!=0.0f ? vx / tan((CV_PI-vyaw)/2.0f) : 0.0f;
-				if(fabs(tmpY) < fabs(vy) || (tmpY<=0 && vy >=0) || (tmpY>=0 && vy<=0))
-				{
-					vy = tmpY;
-				}
-				else
-				{
-					vyaw = (atan(vx/vy)*2.0f-CV_PI)*-1;
-				}
+				vy = vyaw!=0.0f ? vx / tan((CV_PI-vyaw)/2.0f) : 0.0f;
 				if(_force3DoF)
 				{
 					vz = 0.0f;
