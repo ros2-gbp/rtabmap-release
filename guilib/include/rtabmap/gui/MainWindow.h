@@ -153,6 +153,8 @@ private slots:
 	void selectFreenect2();
 	void selectStereoDC1394();
 	void selectStereoFlyCapture2();
+	void selectStereoZed();
+	void selectStereoUsb();
 	void dumpTheMemory();
 	void dumpThePrediction();
 	void sendGoal();
@@ -229,7 +231,6 @@ private:
 	void update3DMapVisibility(bool cloudsShown, bool scansShown);
 	void updateMapCloud(
 			const std::map<int, Transform> & poses,
-			const Transform & pose,
 			const std::multimap<int, Link> & constraints,
 			const std::map<int, int> & mapIds,
 			const std::map<int, std::string> & labels,
