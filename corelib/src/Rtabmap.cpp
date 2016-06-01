@@ -100,7 +100,6 @@ Rtabmap::Rtabmap() :
 	_proximityMaxGraphDepth(Parameters::defaultRGBDProximityMaxGraphDepth()),
 	_proximityFilteringRadius(Parameters::defaultRGBDProximityPathFilteringRadius()),
 	_proximityRawPosesUsed(Parameters::defaultRGBDProximityPathRawPosesUsed()),
-	_proximityScansMerged(Parameters::defaultRGBDProximityPathScansMerged()),
 	_proximityAngle(Parameters::defaultRGBDProximityAngle()*M_PI/180.0f),
 	_databasePath(""),
 	_optimizeFromGraphEnd(Parameters::defaultRGBDOptimizeFromGraphEnd()),
@@ -411,7 +410,6 @@ void Rtabmap::parseParameters(const ParametersMap & parameters)
 	Parameters::parse(parameters, Parameters::kRGBDProximityMaxGraphDepth(), _proximityMaxGraphDepth);
 	Parameters::parse(parameters, Parameters::kRGBDProximityPathFilteringRadius(), _proximityFilteringRadius);
 	Parameters::parse(parameters, Parameters::kRGBDProximityPathRawPosesUsed(), _proximityRawPosesUsed);
-	Parameters::parse(parameters, Parameters::kRGBDProximityPathScansMerged(), _proximityScansMerged);
 	Parameters::parse(parameters, Parameters::kRGBDProximityAngle(), _proximityAngle);
 	_proximityAngle *= M_PI/180.0f;
 	Parameters::parse(parameters, Parameters::kRGBDOptimizeFromGraphEnd(), _optimizeFromGraphEnd);
@@ -1013,17 +1011,16 @@ bool Rtabmap::process(
 			else
 			{
 				//============================================================
-				// Scan matching
+				// Refine neighbor links
 				//============================================================
 				if(!signature->sensorData().laserScanCompressed().empty())
 				{
-					UINFO("Odometry correction by scan matching");
-					Transform guess = signature->getLinks().begin()->second.transform().inverse();
+					UINFO("Odometry refining: guess = %s", guess.prettyPrint().c_str());
 					RegistrationInfo info;
-					Transform t = _memory->computeIcpTransform(oldId, signature->id(), guess, &info);
+					Transform t = _memory->computeTransform(oldId, signature->id(), guess, &info);
 					if(!t.isNull())
 					{
-						UINFO("Scan matching: update neighbor link (%d->%d, variance=%f) from %s to %s",
+						UINFO("Odometry refining: update neighbor link (%d->%d, variance=%f) from %s to %s",
 								oldId,
 								signature->id(),
 								info.variance,
@@ -1050,7 +1047,7 @@ bool Rtabmap::process(
 					}
 					else
 					{
-						UINFO("Scan matching rejected: %s", info.rejectedMsg.c_str());
+						UINFO("Odometry refining rejected: %s", info.rejectedMsg.c_str());
 						if(info.variance > 0)
 						{
 							double sqrtVar = sqrt(info.variance);
@@ -1065,7 +1062,7 @@ bool Rtabmap::process(
 				}
 			}
 			timeNeighborLinkRefining = timer.ticks();
-			ULOGGER_INFO("timeScanMatching=%fs", timeNeighborLinkRefining);
+			ULOGGER_INFO("timeOdometryRefining=%fs", timeNeighborLinkRefining);
 
 			UASSERT(oldS->hasLink(signature->id()));
 			UASSERT(uContains(_optimizedPoses, oldId));
@@ -1902,47 +1899,37 @@ bool Rtabmap::process(
 						   (_proximityFilteringRadius <= 0.0f ||
 							_optimizedPoses.at(signature->id()).getDistanceSquared(_optimizedPoses.at(nearestId)) < _proximityFilteringRadius*_proximityFilteringRadius))
 						{
-							if(!_proximityScansMerged)
+							// Assemble scans in the path and do ICP only
+							if(_proximityRawPosesUsed)
 							{
-								//only keep the nearest node
-								std::map<int, Transform> tmp;
-								tmp.insert(*path.find(nearestId));
-								path = tmp;
+								//optimize the path's poses locally
+								path = optimizeGraph(nearestId, uKeysSet(path), std::map<int, Transform>(), false);
+								// transform local poses in optimized graph referential
+								UASSERT(uContains(path, nearestId));
+								Transform t = _optimizedPoses.at(nearestId) * path.at(nearestId).inverse();
+								for(std::map<int, Transform>::iterator jter=path.begin(); jter!=path.end(); ++jter)
+								{
+									jter->second = t * jter->second;
+								}
 							}
-							else
+							std::map<int, Transform> filteredPath = path;
+							if(path.size() > 2 && _proximityFilteringRadius > 0.0f)
 							{
-								// Assemble scans in the path and do ICP only
-								if(_proximityRawPosesUsed)
-								{
-									//optimize the path's poses locally
-									path = optimizeGraph(nearestId, uKeysSet(path), std::map<int, Transform>(), false);
-									// transform local poses in optimized graph referential
-									UASSERT(uContains(path, nearestId));
-									Transform t = _optimizedPoses.at(nearestId) * path.at(nearestId).inverse();
-									for(std::map<int, Transform>::iterator jter=path.begin(); jter!=path.end(); ++jter)
-									{
-										jter->second = t * jter->second;
-									}
-								}
-								if(path.size() > 2 && _proximityFilteringRadius > 0.0f)
-								{
-									// path filtering
-									std::map<int, Transform> filteredPath = graph::radiusPosesFiltering(path, _proximityFilteringRadius, 0, true);
-									// make sure the current pose is still here
-									filteredPath.insert(*path.find(nearestId));
-									path = filteredPath;
-								}
+								// path filtering
+								filteredPath = graph::radiusPosesFiltering(path, _proximityFilteringRadius, 0, true);
+								// make sure the current pose is still here
+								filteredPath.insert(*path.find(nearestId));
 							}
 
-							if(path.size() > 0)
+							if(filteredPath.size() > 0)
 							{
 								// add current node to poses
-								path.insert(std::make_pair(signature->id(), _optimizedPoses.at(signature->id())));
+								filteredPath.insert(std::make_pair(signature->id(), _optimizedPoses.at(signature->id())));
 								//The nearest will be the reference for a loop closure transform
 								if(signature->getLinks().find(nearestId) == signature->getLinks().end())
 								{
 									RegistrationInfo info;
-									Transform transform = _memory->computeIcpTransformMulti(signature->id(), nearestId, path, &info);
+									Transform transform = _memory->computeIcpTransformMulti(signature->id(), nearestId, filteredPath, &info);
 									if(!transform.isNull())
 									{
 										if(_proximityFilteringRadius <= 0 || transform.getNormSquared() <= _proximityFilteringRadius*_proximityFilteringRadius)
@@ -1959,14 +1946,11 @@ bool Rtabmap::process(
 												stream << "SCANS:";
 												for(std::map<int, Transform>::iterator iter=path.begin(); iter!=path.end(); ++iter)
 												{
-													if(iter->first!=signature->id())
+													if(iter != path.begin())
 													{
-														if(iter != path.begin())
-														{
-															stream << ";";
-														}
-														stream << uNumber2Str(iter->first);
+														stream << ";";
 													}
+													stream << uNumber2Str(iter->first);
 												}
 												std::string scansStr = stream.str();
 												scanMatchingIds = cv::Mat(1, int(scansStr.size()+1), CV_8SC1, (void *)scansStr.c_str());
@@ -2051,14 +2035,17 @@ bool Rtabmap::process(
 	{
 		UASSERT(uContains(_optimizedPoses, signature->id()));
 
+		//used in localization mode: filter virtual links
+		std::map<int, Link> localizationLinks = graph::filterLinks(signature->getLinks(), Link::kVirtualClosure);
+
 		// Note that in localization mode, we don't re-optimize the graph
 		// if:
 		//  1- there are no signatures retrieved,
 		//  2- we are relocalizing on a node already in the optimized graph
 		if(!_memory->isIncremental() &&
 		   signaturesRetrieved.size() == 0 &&
-		   signature->getLinks().size() &&
-		   uContains(_optimizedPoses, signature->getLinks().begin()->first))
+		   localizationLinks.size() &&
+		   uContains(_optimizedPoses, localizationLinks.begin()->first))
 		{
 			// If there are no signatures retrieved, we don't
 			// need to re-optimize the graph. Just update the last
@@ -2070,8 +2057,8 @@ bool Rtabmap::process(
 				// update all previous nodes
 				// Normally _mapCorrection should be identity, but if _optimizeFromGraphEnd
 				// parameters just changed state, we should put back all poses without map correction.
-				Transform oldPose = _optimizedPoses.at(signature->getLinks().begin()->first);
-				Transform u = signature->getPose() * signature->getLinks().begin()->second.transform();
+				Transform oldPose = _optimizedPoses.at(localizationLinks.begin()->first);
+				Transform u = signature->getPose() * localizationLinks.begin()->second.transform();
 				Transform up = u * oldPose.inverse();
 				Transform mapCorrectionInv = _mapCorrection.inverse();
 				for(std::map<int, Transform>::iterator iter=_optimizedPoses.begin(); iter!=_optimizedPoses.end(); ++iter)
@@ -2082,7 +2069,7 @@ bool Rtabmap::process(
 			}
 			else
 			{
-				_optimizedPoses.at(signature->id()) = _optimizedPoses.at(signature->getLinks().begin()->first) * signature->getLinks().begin()->second.transform().inverse();
+				_optimizedPoses.at(signature->id()) = _optimizedPoses.at(localizationLinks.begin()->first) * localizationLinks.begin()->second.transform().inverse();
 			}
 		}
 		else
