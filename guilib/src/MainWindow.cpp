@@ -399,6 +399,8 @@ MainWindow::MainWindow(PreferencesDialog * prefDialog, QWidget * parent) :
 	connect(_ui->actionFreenect2, SIGNAL(triggered()), this, SLOT(selectFreenect2()));
 	connect(_ui->actionStereoDC1394, SIGNAL(triggered()), this, SLOT(selectStereoDC1394()));
 	connect(_ui->actionStereoFlyCapture2, SIGNAL(triggered()), this, SLOT(selectStereoFlyCapture2()));
+	connect(_ui->actionStereoZed, SIGNAL(triggered()), this, SLOT(selectStereoZed()));
+	connect(_ui->actionStereoUsb, SIGNAL(triggered()), this, SLOT(selectStereoUsb()));
 	_ui->actionFreenect->setEnabled(CameraFreenect::available());
 	_ui->actionOpenNI_CV->setEnabled(CameraOpenNICV::available());
 	_ui->actionOpenNI_CV_ASUS->setEnabled(CameraOpenNICV::available());
@@ -408,6 +410,7 @@ MainWindow::MainWindow(PreferencesDialog * prefDialog, QWidget * parent) :
 	_ui->actionFreenect2->setEnabled(CameraFreenect2::available());
 	_ui->actionStereoDC1394->setEnabled(CameraStereoDC1394::available());
 	_ui->actionStereoFlyCapture2->setEnabled(CameraStereoFlyCapture2::available());
+	_ui->actionStereoZed->setEnabled(CameraStereoZed::available());
 	this->updateSelectSourceMenu();
 
 	connect(_ui->actionPreferences, SIGNAL(triggered()), this, SLOT(openPreferences()));
@@ -775,6 +778,8 @@ void MainWindow::handleEvent(UEvent* anEvent)
 		{
 			// we receive too many odometry events! just send without data
 			SensorData data(cv::Mat(), odomEvent->data().id(), odomEvent->data().stamp());
+			data.setCameraModels(odomEvent->data().cameraModels());
+			data.setStereoCameraModel(odomEvent->data().stereoCameraModel());
 			data.setGroundTruth(odomEvent->data().groundTruth());
 			OdometryEvent tmp(data, odomEvent->pose(), odomEvent->covariance(), odomEvent->info().copyWithoutData());
 			emit odometryReceived(tmp);
@@ -882,7 +887,8 @@ void MainWindow::processOdometry(const rtabmap::OdometryEvent & odom)
 						_preferencesDialog->getCloudDecimation(1),
 						_preferencesDialog->getCloudMaxDepth(1),
 						_preferencesDialog->getCloudMinDepth(1),
-						indices.get());
+						indices.get(),
+						_preferencesDialog->getAllParameters());
 				if(indices->size())
 				{
 					cloud = util3d::transformPointCloud(cloud, pose);
@@ -1036,7 +1042,17 @@ void MainWindow::processOdometry(const rtabmap::OdometryEvent & odom)
 	if(!odom.pose().isNull())
 	{
 		// update camera position
-		_cloudViewer->updateCameraTargetPosition(_odometryCorrection*odom.pose());
+		Transform localTransform;
+		if(odom.data().cameraModels().size() && !odom.data().cameraModels()[0].localTransform().isNull())
+		{
+			localTransform = odom.data().cameraModels()[0].localTransform();
+		}
+		else if(!odom.data().stereoCameraModel().localTransform().isNull())
+		{
+			localTransform = odom.data().stereoCameraModel().localTransform();
+		}
+
+		_cloudViewer->updateCameraTargetPosition(_odometryCorrection*odom.pose(), localTransform);
 	}
 	_cloudViewer->update();
 
@@ -1527,9 +1543,30 @@ void MainWindow::processStats(const rtabmap::Statistics & stat)
 			Transform groundTruthOffset = alignPosesToGroundTruth(poses, groundTruth);
 			UDEBUG("time= %d ms", time.restart());
 
+			if(!_odometryReceived && poses.size())
+			{
+				Transform localTransform = Transform::getIdentity();
+				std::map<int, Signature>::const_iterator iter = stat.getSignatures().find(poses.rbegin()->first);
+				if(iter != stat.getSignatures().end())
+				{
+					if(iter->second.sensorData().cameraModels().size() && !iter->second.sensorData().cameraModels()[0].localTransform().isNull())
+					{
+						localTransform = iter->second.sensorData().cameraModels()[0].localTransform();
+					}
+					else if(!iter->second.sensorData().stereoCameraModel().localTransform().isNull())
+					{
+						localTransform = iter->second.sensorData().stereoCameraModel().localTransform();
+					}
+				}
+				_cloudViewer->updateCameraTargetPosition(poses.rbegin()->second, localTransform);
+				if(_ui->graphicsView_graphView->isVisible())
+				{
+					_ui->graphicsView_graphView->updateReferentialPosition(poses.rbegin()->second);
+				}
+			}
+
 			updateMapCloud(
 					poses,
-					_odometryReceived||poses.size()==0?Transform():poses.rbegin()->second,
 					stat.constraints(),
 					mapIds,
 					labels,
@@ -1554,7 +1591,7 @@ void MainWindow::processStats(const rtabmap::Statistics & stat)
 				if(_ui->dockWidget_loopClosureViewer->isVisible())
 				{
 					UTimer loopTimer;
-					_loopClosureViewer->updateView();
+					_loopClosureViewer->updateView(Transform(), _preferencesDialog->getAllParameters());
 					UINFO("Updating loop closure cloud view time=%fs", loopTimer.elapsed());
 					_ui->statsToolBox->updateStat("GUI/RGB-D closure view/ms", stat.refImageId(), int(loopTimer.elapsed()*1000.0f));
 				}
@@ -1725,15 +1762,14 @@ void MainWindow::processStats(const rtabmap::Statistics & stat)
 
 void MainWindow::updateMapCloud(
 		const std::map<int, Transform> & posesIn,
-		const Transform & currentPose,
 		const std::multimap<int, Link> & constraints,
 		const std::map<int, int> & mapIdsIn,
 		const std::map<int, std::string> & labels,
 		const std::map<int, Transform> & groundTruths, // ground truth should contain only valid transforms
 		bool verboseProgress)
 {
-	UDEBUG("posesIn=%d constraints=%d mapIdsIn=%d labelsIn=%d currentPose=%s",
-			(int)posesIn.size(), (int)constraints.size(), (int)mapIdsIn.size(), (int)labels.size(), currentPose.prettyPrint().c_str());
+	UDEBUG("posesIn=%d constraints=%d mapIdsIn=%d labelsIn=%d",
+			(int)posesIn.size(), (int)constraints.size(), (int)mapIdsIn.size(), (int)labels.size());
 	if(posesIn.size())
 	{
 		_currentPosesMap = posesIn;
@@ -1810,7 +1846,7 @@ void MainWindow::updateMapCloud(
 	}
 
 	// Map updated! regenerate the assembled cloud, last pose is the new one
-	UDEBUG("Update map with %d locations (currentPose=%s)", poses.size(), currentPose.prettyPrint().c_str());
+	UDEBUG("Update map with %d locations", poses.size());
 	QMap<std::string, Transform> viewerClouds = _cloudViewer->getAddedClouds();
 	int i=1;
 	for(std::map<int, Transform>::const_iterator iter = poses.begin(); iter!=poses.end(); ++iter)
@@ -1835,13 +1871,14 @@ void MainWindow::updateMapCloud(
 							UERROR("Updating pose cloud %d failed!", iter->first);
 						}
 					}
-					_cloudViewer->setCloudVisibility(cloudName, true);
+					_cloudViewer->setCloudVisibility(cloudName, (_cloudViewer->isVisible() && _preferencesDialog->isCloudsShown(0)));
 					_cloudViewer->setCloudOpacity(cloudName, _preferencesDialog->getCloudOpacity(0));
 					_cloudViewer->setCloudPointSize(cloudName, _preferencesDialog->getCloudPointSize(0));
 				}
 				else if(_cachedSignatures.contains(iter->first))
 				{
 					this->createAndAddCloudToMap(iter->first, iter->second, uValue(mapIds, iter->first, -1));
+					_cloudViewer->setCloudVisibility(cloudName.c_str(), _cloudViewer->isVisible() && _preferencesDialog->isCloudsShown(0));
 				}
 			}
 			else if(viewerClouds.contains(cloudName))
@@ -2040,11 +2077,6 @@ void MainWindow::updateMapCloud(
 	if(_ui->graphicsView_graphView->isVisible())
 	{
 		_ui->graphicsView_graphView->updateGraph(posesIn, constraints, mapIdsIn);
-		if(!currentPose.isNull())
-		{
-			_ui->graphicsView_graphView->updateReferentialPosition(currentPose);
-		}
-
 		_ui->graphicsView_graphView->updateGTGraph(_currentGTPosesMap);
 	}
 	cv::Mat map8U;
@@ -2147,12 +2179,6 @@ void MainWindow::updateMapCloud(
 		}
 	}
 
-	if(!currentPose.isNull())
-	{
-		UDEBUG("");
-		_cloudViewer->updateCameraTargetPosition(currentPose);
-	}
-
 	UDEBUG("");
 	_cloudViewer->update();
 	UDEBUG("");
@@ -2197,7 +2223,8 @@ void MainWindow::createAndAddCloudToMap(int nodeId, const Transform & pose, int 
 				_preferencesDialog->getCloudDecimation(0),
 				_preferencesDialog->getCloudMaxDepth(0),
 				_preferencesDialog->getCloudMinDepth(0),
-				indices.get());
+				indices.get(),
+				_preferencesDialog->getAllParameters());
 
 		//compute normals
 		pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud = util3d::computeNormals(cloudWithoutNormals, 10);
@@ -2209,14 +2236,14 @@ void MainWindow::createAndAddCloudToMap(int nodeId, const Transform & pose, int 
 			float groundNormalMaxAngle = M_PI_4;
 			int minClusterSize = 20;
 			cv::Mat ground, obstacles;
-			pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr voxelCloud = util3d::voxelize(cloud, indices, cellSize);
+			pcl::PointCloud<pcl::PointXYZRGB>::Ptr voxelCloud = util3d::voxelize(cloudWithoutNormals, indices, cellSize);
 
 			// add pose rotation without yaw
 			float roll, pitch, yaw;
 			pose.getEulerAngles(roll, pitch, yaw);
 			voxelCloud = util3d::transformPointCloud(voxelCloud, Transform(0,0,0, roll, pitch, 0));
 
-			util3d::occupancy2DFromCloud3D<pcl::PointXYZRGBNormal>(
+			util3d::occupancy2DFromCloud3D<pcl::PointXYZRGB>(
 					voxelCloud,
 					ground,
 					obstacles,
@@ -2538,7 +2565,7 @@ Transform MainWindow::alignPosesToGroundTruth(
 	Transform t = Transform::getIdentity();
 	if(groundTruth.size() && poses.size())
 	{
-		unsigned int maxSize = poses.size()>groundTruth.size()?poses.size():groundTruth.size();
+		unsigned int maxSize = poses.size()>groundTruth.size()? (unsigned int)poses.size(): (unsigned int)groundTruth.size();
 		pcl::PointCloud<pcl::PointXYZ> cloud1, cloud2;
 		cloud1.resize(maxSize);
 		cloud2.resize(maxSize);
@@ -2813,7 +2840,7 @@ void MainWindow::processRtabmapEvent3DMap(const rtabmap::RtabmapEvent3DMap & eve
 			QApplication::processEvents();
 			std::map<int, Transform> poses = event.getPoses();
 			alignPosesToGroundTruth(poses, groundTruth);
-			this->updateMapCloud(poses, Transform(), event.getConstraints(), mapIds, labels, groundTruth, true);
+			this->updateMapCloud(poses, event.getConstraints(), mapIds, labels, groundTruth, true);
 			_initProgressDialog->appendText("Updating the 3D map cloud... done.");
 		}
 		else
@@ -2957,7 +2984,6 @@ void MainWindow::applyPrefSettings(PreferencesDialog::PANEL_FLAGS flags)
 		{
 			this->updateMapCloud(
 					std::map<int, Transform>(_currentPosesMap),
-					Transform(),
 					std::multimap<int, Link>(_currentLinksMap),
 					std::map<int, int>(_currentMapIds),
 					std::map<int, std::string>(_currentLabels),
@@ -3219,7 +3245,10 @@ void MainWindow::updateSelectSourceMenu()
 			_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcDatabase ||
 			_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcImages ||
 			_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcVideo ||
-			_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcStereoImages);
+			_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcStereoImages ||
+			_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcStereoVideo ||
+			_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcRGBDImages
+	);
 
 	_ui->actionOpenNI_PCL->setChecked(_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcOpenNI_PCL);
 	_ui->actionOpenNI_PCL_ASUS->setChecked(_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcOpenNI_PCL);
@@ -3232,6 +3261,8 @@ void MainWindow::updateSelectSourceMenu()
 	_ui->actionFreenect2->setChecked(_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcFreenect2);
 	_ui->actionStereoDC1394->setChecked(_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcDC1394);
 	_ui->actionStereoFlyCapture2->setChecked(_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcFlyCapture2);
+	_ui->actionStereoZed->setChecked(_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcStereoZed);
+	_ui->actionStereoUsb->setChecked(_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcStereoUsb);
 }
 
 void MainWindow::changeImgRateSetting()
@@ -4289,7 +4320,6 @@ void MainWindow::postProcessing()
 	alignPosesToGroundTruth(optimizedPoses, _currentGTPosesMap);
 	this->updateMapCloud(
 			optimizedPoses,
-			Transform(),
 			std::multimap<int, Link>(_currentLinksMap),
 			std::map<int, int>(_currentMapIds),
 			std::map<int, std::string>(_currentLabels),
@@ -4429,7 +4459,15 @@ void MainWindow::selectStereoFlyCapture2()
 {
 	_preferencesDialog->selectSourceDriver(PreferencesDialog::kSrcFlyCapture2);
 }
+void MainWindow::selectStereoZed()
+{
+	_preferencesDialog->selectSourceDriver(PreferencesDialog::kSrcStereoZed);
+}
 
+void MainWindow::selectStereoUsb()
+{
+	_preferencesDialog->selectSourceDriver(PreferencesDialog::kSrcStereoUsb);
+}
 
 void MainWindow::dumpTheMemory()
 {
@@ -4652,7 +4690,6 @@ void MainWindow::anchorCloudsToGroundTruth()
 {
 	this->updateMapCloud(
 			std::map<int, Transform>(_currentPosesMap),
-			Transform(),
 			std::multimap<int, Link>(_currentLinksMap),
 			std::map<int, int>(_currentMapIds),
 			std::map<int, std::string>(_currentLabels),
@@ -5070,7 +5107,8 @@ void MainWindow::exportClouds()
 			_currentMapIds,
 			_cachedSignatures,
 			_createdClouds,
-			_preferencesDialog->getWorkingDirectory());
+			_preferencesDialog->getWorkingDirectory(),
+			_preferencesDialog->getAllParameters());
 }
 
 void MainWindow::viewClouds()
@@ -5085,7 +5123,8 @@ void MainWindow::viewClouds()
 			_currentMapIds,
 			_cachedSignatures,
 			_createdClouds,
-			_preferencesDialog->getWorkingDirectory());
+			_preferencesDialog->getWorkingDirectory(),
+			_preferencesDialog->getAllParameters());
 
 }
 
