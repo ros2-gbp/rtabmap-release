@@ -221,9 +221,9 @@ class RTABMAP_EXP Parameters
 	RTABMAP_PARAM(Kp, BadSignRatio,          float, 0.5, 		"Bad signature ratio (less than Ratio x AverageWordsPerImage = bad).");
 	RTABMAP_PARAM(Kp, NndrRatio, 	         float, 0.8,		"NNDR ratio (A matching pair is detected, if its distance is closer than X times the distance of the second nearest neighbor.)");
 #ifdef RTABMAP_NONFREE
-	RTABMAP_PARAM(Kp, DetectorStrategy,      int, 0,            "0=SURF 1=SIFT 2=ORB 3=FAST/FREAK 4=FAST/BRIEF 5=GFTT/FREAK 6=GFTT/BRIEF 7=BRISK.");
+	RTABMAP_PARAM(Kp, DetectorStrategy,      int, 0,            "0=SURF 1=SIFT 2=ORB 3=FAST/FREAK 4=FAST/BRIEF 5=GFTT/FREAK 6=GFTT/BRIEF 7=BRISK 8=GFTT/ORB.");
 #else
-	RTABMAP_PARAM(Kp, DetectorStrategy,      int, 2,            "0=SURF 1=SIFT 2=ORB 3=FAST/FREAK 4=FAST/BRIEF 5=GFTT/FREAK 6=GFTT/BRIEF 7=BRISK.");
+	RTABMAP_PARAM(Kp, DetectorStrategy,      int, 2,            "0=SURF 1=SIFT 2=ORB 3=FAST/FREAK 4=FAST/BRIEF 5=GFTT/FREAK 6=GFTT/BRIEF 7=BRISK 8=GFTT/ORB.");
 #endif
 	RTABMAP_PARAM(Kp, TfIdfLikelihoodUsed,   bool, true, 		"Use of the td-idf strategy to compute the likelihood.");
 	RTABMAP_PARAM(Kp, Parallelized,          bool, true, 		"If the dictionary update and signature creation were parallelized.");
@@ -323,7 +323,6 @@ class RTABMAP_EXP Parameters
 	// Local/Proximity loop closure detection
 	RTABMAP_PARAM(RGBD, ProximityByTime,              bool, false, 	"Detection over all locations in STM.");
 	RTABMAP_PARAM(RGBD, ProximityBySpace,             bool, true, 	"Detection over locations (in Working Memory or STM) near in space.");
-	RTABMAP_PARAM(RGBD, ProximityPathScansMerged,     bool, true, 	"Merge close laser scans on each path. If false, only the nearest laser scan on the path is used for ICP.");
 	RTABMAP_PARAM(RGBD, ProximityMaxGraphDepth,       int, 50,      "Maximum depth from the current/last loop closure location and the local loop closure hypotheses. Set 0 to ignore.");
 	RTABMAP_PARAM(RGBD, ProximityPathFilteringRadius, float, 0.5,   "Path filtering radius.");
 	RTABMAP_PARAM(RGBD, ProximityPathRawPosesUsed,    bool, true,   "When comparing to a local path, merge the scan using the odometry poses (with neighbor link optimizations) instead of the ones in the optimized local graph.");
@@ -397,7 +396,17 @@ class RTABMAP_EXP Parameters
 	RTABMAP_PARAM(Vis, EpipolarGeometryVar,      float, 0.02,   "[Vis/EstimationType = 2] Epipolar geometry maximum variance to accept the transformation.");
 	RTABMAP_PARAM(Vis, MinInliers,               int, 20, 		"Minimum feature correspondences to compute/accept the transformation.");
 	RTABMAP_PARAM(Vis, Iterations,               int, 100, 		"Maximum iterations to compute the transform.");
-	RTABMAP_PARAM(Vis, FeatureType,              int, 6,        "0=SURF 1=SIFT 2=ORB 3=FAST/FREAK 4=FAST/BRIEF 5=GFTT/FREAK 6=GFTT/BRIEF 7=BRISK.");
+#ifndef RTABMAP_NONFREE
+#ifdef RTABMAP_OPENCV3
+	// OpenCV 3 without xFeatures2D module doesn't have BRIEF
+	RTABMAP_PARAM(Vis, FeatureType, int, 8, "0=SURF 1=SIFT 2=ORB 3=FAST/FREAK 4=FAST/BRIEF 5=GFTT/FREAK 6=GFTT/BRIEF 7=BRISK 8=GFTT/ORB.");
+#else
+	RTABMAP_PARAM(Vis, FeatureType, int, 6, "0=SURF 1=SIFT 2=ORB 3=FAST/FREAK 4=FAST/BRIEF 5=GFTT/FREAK 6=GFTT/BRIEF 7=BRISK 8=GFTT/ORB.");
+#endif
+#else
+	RTABMAP_PARAM(Vis, FeatureType, int, 6, "0=SURF 1=SIFT 2=ORB 3=FAST/FREAK 4=FAST/BRIEF 5=GFTT/FREAK 6=GFTT/BRIEF 7=BRISK 8=GFTT/ORB.");
+#endif
+	
 	RTABMAP_PARAM(Vis, MaxFeatures,              int, 1000,     "0 no limits.");
 	RTABMAP_PARAM(Vis, MaxDepth, 	             float, 0.0,    "Max depth of the features (0 means no limit).");
 	RTABMAP_PARAM(Vis, MinDepth, 	             float, 0.0,    "Min depth of the features (0 means no limit).");
