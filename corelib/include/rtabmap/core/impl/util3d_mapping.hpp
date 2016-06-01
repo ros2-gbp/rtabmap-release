@@ -28,10 +28,15 @@ void segmentObstaclesFromGround(
 		float clusterRadius,
 		int minClusterSize,
 		bool segmentFlatObstacles,
-		float maxGroundHeight)
+		float maxGroundHeight,
+		pcl::IndicesPtr * flatObstacles)
 {
 	ground.reset(new std::vector<int>);
 	obstacles.reset(new std::vector<int>);
+	if(flatObstacles)
+	{
+		flatObstacles->reset(new std::vector<int>);
+	}
 
 	if(cloud->size())
 	{
@@ -71,9 +76,14 @@ void segmentObstaclesFromGround(
 						{
 							Eigen::Vector4f centroid;
 							pcl::compute3DCentroid(*cloud, *clusteredFlatSurfaces.at(i), centroid);
-							if(centroid[2] >= min[2] && centroid[2] <= max[2])
+							if(centroid[2] >= min[2]-0.01 &&
+							  (centroid[2] <= max[2]+0.01 || (maxGroundHeight>0 && centroid[2] <= maxGroundHeight+0.01))) // epsilon
 							{
 								ground = util3d::concatenate(ground, clusteredFlatSurfaces.at(i));
+							}
+							else if(flatObstacles)
+							{
+								*flatObstacles = util3d::concatenate(*flatObstacles, clusteredFlatSurfaces.at(i));
 							}
 						}
 					}
@@ -82,6 +92,10 @@ void segmentObstaclesFromGround(
 				{
 					// reject ground!
 					ground.reset(new std::vector<int>);
+					if(flatObstacles)
+					{
+						*flatObstacles = flatSurfaces;
+					}
 				}
 			}
 		}
@@ -94,6 +108,12 @@ void segmentObstaclesFromGround(
 		{
 			// Remove ground
 			pcl::IndicesPtr otherStuffIndices = util3d::extractIndices(cloud, ground, true);
+
+			// If ground height is set, remove obstacles under it
+			if(maxGroundHeight > 0.0f)
+			{
+				otherStuffIndices = rtabmap::util3d::passThrough(cloud, otherStuffIndices, "z", maxGroundHeight, std::numeric_limits<float>::max());
+			}
 
 			//Cluster remaining stuff (obstacles)
 			std::vector<pcl::IndicesPtr> clusteredObstaclesSurfaces = util3d::extractClusters(
@@ -118,7 +138,8 @@ void segmentObstaclesFromGround(
 		float clusterRadius,
 		int minClusterSize,
 		bool segmentFlatObstacles,
-		float maxGroundHeight)
+		float maxGroundHeight,
+		pcl::IndicesPtr * flatObstacles)
 {
 	pcl::IndicesPtr indices(new std::vector<int>);
 	segmentObstaclesFromGround<PointT>(
@@ -131,7 +152,8 @@ void segmentObstaclesFromGround(
 			clusterRadius,
 			minClusterSize,
 			segmentFlatObstacles,
-			maxGroundHeight);
+			maxGroundHeight,
+			flatObstacles);
 }
 
 template<typename PointT>

@@ -249,8 +249,8 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr cloudFromDepth(
 		std::vector<int> * validIndices)
 {
 	UASSERT(!imageDepth.empty() && (imageDepth.type() == CV_16UC1 || imageDepth.type() == CV_32FC1));
-	UASSERT(imageDepth.rows % decimation == 0);
-	UASSERT(imageDepth.cols % decimation == 0);
+	UASSERT_MSG(imageDepth.rows % decimation == 0, uFormat("rows=%d decimation=%d", imageDepth.rows, decimation).c_str());
+	UASSERT_MSG(imageDepth.cols % decimation == 0, uFormat("cols=%d decimation=%d", imageDepth.cols, decimation).c_str());
 
 	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
 	if(decimation < 1)
@@ -588,7 +588,8 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloudFromStereoImages(
 		int decimation,
 		float maxDepth,
 		float minDepth,
-		std::vector<int> * validIndices)
+		std::vector<int> * validIndices,
+		const ParametersMap & parameters)
 {
 	UASSERT(!imageLeft.empty() && !imageRight.empty());
 	UASSERT(imageRight.type() == CV_8UC1);
@@ -623,7 +624,7 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloudFromStereoImages(
 
 	return cloudFromDisparityRGB(
 			leftColor,
-			util2d::disparityFromStereoImages(leftMono, rightMono),
+			util2d::disparityFromStereoImages(leftMono, rightMono, parameters),
 			modelDecimation,
 			decimation,
 			maxDepth,
@@ -636,7 +637,8 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr RTABMAP_EXP cloudFromSensorData(
 		int decimation,
 		float maxDepth,
 		float minDepth,
-		std::vector<int> * validIndices)
+		std::vector<int> * validIndices,
+		const ParametersMap & parameters)
 {
 	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
 
@@ -696,7 +698,7 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr RTABMAP_EXP cloudFromSensorData(
 			leftMono = sensorData.imageRaw();
 		}
 		cloud = cloudFromDisparity(
-				util2d::disparityFromStereoImages(leftMono, sensorData.rightRaw()),
+				util2d::disparityFromStereoImages(leftMono, sensorData.rightRaw(), parameters),
 				sensorData.stereoCameraModel(),
 				decimation,
 				maxDepth,
@@ -719,7 +721,8 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr RTABMAP_EXP cloudRGBFromSensorData(
 		int decimation,
 		float maxDepth,
 		float minDepth,
-		std::vector<int> * validIndices)
+		std::vector<int> * validIndices,
+		const ParametersMap & parameters)
 {
 	UASSERT(!sensorData.imageRaw().empty());
 	UASSERT((!sensorData.depthRaw().empty() && sensorData.cameraModels().size()) ||
@@ -804,7 +807,8 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr RTABMAP_EXP cloudRGBFromSensorData(
 				decimation,
 				maxDepth,
 				minDepth,
-				validIndices);
+				validIndices,
+				parameters);
 
 		if(cloud->size())
 		{
