@@ -142,7 +142,8 @@ public:
 	void removeOccupancyGridMap();
 
 	void updateCameraTargetPosition(
-		const Transform & pose);
+		const Transform & pose,
+		const Transform & localTransform = Transform::getIdentity());
 
 	void addOrUpdateCoordinate(
 			const std::string & id,
@@ -153,6 +154,15 @@ public:
 			const Transform & transform);
 	void removeCoordinate(const std::string & id);
 	void removeAllCoordinates();
+
+	void addOrUpdateLine(
+				const std::string & id,
+				const Transform & from,
+				const Transform & to,
+				const QColor & color,
+				bool arrow = false);
+	void removeLine(const std::string & id);
+	void removeAllLines();
 
 	void addOrUpdateFrustum(
 			const std::string & id,
@@ -282,6 +292,7 @@ private:
     std::set<std::string> _graphes;
     std::set<std::string> _coordinates;
     std::set<std::string> _texts;
+    std::set<std::string> _lines;
     std::set<std::string> _frustums;
     pcl::PointCloud<pcl::PointXYZ>::Ptr _trajectory;
     unsigned int _maxTrajectorySize;
