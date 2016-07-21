@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2014, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -542,7 +542,7 @@ void VWDictionary::setNNStrategy(NNStrategy strategy)
 		}
 #endif
 #else
-#if HAVE_OPENCV_CUDAFEATURES2D
+#ifdef HAVE_OPENCV_CUDAFEATURES2D
 		if(strategy == kNNBruteForceGPU && !cv::cuda::getCudaEnabledDeviceCount())
 		{
 			UERROR("Nearest neighobr strategy \"kNNBruteForceGPU\" chosen but no CUDA devices found! Doing \"kNNBruteForce\" instead.");

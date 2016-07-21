@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2014, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -176,6 +176,12 @@ Transform OdometryF2F::computeTransform(
 			}
 			else
 			{
+				if (!refFrame_.sensorData().isValid())
+				{
+					// Don't send odometry if we don't have a keyframe yet
+					output.setNull();
+				}
+
 				if(features < registrationPipeline_->getMinVisualCorrespondences())
 				{
 					UWARN("Too low 2D features (%d), keeping last key frame...", features);

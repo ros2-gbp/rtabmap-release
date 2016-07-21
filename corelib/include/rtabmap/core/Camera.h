@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2014, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -56,6 +56,7 @@ public:
 	virtual bool init(const std::string & calibrationFolder = ".", const std::string & cameraName = "") = 0;
 	virtual bool isCalibrated() const = 0;
 	virtual std::string getSerial() const = 0;
+	virtual bool odomProvided() const { return false; }
 
 	//getters
 	float getImageRate() const {return _imageRate;}
@@ -76,7 +77,7 @@ protected:
 	/**
 	 * returned rgb and depth images should be already rectified if calibration was loaded
 	 */
-	virtual SensorData captureImage() = 0;
+	virtual SensorData captureImage(CameraInfo * info = 0) = 0;
 
 	int getNextSeqID() {return ++_seq;}
 
