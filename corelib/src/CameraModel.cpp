@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2014, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -371,6 +371,8 @@ CameraModel CameraModel::scaled(double scale) const
 			P.at<double>(1,1) *= scale;
 			P.at<double>(0,2) *= scale;
 			P.at<double>(1,2) *= scale;
+			P.at<double>(0,3) *= scale;
+			P.at<double>(1,3) *= scale;
 		}
 		scaledModel = CameraModel(name_, cv::Size(double(imageSize_.width)*scale, double(imageSize_.height)*scale), K, D_, R_, P, localTransform_);
 	}
