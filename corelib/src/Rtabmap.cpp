@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2014, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -128,7 +128,8 @@ Rtabmap::Rtabmap() :
 	_pathCurrentIndex(0),
 	_pathGoalIndex(0),
 	_pathTransformToGoal(Transform::getIdentity()),
-	_pathStuckCount(0)
+	_pathStuckCount(0),
+	_pathStuckDistance(0.0f)
 {
 }
 
@@ -1979,6 +1980,10 @@ bool Rtabmap::process(
 													nearestId, transform.getNorm(), _proximityFilteringRadius);
 										}
 									}
+									else
+									{
+										UWARN("Local scan matching rejected: %s", info.rejectedMsg.c_str());
+									}
 								}
 							}
 						}
@@ -2205,6 +2210,7 @@ bool Rtabmap::process(
 	{
 		ULOGGER_INFO("sending stats...");
 		statistics_.setRefImageId(_memory->getLastSignatureId()); // Use last id from Memory (in case of rehearsal)
+		statistics_.setStamp(data.stamp());
 		if(_loopClosureHypothesis.first != Memory::kIdInvalid)
 		{
 			statistics_.setLoopClosureId(_loopClosureHypothesis.first);
@@ -3374,6 +3380,7 @@ void Rtabmap::clearPath(int status)
 	_pathTransformToGoal.setIdentity();
 	_pathUnreachableNodes.clear();
 	_pathStuckCount = 0;
+	_pathStuckDistance = 0.0f;
 	if(_memory)
 	{
 		_memory->removeAllVirtualLinks();
@@ -3527,7 +3534,36 @@ bool Rtabmap::computePath(const Transform & targetPose)
 	}
 	UINFO("Time getting links = %fs", timer.ticks());
 
-	int nearestId = rtabmap::graph::findNearestNode(nodes, targetPose);
+	int currentNode = 0;
+	if(_memory->isIncremental())
+	{
+		if(!_memory->getLastWorkingSignature())
+		{
+			UWARN("Working memory is empty... cannot compute a path");
+			return false;
+		}
+		currentNode = _memory->getLastWorkingSignature()->id();
+	}
+	else
+	{
+		if(_lastLocalizationPose.isNull() || _optimizedPoses.size() == 0)
+		{
+			UWARN("Last localization pose is null... cannot compute a path");
+			return false;
+		}
+		currentNode = graph::findNearestNode(_optimizedPoses, _lastLocalizationPose);
+	}
+
+	int nearestId;
+	if(!_lastLocalizationPose.isNull() && _lastLocalizationPose.getDistance(targetPose) < _localRadius)
+	{
+		// target can be reached from the current node
+		nearestId = currentNode;
+	}
+	else
+	{
+		nearestId = rtabmap::graph::findNearestNode(nodes, targetPose);
+	}
 	UINFO("Nearest node found=%d ,%fs", nearestId, timer.ticks());
 	if(nearestId > 0)
 	{
@@ -3538,26 +3574,6 @@ bool Rtabmap::computePath(const Transform & targetPose)
 		}
 		else
 		{
-			int currentNode = 0;
-			if(_memory->isIncremental())
-			{
-				if(!_memory->getLastWorkingSignature())
-				{
-					UWARN("Working memory is empty... cannot compute a path");
-					return false;
-				}
-				currentNode = _memory->getLastWorkingSignature()->id();
-			}
-			else
-			{
-				if(_lastLocalizationPose.isNull() || _optimizedPoses.size() == 0)
-				{
-					UWARN("Last localization pose is null... cannot compute a path");
-					return false;
-				}
-				currentNode = graph::findNearestNode(_optimizedPoses, _lastLocalizationPose);
-			}
-
 			UINFO("Computing path from location %d to %d", currentNode, nearestId);
 			UTimer timer;
 			_path = uListToVector(rtabmap::graph::computePath(nodes, links, currentNode, nearestId));
@@ -3787,7 +3803,7 @@ void Rtabmap::updateGoalIndex()
 				{
 					if(_localRadius > 0.0f)
 					{
-						distanceFromCurrentNode += _path[i-1].second.getDistance(_path[i].second);
+						distanceFromCurrentNode = _path[_pathCurrentIndex].second.getDistance(_path[i].second);
 					}
 
 					if((goalIndex == _pathCurrentIndex && i == _path.size()-1) ||
@@ -3857,15 +3873,51 @@ void Rtabmap::updateGoalIndex()
 				sameCurrentIndex = true;
 			}
 
-			if(sameGoalIndex && sameCurrentIndex &&
-				_pathStuckIterations > 0 &&
-				++_pathStuckCount > _pathStuckIterations)
+			bool isStuck = false;
+			if(sameGoalIndex && sameCurrentIndex && _pathStuckIterations>0)
+			{
+				float distanceToCurrentGoal = 0.0f;
+				std::map<int, Transform>::iterator iter = _optimizedPoses.find(_path[_pathGoalIndex].first);
+				if(iter != _optimizedPoses.end())
+				{
+					if(_pathGoalIndex == _pathCurrentIndex &&
+						_pathGoalIndex == _path.size()-1)
+					{
+						distanceToCurrentGoal = currentPose.getDistanceSquared(iter->second*_pathTransformToGoal);
+					}
+					else
+					{
+						distanceToCurrentGoal = currentPose.getDistanceSquared(iter->second);
+					}
+				}
+
+				if(distanceToCurrentGoal > 0.0f)
+				{
+					if(distanceToCurrentGoal >= _pathStuckDistance)
+					{
+						// we are not approaching the goal
+						isStuck = true;
+						if(_pathStuckDistance == 0.0f)
+						{
+							_pathStuckDistance = distanceToCurrentGoal;
+						}
+					}
+				}
+				else
+				{
+					// no nodes available, cannot plan
+					isStuck = true;
+				}
+			}
+
+			if(isStuck && ++_pathStuckCount > _pathStuckIterations)
 			{
 				UWARN("Current goal %d not reached since %d iterations (\"RGBD/PlanStuckIterations\"=%d), mark that node as unreachable.",
 						_path[_pathGoalIndex].first,
 						_pathStuckCount,
 						_pathStuckIterations);
 				_pathStuckCount = 0;
+				_pathStuckDistance = 0.0;
 				_pathUnreachableNodes.insert(_pathGoalIndex);
 				// select previous reachable one
 				while(_pathUnreachableNodes.find(_pathGoalIndex) != _pathUnreachableNodes.end())
@@ -3879,9 +3931,10 @@ void Rtabmap::updateGoalIndex()
 					}
 				}				
 			}
-			else if(!sameGoalIndex || !sameCurrentIndex)
+			else if(!isStuck)
 			{
 				_pathStuckCount = 0;
+				_pathStuckDistance = 0.0;
 			}
 		}
 	}
