@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2014, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -205,6 +205,7 @@ void RtabmapThread::mainLoop()
 	int id = 0;
 	cv::Mat userData;
 	UTimer timer;
+	std::string str;
 	switch(state)
 	{
 	case kStateDetecting:
@@ -212,12 +213,14 @@ void RtabmapThread::mainLoop()
 		break;
 	case kStateInit:
 		UASSERT(!parameters.at("RtabmapThread/DatabasePath").empty());
+		str = parameters.at("RtabmapThread/DatabasePath");
+		parameters.erase("RtabmapThread/DatabasePath");
 		Parameters::parse(parameters, Parameters::kRtabmapImageBufferSize(), _dataBufferMaxSize);
 		Parameters::parse(parameters, Parameters::kRtabmapDetectionRate(), _rate);
 		Parameters::parse(parameters, Parameters::kRtabmapCreateIntermediateNodes(), _createIntermediateNodes);
 		UASSERT(_dataBufferMaxSize >= 0);
 		UASSERT(_rate >= 0.0f);
-		_rtabmap->init(parameters, parameters.at("RtabmapThread/DatabasePath"));
+		_rtabmap->init(parameters, str);
 		break;
 	case kStateChangingParameters:
 		Parameters::parse(parameters, Parameters::kRtabmapImageBufferSize(), _dataBufferMaxSize);
@@ -330,7 +333,22 @@ void RtabmapThread::handleEvent(UEvent* event)
 			CameraEvent * e = (CameraEvent*)event;
 			if(e->getCode() == CameraEvent::kCodeData)
 			{
-				this->addData(OdometryEvent(e->data(), Transform(), 1, 1));
+				if (_rtabmap->isRGBDMode())
+				{
+					if (!e->info().odomPose.isNull())
+					{
+						this->addData(OdometryEvent(e->data(), e->info().odomPose, e->info().odomCovariance));
+					}
+					else
+					{
+						lastPose_.setNull();
+					}
+				}
+				else
+				{ 
+					this->addData(OdometryEvent(e->data(), Transform(), 1, 1));
+				}
+				
 			}
 		}
 		else if(event->getClassName().compare("OdometryEvent") == 0)
@@ -535,21 +553,22 @@ void RtabmapThread::addData(const OdometryEvent & odomEvent)
 {
 	if(!_paused)
 	{
+		UScopeMutex scopeMutex(_dataMutex);
+
 		bool ignoreFrame = false;
 		if(_rate>0.0f)
 		{
 			if((_previousStamp>0.0 && odomEvent.data().stamp()>_previousStamp && odomEvent.data().stamp() - _previousStamp < 1.0f/_rate) ||
-			   ((_previousStamp<=0.0 || odomEvent.data().stamp()<=_previousStamp) && _frameRateTimer->getElapsedTime() < 1.0f/_rate))
+				((_previousStamp<=0.0 || odomEvent.data().stamp()<=_previousStamp) && _frameRateTimer->getElapsedTime() < 1.0f/_rate))
 			{
 				ignoreFrame = true;
 			}
 		}
-		if(_dataBufferMaxSize > 0 &&
-				(!lastPose_.isIdentity() &&
-					   (odomEvent.pose().isIdentity() ||
+		if(!lastPose_.isIdentity() &&
+						(odomEvent.pose().isIdentity() ||
 						odomEvent.info().variance>=9999 ||
 						odomEvent.rotVariance()>=9999 ||
-						odomEvent.transVariance()>=9999)))
+						odomEvent.transVariance()>=9999))
 		{
 			UWARN("Odometry is reset (identity pose or high variance >=9999 detected). Increment map id!");
 			pushNewState(kStateTriggeringMap);
@@ -582,40 +601,37 @@ void RtabmapThread::addData(const OdometryEvent & odomEvent)
 		lastPose_ = odomEvent.pose();
 
 		bool notify = true;
-		_dataMutex.lock();
+		
+		if(_rotVariance <= 0)
 		{
-			if(_rotVariance <= 0)
-			{
-				_rotVariance = 1.0;
-			}
-			if(_transVariance <= 0)
-			{
-				_transVariance = 1.0;
-			}
-			if(ignoreFrame)
-			{
-				// set negative id so rtabmap will detect it as an intermediate node
-				SensorData tmp = odomEvent.data();
-				tmp.setId(-1);
-				tmp.setFeatures(std::vector<cv::KeyPoint>(), cv::Mat());// remove features
-				_dataBuffer.push_back(OdometryEvent(tmp, odomEvent.pose(), _rotVariance, _transVariance));
-			}
-			else
-			{
-				_dataBuffer.push_back(OdometryEvent(odomEvent.data(), odomEvent.pose(), _rotVariance, _transVariance));
-			}
-			UINFO("Added data %d (variance=%f)", odomEvent.data().id(), _rotVariance);
-
-			_rotVariance = 0;
-			_transVariance = 0;
-			while(_dataBufferMaxSize > 0 && _dataBuffer.size() > _dataBufferMaxSize)
-			{
-				ULOGGER_WARN("Data buffer is full, the oldest data is removed to add the new one.");
-				_dataBuffer.pop_front();
-				notify = false;
-			}
+			_rotVariance = 1.0;
 		}
-		_dataMutex.unlock();
+		if(_transVariance <= 0)
+		{
+			_transVariance = 1.0;
+		}
+		if(ignoreFrame)
+		{
+			// set negative id so rtabmap will detect it as an intermediate node
+			SensorData tmp = odomEvent.data();
+			tmp.setId(-1);
+			tmp.setFeatures(std::vector<cv::KeyPoint>(), cv::Mat());// remove features
+			_dataBuffer.push_back(OdometryEvent(tmp, odomEvent.pose(), _rotVariance, _transVariance));
+		}
+		else
+		{
+			_dataBuffer.push_back(OdometryEvent(odomEvent.data(), odomEvent.pose(), _rotVariance, _transVariance));
+		}
+		UINFO("Added data %d (variance=%f)", odomEvent.data().id(), _rotVariance);
+
+		_rotVariance = 0;
+		_transVariance = 0;
+		while(_dataBufferMaxSize > 0 && _dataBuffer.size() > _dataBufferMaxSize)
+		{
+			ULOGGER_WARN("Data buffer is full, the oldest data is removed to add the new one.");
+			_dataBuffer.pop_front();
+			notify = false;
+		}
 
 		if(notify)
 		{
@@ -633,9 +649,10 @@ bool RtabmapThread::getData(OdometryEvent & data)
 	ULOGGER_INFO("wake-up");
 
 	bool dataFilled = false;
+
 	_dataMutex.lock();
 	{
-		if(!_dataBuffer.empty())
+		if(_state.empty() && !_dataBuffer.empty())
 		{
 			data = _dataBuffer.front();
 			_dataBuffer.pop_front();
