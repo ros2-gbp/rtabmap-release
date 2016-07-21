@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2014, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -70,6 +70,7 @@ public:
 	void close(bool databaseSaved = true);
 
 	const std::string & getWorkingDir() const {return _wDir;}
+	bool isRGBDMode() const { return _rgbdSlamMode; }
 	int getLoopClosureId() const {return _loopClosureHypothesis.first;}
 	float getLoopClosureValue() const {return _loopClosureHypothesis.second;}
 	int getHighestHypothesisId() const {return _highestHypothesis.first;}
@@ -245,6 +246,7 @@ private:
 	unsigned int _pathGoalIndex;
 	Transform _pathTransformToGoal;
 	int _pathStuckCount;
+	float _pathStuckDistance;
 
 };
 

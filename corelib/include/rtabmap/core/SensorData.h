@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2014, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -193,6 +193,8 @@ public:
 
 	void setGroundTruth(const Transform & pose) {groundTruth_ = pose;}
 	const Transform & groundTruth() const {return groundTruth_;}
+
+	long getMemoryUsed() const; // Return memory usage in Bytes
 
 private:
 	int _id;
