@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2014, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -91,18 +91,6 @@ Transform RTABMAP_EXP icpPointToPlane(
 		pcl::PointCloud<pcl::PointNormal> & cloud_source_registered,
 		float epsilon = 0.0f,
 		bool icp2D = false);
-
-pcl::PointCloud<pcl::PointXYZ>::Ptr RTABMAP_EXP getICPReadyCloud(
-		const cv::Mat & depth,
-		float fx,
-		float fy,
-		float cx,
-		float cy,
-		int decimation,
-		double maxDepth,
-		float voxel,
-		int samples,
-		const Transform & transform = Transform::getIdentity());
 
 } // namespace util3d
 } // namespace rtabmap
