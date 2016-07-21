@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2014, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -27,10 +27,12 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "rtabmap/gui/CloudViewer.h"
 
+#include <rtabmap/core/Version.h>
 #include <rtabmap/utilite/ULogger.h>
 #include <rtabmap/utilite/UTimer.h>
 #include <rtabmap/utilite/UMath.h>
 #include <rtabmap/utilite/UConversion.h>
+#include <rtabmap/utilite/UStl.h>
 #include <pcl/visualization/pcl_visualizer.h>
 #include <pcl/common/transforms.h>
 #include <QMenu>
@@ -46,6 +48,14 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <vtkCamera.h>
 #include <vtkRenderWindow.h>
+#include <vtkCubeSource.h>
+#include <vtkGlyph3D.h>
+#include <vtkGlyph3DMapper.h>
+#include <vtkLookupTable.h>
+
+#ifdef RTABMAP_OCTOMAP
+#include <rtabmap/core/OctoMap.h>
+#endif
 
 namespace rtabmap {
 
@@ -122,7 +132,8 @@ CloudViewer::CloudViewer(QWidget *parent) :
 		_currentBgColor(Qt::black),
 		_backfaceCulling(false),
 		_frontfaceCulling(false),
-		_renderingRate(5.0)
+		_renderingRate(5.0),
+		_octomapActor(0)
 {
 	UDEBUG("");
 	this->setMinimumSize(200, 200);
@@ -165,6 +176,7 @@ CloudViewer::~CloudViewer()
 	UDEBUG("");
 	this->clear();
 	delete _visualizer;
+	UDEBUG("");
 }
 
 void CloudViewer::clear()
@@ -176,12 +188,10 @@ void CloudViewer::clear()
 	this->removeAllFrustums();
 	this->removeAllTexts();
 	this->clearTrajectory();
+	this->removeOccupancyGridMap();
+	this->removeOctomap();
 
 	this->addOrUpdateCoordinate("reference", Transform::getIdentity(), 0.2);
-	if(_aShowFrustum->isChecked())
-	{
-		this->addOrUpdateFrustum("reference_frustum", Transform::getIdentity(), _frustumScale, _frustumColor);
-	}
 }
 
 void CloudViewer::createMenu()
@@ -640,6 +650,111 @@ bool CloudViewer::addCloudTextureMesh(
 #endif
 	// not implemented on lower version of PCL
 	return false;
+}
+
+bool CloudViewer::addOctomap(const OctoMap * octomap, unsigned int treeDepth, bool showEdges, bool lightingOn)
+{
+	UDEBUG("");
+#ifdef RTABMAP_OCTOMAP
+	UASSERT(octomap!=0);
+
+	pcl::IndicesPtr obstacles(new std::vector<int>);
+
+	if(treeDepth > octomap->octree()->getTreeDepth())
+	{
+		UWARN("Tree depth requested (%d) is deeper than the "
+			  "actual maximum tree depth of %d. Using maximum depth.",
+			  (int)treeDepth, (int)octomap->octree()->getTreeDepth());
+	}
+
+	pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud = octomap->createCloud(treeDepth, obstacles.get());
+	if(obstacles->size())
+	{
+		//get the renderer of the visualizer object
+		vtkRenderer *renderer = _visualizer->getRenderWindow()->GetRenderers()->GetFirstRenderer();
+
+		if(_octomapActor)
+		{
+			renderer->RemoveActor(_octomapActor);
+			_octomapActor = 0;
+		}
+
+		//vtkSmartPointer<vtkUnsignedCharArray> colors = vtkSmartPointer<vtkUnsignedCharArray>::New();
+		//colors->SetName("colors");
+		//colors->SetNumberOfComponents(3);
+		vtkSmartPointer<vtkFloatArray> colors = vtkSmartPointer<vtkFloatArray>::New();
+		colors->SetName("colors");
+		colors->SetNumberOfValues(obstacles->size());
+
+		vtkSmartPointer<vtkLookupTable> lut = vtkSmartPointer<vtkLookupTable>::New();
+		lut->SetNumberOfTableValues(obstacles->size());
+		lut->Build();
+
+		// Create points
+		vtkSmartPointer<vtkPoints> points = vtkSmartPointer<vtkPoints>::New();
+		double s = octomap->octree()->getNodeSize(treeDepth) / 2.0;
+		for (unsigned int i = 0; i < obstacles->size(); i++)
+		{
+			points->InsertNextPoint(
+					cloud->at(obstacles->at(i)).x,
+					cloud->at(obstacles->at(i)).y,
+					cloud->at(obstacles->at(i)).z);
+			colors->InsertValue(i,i);
+
+			lut->SetTableValue(i,
+					double(cloud->at(obstacles->at(i)).r) / 255.0,
+					double(cloud->at(obstacles->at(i)).g) / 255.0,
+					double(cloud->at(obstacles->at(i)).b) / 255.0);
+		}
+
+		// Combine into a polydata
+		vtkSmartPointer<vtkPolyData> polydata = vtkSmartPointer<vtkPolyData>::New();
+		polydata->SetPoints(points);
+		polydata->GetPointData()->SetScalars(colors);
+
+		// Create anything you want here, we will use a cube for the demo.
+		vtkSmartPointer<vtkCubeSource> cubeSource = vtkSmartPointer<vtkCubeSource>::New();
+		cubeSource->SetBounds(-s, s, -s, s, -s, s);
+
+		vtkSmartPointer<vtkGlyph3DMapper> mapper = vtkSmartPointer<vtkGlyph3DMapper>::New();
+		mapper->SetSourceConnection(cubeSource->GetOutputPort());
+#if VTK_MAJOR_VERSION <= 5
+		mapper->SetInputConnection(polydata->GetProducerPort());
+#else
+		mapper->SetInputData(polydata);
+#endif
+		mapper->SetScalarRange(0, obstacles->size() - 1);
+		mapper->SetLookupTable(lut);
+		mapper->ScalingOff();
+		mapper->Update();
+
+		vtkSmartPointer<vtkActor> octomapActor = vtkSmartPointer<vtkActor>::New();
+		octomapActor->SetMapper(mapper);
+
+		octomapActor->GetProperty()->SetRepresentationToSurface();
+		octomapActor->GetProperty()->SetEdgeVisibility(showEdges);
+		octomapActor->GetProperty()->SetLighting(lightingOn);
+
+		renderer->AddActor(octomapActor);
+		_octomapActor = octomapActor.GetPointer();
+
+		return true;
+	}
+#endif
+	return false;
+}
+
+void CloudViewer::removeOctomap()
+{
+	UDEBUG("");
+#ifdef RTABMAP_OCTOMAP
+	if(_octomapActor)
+	{
+		vtkRenderer *renderer = _visualizer->getRenderWindow()->GetRenderers()->GetFirstRenderer();
+		renderer->RemoveActor(_octomapActor);
+		_octomapActor = 0;
+	}
+#endif
 }
 
 bool CloudViewer::addOccupancyGridMap(
@@ -1119,8 +1234,22 @@ void CloudViewer::setFrustumShown(bool shown)
 {
 	if(!shown)
 	{
-		this->removeFrustum("reference_frustum");
-		this->removeLine("reference_frustum_line");
+		std::set<std::string> frustumsCopy = _frustums;
+		for(std::set<std::string>::iterator iter=frustumsCopy.begin(); iter!=frustumsCopy.end(); ++iter)
+		{
+			if(uStrContains(*iter, "reference_frustum"))
+			{
+				this->removeFrustum(*iter);
+			}
+		}
+		std::set<std::string> linesCopy = _lines;
+		for(std::set<std::string>::iterator iter=linesCopy.begin(); iter!=linesCopy.end(); ++iter)
+		{
+			if(uStrContains(*iter, "reference_frustum_line"))
+			{
+				this->removeLine(*iter);
+			}
+		}
 		this->update();
 	}
 	_aShowFrustum->setChecked(shown);
@@ -1137,9 +1266,12 @@ void CloudViewer::setFrustumColor(QColor value)
 	{
 		value = Qt::gray;
 	}
-	if(_frustums.find("reference_frustum") != _frustums.end())
+	for(std::set<std::string>::iterator iter=_frustums.begin(); iter!=_frustums.end(); ++iter)
 	{
-		_visualizer->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_COLOR, value.redF(), value.greenF(), value.blueF(), "reference_frustum");
+		if(uStrContains(*iter, "reference_frustum"))
+		{
+			_visualizer->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_COLOR, value.redF(), value.greenF(), value.blueF(), *iter);
+		}
 	}
 	this->update();
 	_frustumColor = value;
@@ -1255,7 +1387,7 @@ void CloudViewer::setCameraPosition(
 	_visualizer->setCameraPosition(x,y,z, focalX,focalY,focalX, upX,upY,upZ);
 }
 
-void CloudViewer::updateCameraTargetPosition(const Transform & pose, const Transform & localTransform)
+void CloudViewer::updateCameraTargetPosition(const Transform & pose)
 {
 	if(!pose.isNull())
 	{
@@ -1364,26 +1496,6 @@ void CloudViewer::updateCameraTargetPosition(const Transform & pose, const Trans
 				this->addOrUpdateCoordinate("reference", pose, 0.2);
 			}
 
-			// commented: update pose is crashing...
-			/*if(_frustums.find("reference_frustum") != _frustums.end())
-			{
-				this->updateFrustumPose("reference_frustum", pose);
-			}
-			else */ if(_aShowFrustum->isChecked())
-			{
-				Transform baseToCamera = Transform::getIdentity();
-				Transform opticalRot(0, 0, 1, 0, -1, 0, 0, 0, 0, -1, 0, 0);
-				if(!localTransform.isNull() && !localTransform.isIdentity())
-				{
-					baseToCamera = localTransform*opticalRot.inverse();
-				}
-				this->addOrUpdateFrustum("reference_frustum", pose * baseToCamera, _frustumScale, _frustumColor);
-				if(!baseToCamera.isIdentity())
-				{
-					this->addOrUpdateLine("reference_frustum_line", pose, pose * baseToCamera, _frustumColor);
-				}
-			}
-
 			vtkRenderer* renderer = _visualizer->getRendererCollection()->GetFirstRenderer();
 			vtkSmartPointer<vtkCamera> cam = renderer->GetActiveCamera ();
 			cam->SetPosition (cameras.front().pos[0], cameras.front().pos[1], cameras.front().pos[2]);
@@ -1394,6 +1506,51 @@ void CloudViewer::updateCameraTargetPosition(const Transform & pose, const Trans
 	}
 
 	_lastPose = pose;
+}
+
+void CloudViewer::updateCameraFrustum(const Transform & pose, const StereoCameraModel & model)
+{
+	std::vector<CameraModel> models;
+	models.push_back(model.left());
+	updateCameraFrustums(pose, models);
+}
+
+void CloudViewer::updateCameraFrustum(const Transform & pose, const CameraModel & model)
+{
+	std::vector<CameraModel> models;
+	models.push_back(model);
+	updateCameraFrustums(pose, models);
+}
+
+void CloudViewer::updateCameraFrustums(const Transform & pose, const std::vector<CameraModel> & models)
+{
+	if(!pose.isNull())
+	{
+		// commented: update pose is crashing...
+		/*if(_frustums.find("reference_frustum") != _frustums.end())
+		{
+			this->updateFrustumPose("reference_frustum", pose);
+		}
+		else */ if(_aShowFrustum->isChecked())
+		{
+			Transform baseToCamera;
+			Transform opticalRot(0, 0, 1, 0, -1, 0, 0, 0, 0, -1, 0, 0);
+
+			for(unsigned int i=0; i<models.size(); ++i)
+			{
+				baseToCamera = Transform::getIdentity();
+				if(!models[i].localTransform().isNull() && !models[i].localTransform().isIdentity())
+				{
+					baseToCamera = models[i].localTransform()*opticalRot.inverse();
+				}
+				this->addOrUpdateFrustum(uFormat("reference_frustum_%d", i), pose * baseToCamera, _frustumScale, _frustumColor);
+				if(!baseToCamera.isIdentity())
+				{
+					this->addOrUpdateLine(uFormat("reference_frustum_line_%d", i), pose, pose * baseToCamera, _frustumColor);
+				}
+			}
+		}
+	}
 }
 
 const QColor & CloudViewer::getDefaultBackgroundColor() const
