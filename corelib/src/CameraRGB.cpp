@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2014, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -41,6 +41,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap/core/util3d.h>
 #include <rtabmap/core/util3d_filtering.h>
 #include <rtabmap/core/util3d_surface.h>
+
+#include <pcl/common/io.h>
 
 #include <iostream>
 #include <fstream>
@@ -436,7 +438,7 @@ std::vector<std::string> CameraImages::filenames() const
 	return std::vector<std::string>();
 }
 
-SensorData CameraImages::captureImage()
+SensorData CameraImages::captureImage(CameraInfo * info)
 {
 	if(syncImageRateWithStamps_ && _captureDelay>0.0)
 	{
@@ -661,7 +663,9 @@ SensorData CameraImages::captureImage()
 			}
 			if(_scanNormalsK > 0 && cloud->size())
 			{
-				pcl::PointCloud<pcl::PointNormal>::Ptr cloudNormals = util3d::computeNormals(cloud, _scanNormalsK);
+				pcl::PointCloud<pcl::Normal>::Ptr normals = util3d::computeNormals(cloud, _scanNormalsK);
+				pcl::PointCloud<pcl::PointNormal>::Ptr cloudNormals(new pcl::PointCloud<pcl::PointNormal>);
+				pcl::concatenateFields(*cloud, *normals, *cloudNormals);
 				scan = util3d::laserScanFromPointCloud(*cloudNormals);
 			}
 			else
@@ -692,10 +696,11 @@ SensorData CameraImages::captureImage()
 /////////////////////////
 CameraVideo::CameraVideo(
 		int usbDevice,
+		bool rectifyImages,
 		float imageRate,
 		const Transform & localTransform) :
 	Camera(imageRate, localTransform),
-	_rectifyImages(false),
+	_rectifyImages(rectifyImages),
 	_src(kUsbDevice),
 	_usbDevice(usbDevice)
 {
@@ -796,7 +801,7 @@ std::string CameraVideo::getSerial() const
 	return _guid;
 }
 
-SensorData CameraVideo::captureImage()
+SensorData CameraVideo::captureImage(CameraInfo * info)
 {
 	cv::Mat img;
 	if(_capture.isOpened())
@@ -808,7 +813,7 @@ SensorData CameraVideo::captureImage()
 				_model.setImageSize(img.size());
 			}
 
-			if(_model.isValidForRectification() && (_src != kVideoFile || _rectifyImages))
+			if(_model.isValidForRectification() && _rectifyImages)
 			{
 				img = _model.rectifyImage(img);
 			}
