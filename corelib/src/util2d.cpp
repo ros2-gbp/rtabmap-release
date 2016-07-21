@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2014, cv::Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -1002,7 +1002,7 @@ float getDepth(
 						if(depthImage.at<unsigned short>(vv,uu) > 0 &&
 						   depthImage.at<unsigned short>(vv,uu) < std::numeric_limits<unsigned short>::max())
 						{
-							depth = float(depthImage.at<unsigned short>(vv,uu))*0.001f;
+							d = float(depthImage.at<unsigned short>(vv,uu))*0.001f;
 						}
 					}
 					else
@@ -1049,7 +1049,7 @@ float getDepth(
 							if(depthImage.at<unsigned short>(vv,uu) > 0 &&
 							   depthImage.at<unsigned short>(vv,uu) < std::numeric_limits<unsigned short>::max())
 							{
-								depth = float(depthImage.at<unsigned short>(vv,uu))*0.001f;
+								d = float(depthImage.at<unsigned short>(vv,uu))*0.001f;
 							}
 						}
 						else
