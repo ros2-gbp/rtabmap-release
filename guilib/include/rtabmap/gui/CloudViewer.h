@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2014, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -30,13 +30,16 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "rtabmap/gui/RtabmapGuiExp.h" // DLL export/import defines
 
+#include "rtabmap/core/Transform.h"
+#include "rtabmap/core/StereoCameraModel.h"
+
 #include <QVTKWidget.h>
 #include <pcl/pcl_base.h>
 #include <pcl/point_types.h>
 #include <pcl/point_cloud.h>
 #include <pcl/PolygonMesh.h>
 #include <pcl/TextureMesh.h>
-#include "rtabmap/core/Transform.h"
+
 #include <QtCore/QMap>
 #include <QtCore/QSet>
 #include <QtCore/qnamespace.h>
@@ -55,8 +58,11 @@ namespace pcl {
 }
 
 class QMenu;
+class vtkProp;
 
 namespace rtabmap {
+
+class OctoMap;
 
 class RTABMAPGUI_EXP CloudViewer : public QVTKWidget
 {
@@ -133,6 +139,9 @@ public:
 			const pcl::TextureMesh::Ptr & textureMesh,
 			const Transform & pose = Transform::getIdentity());
 
+	bool addOctomap(const OctoMap * octomap, unsigned int treeDepth = 0, bool showEdges = true, bool lightingOn = false);
+	void removeOctomap();
+
 	bool addOccupancyGridMap(
 			const cv::Mat & map8U,
 			float resolution, // cell size
@@ -142,8 +151,19 @@ public:
 	void removeOccupancyGridMap();
 
 	void updateCameraTargetPosition(
-		const Transform & pose,
-		const Transform & localTransform = Transform::getIdentity());
+		const Transform & pose);
+
+	void updateCameraFrustum(
+			const Transform & pose,
+			const StereoCameraModel & model);
+
+	void updateCameraFrustum(
+			const Transform & pose,
+			const CameraModel & model);
+
+	void updateCameraFrustums(
+			const Transform & pose,
+			const std::vector<CameraModel> & models);
 
 	void addOrUpdateCoordinate(
 			const std::string & id,
@@ -312,6 +332,7 @@ private:
     bool _backfaceCulling;
     bool _frontfaceCulling;
     double _renderingRate;
+    vtkProp * _octomapActor;
 };
 
 } /* namespace rtabmap */
