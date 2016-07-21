@@ -1,9 +1,29 @@
 /*
- * util3d_mapping.hpp
- *
- *  Created on: 2015-05-13
- *      Author: mathieu
- */
+Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+    * Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above copyright
+      notice, this list of conditions and the following disclaimer in the
+      documentation and/or other materials provided with the distribution.
+    * Neither the name of the Universite de Sherbrooke nor the
+      names of its contributors may be used to endorse or promote products
+      derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY
+DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*/
 
 #ifndef UTIL3D_MAPPING_HPP_
 #define UTIL3D_MAPPING_HPP_
@@ -18,6 +38,19 @@ namespace rtabmap{
 namespace util3d{
 
 template<typename PointT>
+typename pcl::PointCloud<PointT>::Ptr projectCloudOnXYPlane(
+		const typename pcl::PointCloud<PointT> & cloud)
+{
+	typename pcl::PointCloud<PointT>::Ptr output(new pcl::PointCloud<PointT>);
+	*output = cloud;
+	for(unsigned int i=0; i<output->size(); ++i)
+	{
+		output->at(i).z = 0;
+	}
+	return output;
+}
+
+template<typename PointT>
 void segmentObstaclesFromGround(
 		const typename pcl::PointCloud<PointT>::Ptr & cloud,
 		const typename pcl::IndicesPtr & indices,
@@ -29,7 +62,8 @@ void segmentObstaclesFromGround(
 		int minClusterSize,
 		bool segmentFlatObstacles,
 		float maxGroundHeight,
-		pcl::IndicesPtr * flatObstacles)
+		pcl::IndicesPtr * flatObstacles,
+		const Eigen::Vector4f & viewPoint)
 {
 	ground.reset(new std::vector<int>);
 	obstacles.reset(new std::vector<int>);
@@ -47,7 +81,7 @@ void segmentObstaclesFromGround(
 				groundNormalAngle,
 				Eigen::Vector4f(0,0,1,0),
 				normalKSearch,
-				Eigen::Vector4f(0,0,100,0));
+				viewPoint);
 
 		if(segmentFlatObstacles)
 		{
@@ -116,14 +150,17 @@ void segmentObstaclesFromGround(
 			}
 
 			//Cluster remaining stuff (obstacles)
-			std::vector<pcl::IndicesPtr> clusteredObstaclesSurfaces = util3d::extractClusters(
-					cloud,
-					otherStuffIndices,
-					clusterRadius,
-					minClusterSize);
+			if(otherStuffIndices->size())
+			{
+				std::vector<pcl::IndicesPtr> clusteredObstaclesSurfaces = util3d::extractClusters(
+						cloud,
+						otherStuffIndices,
+						clusterRadius,
+						minClusterSize);
 
-			// merge indices
-			obstacles = util3d::concatenate(clusteredObstaclesSurfaces);
+				// merge indices
+				obstacles = util3d::concatenate(clusteredObstaclesSurfaces);
+			}
 		}
 	}
 }
@@ -139,7 +176,8 @@ void segmentObstaclesFromGround(
 		int minClusterSize,
 		bool segmentFlatObstacles,
 		float maxGroundHeight,
-		pcl::IndicesPtr * flatObstacles)
+		pcl::IndicesPtr * flatObstacles,
+		const Eigen::Vector4f & viewPoint)
 {
 	pcl::IndicesPtr indices(new std::vector<int>);
 	segmentObstaclesFromGround<PointT>(
@@ -153,7 +191,81 @@ void segmentObstaclesFromGround(
 			minClusterSize,
 			segmentFlatObstacles,
 			maxGroundHeight,
-			flatObstacles);
+			flatObstacles,
+			viewPoint);
+}
+
+template<typename PointT>
+void occupancy2DFromGroundObstacles(
+		const typename pcl::PointCloud<PointT>::Ptr & cloud,
+		const pcl::IndicesPtr & groundIndices,
+		const pcl::IndicesPtr & obstaclesIndices,
+		cv::Mat & ground,
+		cv::Mat & obstacles,
+		float cellSize)
+{
+	typename pcl::PointCloud<PointT>::Ptr groundCloud(new pcl::PointCloud<PointT>);
+	typename pcl::PointCloud<PointT>::Ptr obstaclesCloud(new pcl::PointCloud<PointT>);
+
+	if(groundIndices->size())
+	{
+		pcl::copyPointCloud(*cloud, *groundIndices, *groundCloud);
+	}
+
+	if(obstaclesIndices->size())
+	{
+		pcl::copyPointCloud(*cloud, *obstaclesIndices, *obstaclesCloud);
+	}
+
+	occupancy2DFromGroundObstacles<PointT>(
+			groundCloud,
+			obstaclesCloud,
+			ground,
+			obstacles,
+			cellSize);
+}
+
+template<typename PointT>
+void occupancy2DFromGroundObstacles(
+		const typename pcl::PointCloud<PointT>::Ptr & groundCloud,
+		const typename pcl::PointCloud<PointT>::Ptr & obstaclesCloud,
+		cv::Mat & ground,
+		cv::Mat & obstacles,
+		float cellSize)
+{
+	ground = cv::Mat();
+	if(groundCloud->size())
+	{
+		//project on XY plane
+		typename pcl::PointCloud<PointT>::Ptr groundCloudProjected;
+		groundCloudProjected = util3d::projectCloudOnXYPlane(*groundCloud);
+		//voxelize to grid cell size
+		groundCloudProjected = util3d::voxelize(groundCloudProjected, cellSize);
+
+		ground = cv::Mat((int)groundCloudProjected->size(), 1, CV_32FC2);
+		for(unsigned int i=0;i<groundCloudProjected->size(); ++i)
+		{
+			ground.at<cv::Vec2f>(i)[0] = groundCloudProjected->at(i).x;
+			ground.at<cv::Vec2f>(i)[1] = groundCloudProjected->at(i).y;
+		}
+	}
+
+	obstacles = cv::Mat();
+	if(obstaclesCloud->size())
+	{
+		//project on XY plane
+		typename pcl::PointCloud<PointT>::Ptr obstaclesCloudProjected;
+		obstaclesCloudProjected = util3d::projectCloudOnXYPlane(*obstaclesCloud);
+		//voxelize to grid cell size
+		obstaclesCloudProjected = util3d::voxelize(obstaclesCloudProjected, cellSize);
+
+		obstacles = cv::Mat((int)obstaclesCloudProjected->size(), 1, CV_32FC2);
+		for(unsigned int i=0;i<obstaclesCloudProjected->size(); ++i)
+		{
+			obstacles.at<cv::Vec2f>(i)[0] = obstaclesCloudProjected->at(i).x;
+			obstacles.at<cv::Vec2f>(i)[1] = obstaclesCloudProjected->at(i).y;
+		}
+	}
 }
 
 template<typename PointT>
@@ -186,48 +298,13 @@ void occupancy2DFromCloud3D(
 			segmentFlatObstacles,
 			maxGroundHeight);
 
-	pcl::PointCloud<pcl::PointXYZ>::Ptr groundCloud(new pcl::PointCloud<pcl::PointXYZ>);
-	pcl::PointCloud<pcl::PointXYZ>::Ptr obstaclesCloud(new pcl::PointCloud<pcl::PointXYZ>);
-
-	if(groundIndices->size())
-	{
-		pcl::copyPointCloud(*cloud, *groundIndices, *groundCloud);
-		//project on XY plane
-		util3d::projectCloudOnXYPlane(groundCloud);
-		//voxelize to grid cell size
-		groundCloud = util3d::voxelize(groundCloud, cellSize);
-	}
-
-	if(obstaclesIndices->size())
-	{
-		pcl::copyPointCloud(*cloud, *obstaclesIndices, *obstaclesCloud);
-		//project on XY plane
-		util3d::projectCloudOnXYPlane(obstaclesCloud);
-		//voxelize to grid cell size
-		obstaclesCloud = util3d::voxelize(obstaclesCloud, cellSize);
-	}
-
-	ground = cv::Mat();
-	if(groundCloud->size())
-	{
-		ground = cv::Mat((int)groundCloud->size(), 1, CV_32FC2);
-		for(unsigned int i=0;i<groundCloud->size(); ++i)
-		{
-			ground.at<cv::Vec2f>(i)[0] = groundCloud->at(i).x;
-			ground.at<cv::Vec2f>(i)[1] = groundCloud->at(i).y;
-		}
-	}
-
-	obstacles = cv::Mat();
-	if(obstaclesCloud->size())
-	{
-		obstacles = cv::Mat((int)obstaclesCloud->size(), 1, CV_32FC2);
-		for(unsigned int i=0;i<obstaclesCloud->size(); ++i)
-		{
-			obstacles.at<cv::Vec2f>(i)[0] = obstaclesCloud->at(i).x;
-			obstacles.at<cv::Vec2f>(i)[1] = obstaclesCloud->at(i).y;
-		}
-	}
+	occupancy2DFromGroundObstacles<PointT>(
+			cloud,
+			groundIndices,
+			obstaclesIndices,
+			ground,
+			obstacles,
+			cellSize);
 }
 
 template<typename PointT>
