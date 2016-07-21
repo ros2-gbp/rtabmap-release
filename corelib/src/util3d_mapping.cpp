@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2014, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -658,16 +658,6 @@ cv::Mat convertMap2Image8U(const cv::Mat & map8S)
 	}
 	return map8U;
 }
-
-void projectCloudOnXYPlane(
-		pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud)
-{
-	for(unsigned int i=0; i<cloud->size(); ++i)
-	{
-		cloud->at(i).z = 0;
-	}
-}
-
 
 }
 

@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2014, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -39,22 +39,27 @@ public:
 	CameraInfo() :
 		cameraName(""),
 		id(0),
+		stamp(0.0),
 		timeCapture(0.0f),
 		timeDisparity(0.0f),
 		timeMirroring(0.0f),
 		timeImageDecimation(0.0f),
-		timeScanFromDepth(0.0f)
+		timeScanFromDepth(0.0f),
+		odomCovariance(cv::Mat::eye(6,6,CV_64FC1))
 	{
 	}
 	virtual ~CameraInfo() {}
 
 	std::string cameraName;
 	int id;
+	double stamp;
 	float timeCapture;
 	float timeDisparity;
 	float timeMirroring;
 	float timeImageDecimation;
 	float timeScanFromDepth;
+	Transform odomPose;
+	cv::Mat odomCovariance;
 };
 
 } // namespace rtabmap
