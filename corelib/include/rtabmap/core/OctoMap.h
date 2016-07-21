@@ -25,66 +25,72 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifndef REGISTRATIONVIS_H_
-#define REGISTRATIONVIS_H_
+#ifndef SRC_OCTOMAP_H_
+#define SRC_OCTOMAP_H_
 
 #include "rtabmap/core/RtabmapExp.h" // DLL export/import defines
 
-#include <rtabmap/core/Registration.h>
-#include <rtabmap/core/Signature.h>
+#include <octomap/ColorOcTree.h>
+#include <octomap/OcTreeKey.h>
+
+#include <pcl/pcl_base.h>
+#include <pcl/point_types.h>
+
+#include <rtabmap/core/Transform.h>
+
+#include <map>
+#include <string>
 
 namespace rtabmap {
 
-class Feature2D;
-
-// Visual registration
-class RTABMAP_EXP RegistrationVis : public Registration
+class OcTreeNodeInfo
 {
 public:
-	// take ownership of child
-	RegistrationVis(const ParametersMap & parameters = ParametersMap(), Registration * child = 0);
-	virtual ~RegistrationVis();
-
-	virtual void parseParameters(const ParametersMap & parameters);
-
-	float getInlierDistance() const {return _inlierDistance;}
-	int getIterations() const {return _iterations;}
-	int getMinInliers() const {return _minInliers;}
-
-	Feature2D * createFeatureDetector() const; // for convenience
-
-protected:
-	virtual Transform computeTransformationImpl(
-			Signature & from,
-			Signature & to,
-			Transform guess,
-			RegistrationInfo & info) const;
-
-	virtual bool isImageRequiredImpl() const {return true;}
-	virtual int getMinVisualCorrespondencesImpl() const {return _minInliers;}
-
-private:
-	int _minInliers;
-	float _inlierDistance;
-	int _iterations;
-	int _refineIterations;
-	float _epipolarGeometryVar;
-	int _estimationType;
-	bool _forwardEstimateOnly;
-	float _PnPReprojError;
-	int _PnPFlags;
-	int _PnPRefineIterations;
-	int _correspondencesApproach;
-	int _flowWinSize;
-	int _flowIterations;
-	float _flowEps;
-	int _flowMaxLevel;
-	float _nndr;
-	int _guessWinSize;
-
-	ParametersMap _featureParameters;
+	OcTreeNodeInfo(int nodeRefId, const octomap::OcTreeKey & key, bool isObstacle) :
+		nodeRefId_(nodeRefId),
+		key_(key),
+		isObstacle_(isObstacle) {}
+	int nodeRefId_;
+	octomap::OcTreeKey key_;
+	bool isObstacle_;
 };
 
-}
+class RTABMAP_EXP OctoMap {
+public:
+	OctoMap(float voxelSize = 0.1f);
 
-#endif /* REGISTRATION_H_ */
+	const std::map<int, Transform> & addedNodes() const {return addedNodes_;}
+	void addToCache(int nodeId,
+			pcl::PointCloud<pcl::PointXYZRGB>::Ptr & ground,
+			pcl::PointCloud<pcl::PointXYZRGB>::Ptr & obstacles);
+	void update(const std::map<int, Transform> & poses);
+
+	const octomap::ColorOcTree * octree() const {return octree_;}
+
+	pcl::PointCloud<pcl::PointXYZRGB>::Ptr createCloud(
+			unsigned int treeDepth = 0,
+			std::vector<int> * obstacleIndices = 0,
+			std::vector<int> * emptyIndices = 0) const;
+
+	cv::Mat createProjectionMap(
+			float & xMin,
+			float & yMin,
+			float & gridCellSize,
+			float minGridSize);
+
+	bool writeBinary(const std::string & path);
+
+	virtual ~OctoMap();
+	void clear();
+
+private:
+	std::map<int, std::pair<pcl::PointCloud<pcl::PointXYZRGB>::Ptr, pcl::PointCloud<pcl::PointXYZRGB>::Ptr> > cache_;
+	octomap::ColorOcTree * octree_;
+	std::map<octomap::ColorOcTreeNode*, OcTreeNodeInfo> occupiedCells_;
+	std::map<int, Transform> addedNodes_;
+	octomap::KeyRay keyRay_;
+};
+
+} /* namespace rtabmap */
+
+#endif /* SRC_OCTOMAP_H_ */

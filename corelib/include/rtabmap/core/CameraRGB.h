@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2014, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -119,7 +119,7 @@ public:
 	}
 
 protected:
-	virtual SensorData captureImage();
+	virtual SensorData captureImage(CameraInfo * info = 0);
 
 private:
 	std::string _path;
@@ -178,6 +178,7 @@ public:
 
 public:
 	CameraVideo(int usbDevice = 0,
+			bool rectifyImages = false,
 			float imageRate = 0,
 			const Transform & localTransform = Transform::getIdentity());
 	CameraVideo(const std::string & filePath,
@@ -193,7 +194,7 @@ public:
 	const std::string & getFilePath() const {return _filePath;}
 
 protected:
-	virtual SensorData captureImage();
+	virtual SensorData captureImage(CameraInfo * info = 0);
 
 private:
 	// File type
