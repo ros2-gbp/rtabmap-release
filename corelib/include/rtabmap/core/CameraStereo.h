@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2014, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -70,7 +70,7 @@ public:
 	virtual std::string getSerial() const;
 
 protected:
-	virtual SensorData captureImage();
+	virtual SensorData captureImage(CameraInfo * info = 0);
 
 private:
 	DC1394Device *device_;
@@ -95,7 +95,7 @@ public:
 	virtual std::string getSerial() const;
 
 protected:
-	virtual SensorData captureImage();
+	virtual SensorData captureImage(CameraInfo * info = 0);
 
 private:
 	FlyCapture2::Camera * camera_;
@@ -112,20 +112,45 @@ public:
 	static bool available();
 
 public:
-	CameraStereoZed(bool rgbdMode, float imageRate=0.0f, const Transform & localTransform = Transform::getIdentity());
+	CameraStereoZed(
+			int deviceId,
+			int resolution = 2, // 0=HD2K, 1=HD1080, 2=HD720, 3=VGA
+			int quality = 1,    // 0=NONE, 1=PERFORMANCE, 2=QUALITY
+			int sensingMode = 1,// 0=FULL, 1=RAW
+			int confidenceThr = 100,
+			bool computeOdometry = false,
+			float imageRate=0.0f,
+			const Transform & localTransform = Transform::getIdentity());
+	CameraStereoZed(
+			const std::string & svoFilePath,
+			int quality = 1,    // 0=NONE, 1=PERFORMANCE, 2=QUALITY
+			int sensingMode = 1,// 0=FULL, 1=RAW
+			int confidenceThr = 100,
+			bool computeOdometry = false,
+			float imageRate=0.0f,
+			const Transform & localTransform = Transform::getIdentity());
 	virtual ~CameraStereoZed();
 
 	virtual bool init(const std::string & calibrationFolder = ".", const std::string & cameraName = "");
 	virtual bool isCalibrated() const;
 	virtual std::string getSerial() const;
+	virtual bool odomProvided() const { return computeOdometry_; }
 
 protected:
-	virtual SensorData captureImage();
+	virtual SensorData captureImage(CameraInfo * info = 0);
 
 private:
 	sl::zed::Camera * zed_;
 	StereoCameraModel stereoModel_;
-	bool rgbdMode_;
+	CameraVideo::Source src_;
+	int usbDevice_;
+	std::string svoFilePath_;
+	int resolution_;
+	int quality_;
+	int sensingMode_;
+	int confidenceThr_;
+	bool computeOdometry_;
+	bool lost_;
 };
 
 /////////////////////////
@@ -157,7 +182,7 @@ public:
 	virtual std::string getSerial() const;
 
 protected:
-	virtual SensorData captureImage();
+	virtual SensorData captureImage(CameraInfo * info = 0);
 
 private:
 	CameraImages * camera2_;
@@ -183,6 +208,7 @@ public:
 			const Transform & localTransform = Transform::getIdentity());
 	CameraStereoVideo(
 			int device,
+			bool rectifyImages = false,
 			float imageRate = 0.0f,
 			const Transform & localTransform = Transform::getIdentity());
 	virtual ~CameraStereoVideo();
@@ -192,7 +218,7 @@ public:
 	virtual std::string getSerial() const;
 
 protected:
-	virtual SensorData captureImage();
+	virtual SensorData captureImage(CameraInfo * info = 0);
 
 private:
 	cv::VideoCapture capture_;
