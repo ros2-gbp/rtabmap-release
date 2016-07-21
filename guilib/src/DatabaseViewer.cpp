@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2014, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -531,7 +531,18 @@ void DatabaseViewer::writeSettings()
 
 	settings.endGroup(); // DatabaseViewer
 
-	const ParametersMap & parameters = ui_->parameters_toolbox->getParameters();
+	ParametersMap parameters = ui_->parameters_toolbox->getParameters();
+	for(ParametersMap::iterator iter=parameters.begin(); iter!=parameters.end();)
+	{
+		if(!ui_->parameters_toolbox->getParameterWidget(iter->first.c_str()))
+		{
+			parameters.erase(iter++);
+		}
+		else
+		{
+			++iter;
+		}
+	}
 	Parameters::writeINI(path.toStdString(), parameters);
 
 	this->setWindowModified(false);
@@ -588,6 +599,50 @@ bool DatabaseViewer::openDatabase(const QString & path)
 		{
 			pathDatabase_ = UDirectory::getDir(path.toStdString()).c_str();
 			databaseFileName_ = UFile::getName(path.toStdString());
+
+			// look if there are saved parameters
+			ParametersMap parameters = dbDriver_->getLastParameters();
+
+			if(parameters.size())
+			{
+				const ParametersMap & currentParameters = ui_->parameters_toolbox->getParameters();
+				ParametersMap differentParameters;
+				for(ParametersMap::iterator iter=parameters.begin(); iter!=parameters.end(); ++iter)
+				{
+					ParametersMap::const_iterator jter = currentParameters.find(iter->first);
+					if(jter!=currentParameters.end() &&
+					   ui_->parameters_toolbox->getParameterWidget(QString(iter->first.c_str())) != 0 &&
+					   iter->second.compare(jter->second) != 0 &&
+					   iter->first.compare(Parameters::kRtabmapWorkingDirectory()) != 0)
+					{
+						differentParameters.insert(*iter);
+						QString msg = tr("Parameter \"%1\": database=\"%2\" Preferences=\"%3\"")
+								.arg(iter->first.c_str())
+								.arg(iter->second.c_str())
+								.arg(jter->second.c_str());
+						UWARN(msg.toStdString().c_str());
+					}
+				}
+
+				if(differentParameters.size())
+				{
+					int r = QMessageBox::question(this,
+							tr("Update parameters..."),
+							tr("The database is using %1 different parameter(s) than "
+							   "those currently set in Core parameters panel. Do you want "
+							   "to use database's parameters?").arg(differentParameters.size()),
+							QMessageBox::Yes | QMessageBox::No,
+							QMessageBox::Yes);
+					if(r == QMessageBox::Yes)
+					{
+						for(rtabmap::ParametersMap::const_iterator iter = differentParameters.begin(); iter!=differentParameters.end(); ++iter)
+						{
+							ui_->parameters_toolbox->updateParameter(iter->first, iter->second);
+						}
+					}
+				}
+			}
+
 			updateIds();
 			return true;
 		}
@@ -895,6 +950,16 @@ void DatabaseViewer::extractImages()
 		return;
 	}
 
+	QStringList formats;
+	formats.push_back("jpg");
+	formats.push_back("png");
+	bool ok;
+	QString ext = QInputDialog::getItem(this, tr("Which RGB format?"), tr("Format:"), formats, 0, false, &ok);
+	if(!ok)
+	{
+		return;
+	}
+
 	QString path = QFileDialog::getExistingDirectory(this, tr("Select directory where to save images..."), QDir::homePath());
 	if(!path.isNull())
 	{
@@ -990,20 +1055,20 @@ void DatabaseViewer::extractImages()
 			data.uncompressData();
 			if(!data.imageRaw().empty() && !data.rightRaw().empty())
 			{
-				cv::imwrite(QString("%1/left/%2.jpg").arg(path).arg(id).toStdString(), data.imageRaw());
-				cv::imwrite(QString("%1/right/%2.jpg").arg(path).arg(id).toStdString(), data.rightRaw());
-				UINFO(QString("Saved left/%1.jpg and right/%1.jpg").arg(id).toStdString().c_str());
+				cv::imwrite(QString("%1/left/%2.%3").arg(path).arg(id).arg(ext).toStdString(), data.imageRaw());
+				cv::imwrite(QString("%1/right/%2.%3").arg(path).arg(id).arg(ext).toStdString(), data.rightRaw());
+				UINFO(QString("Saved left/%1.%2 and right/%1.%2").arg(id).arg(ext).toStdString().c_str());
 			}
 			else if(!data.imageRaw().empty() && !data.depthRaw().empty())
 			{
-				cv::imwrite(QString("%1/rgb/%2.jpg").arg(path).arg(id).toStdString(), data.imageRaw());
+				cv::imwrite(QString("%1/rgb/%2.%3").arg(path).arg(id).arg(ext).toStdString(), data.imageRaw());
 				cv::imwrite(QString("%1/depth/%2.png").arg(path).arg(id).toStdString(), data.depthRaw());
-				UINFO(QString("Saved rgb/%1.jpg and depth/%1.png").arg(id).toStdString().c_str());
+				UINFO(QString("Saved rgb/%1.%2 and depth/%1.png").arg(id).arg(ext).toStdString().c_str());
 			}
 			else if(!data.imageRaw().empty())
 			{
-				cv::imwrite(QString("%1/%2.jpg").arg(path).arg(id).toStdString(), data.imageRaw());
-				UINFO(QString("Saved %1.jpg").arg(id).toStdString().c_str());
+				cv::imwrite(QString("%1/%2.%3").arg(path).arg(id).arg(ext).toStdString(), data.imageRaw());
+				UINFO(QString("Saved %1.%2").arg(id).arg(ext).toStdString().c_str());
 			}
 		}
 	}
@@ -1629,7 +1694,9 @@ void DatabaseViewer::view3DLaserScans()
 						}
 
 						int normalK = uStr2Int(ui_->parameters_toolbox->getParameters().at(Parameters::kIcpPointToPlaneNormalNeighbors()));
-						pcl::PointCloud<pcl::PointNormal>::Ptr cloudNormals = util3d::computeNormals(cloud, normalK);
+						pcl::PointCloud<pcl::Normal>::Ptr normals = util3d::computeNormals(cloud, normalK);
+						pcl::PointCloud<pcl::PointNormal>::Ptr cloudNormals(new pcl::PointCloud<pcl::PointNormal>);
+						pcl::concatenateFields(*cloud, *normals, *cloudNormals);
 
 						viewer->addCloud(uFormat("cloud%d", iter->first), cloudNormals, pose, color);
 
@@ -2271,7 +2338,10 @@ void DatabaseViewer::update(int value,
 								{
 									depth = util2d::fillDepthHoles(depth, ui_->spinBox_mesh_fillDepthHoles->value(), float(ui_->spinBox_mesh_depthError->value())/100.0f);
 								}
-								cloud = util3d::cloudFromDepthRGB(data.imageRaw(), depth, data.cameraModels()[0].cx(), data.cameraModels()[0].cy(), data.cameraModels()[0].fx(), data.cameraModels()[0].fy());
+								cloud = util3d::cloudFromDepthRGB(
+										data.imageRaw(),
+										depth,
+										data.cameraModels()[0]);
 							}
 							else
 							{
@@ -2331,15 +2401,6 @@ void DatabaseViewer::update(int value,
 				}
 			}
 
-			if(!imgDepth.isNull())
-			{
-				view->setImageDepth(imgDepth);
-				rect = imgDepth.rect();
-			}
-			else
-			{
-				ULOGGER_DEBUG("Image depth is empty");
-			}
 			if(!img.isNull())
 			{
 				view->setImage(img);
@@ -2348,6 +2409,19 @@ void DatabaseViewer::update(int value,
 			else
 			{
 				ULOGGER_DEBUG("Image is empty");
+			}
+
+			if(!imgDepth.isNull())
+			{
+				view->setImageDepth(imgDepth);
+				if(!img.isNull())
+				{
+					rect = imgDepth.rect();
+				}
+			}
+			else
+			{
+				ULOGGER_DEBUG("Image depth is empty");
 			}
 
 			// loops
@@ -3457,8 +3531,11 @@ void DatabaseViewer::sliderIterationsValueChanged(int value)
 				   iter->second.type() == rtabmap::Link::kNeighborMerged)
 				{
 					Eigen::Vector3f vA, vB;
-					poseA.getTranslation(vA[0], vA[1], vA[2]);
-					poseB.getTranslation(vB[0], vB[1], vB[2]);
+					float x,y,z;
+					poseA.getTranslation(x,y,z);
+					vA[0] = x; vA[1] = y; vA[2] = z;
+					poseB.getTranslation(x,y,z);
+					vB[0] = x; vB[1] = y; vB[2] = z;
 					length += (vB - vA).norm();
 				}
 			}

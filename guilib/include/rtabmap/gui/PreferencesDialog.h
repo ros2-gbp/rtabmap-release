@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2014, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -129,6 +129,7 @@ public:
 	QString loadCustomConfig(const QString & section, const QString & key);
 
 	rtabmap::ParametersMap getAllParameters() const;
+	void updateParameters(const ParametersMap & parameters);
 
 	//General panel
 	int getGeneralLoggerLevel() const;
@@ -141,13 +142,20 @@ public:
 	bool imageRejectedShown() const;
 	bool imageHighestHypShown() const;
 	bool beepOnPause() const;
+	bool isTimeUsedInFigures() const;
 	bool notifyWhenNewGlobalPathIsReceived() const;
 	int getOdomQualityWarnThr() const;
 	bool isPosteriorGraphView() const;
 
 	bool isGraphsShown() const;
 	bool isLabelsShown() const;
+	double getMapVoxel() const;
+	double getMapNoiseRadius() const;
+	int getMapNoiseMinNeighbors() const;
 	bool isCloudsShown(int index) const;      // 0=map, 1=odom
+	bool isOctomapShown() const;
+	int getOctomapTreeDepth() const;
+	bool isOctomapGroundAnObstacle() const;
 	int getCloudDecimation(int index) const;   // 0=map, 1=odom
 	double getCloudMaxDepth(int index) const;  // 0=map, 1=odom
 	double getCloudMinDepth(int index) const;  // 0=map, 1=odom
@@ -170,11 +178,18 @@ public:
 	int getSubtractFilteringMinPts() const;
 	double getSubtractFilteringRadius() const;
 	double getSubtractFilteringAngle() const;
+	int getNormalKSearch() const;
 
 	bool getGridMapShown() const;
-	double getGridMapResolution() const;
-	bool isGridMapFrom3DCloud() const;
+	double getGridMapResolution() const;;
 	bool isGridMapEroded() const;
+	bool isGridMapFrom3DCloud() const;
+	bool projMapFrame() const;
+	double projMaxGroundAngle() const;
+	double projMaxGroundHeight() const;
+	int projMinClusterSize() const;
+	double projMaxObstaclesHeight() const;
+	bool projFlatObstaclesDetected() const;
 	double getGridMapOpacity() const;
 
 	bool isCloudMeshing() const;
@@ -192,12 +207,7 @@ public:
 	QString getSourceDriverStr() const;
 	QString getSourceDevice() const;
 
-	QString getSourceDatabasePath() const; //Database group
-	bool getSourceDatabaseOdometryIgnored() const; //Database group
-	bool getSourceDatabaseGoalDelayIgnored() const; //Database group
-	bool getSourceDatabaseGoalsIgnored() const; //Database group
-	int getSourceDatabaseStartPos() const; //Database group
-	bool getSourceDatabaseStampsUsed() const;//Database group
+	bool getSourceDatabaseStampsUsed() const;
 	bool isSourceRGBDColorOnly() const;
 	int getSourceImageDecimation() const;
 	bool isSourceStereoDepthGenerated() const;
@@ -214,9 +224,11 @@ public:
 
 	//
 	bool isImagesKept() const;
+	bool isCloudsKept() const;
 	float getTimeLimit() const;
 	float getDetectionRate() const;
 	bool isSLAMMode() const;
+	bool isRGBDMode() const;
 
 	//specific
 	bool isStatisticsPublished() const;
@@ -263,6 +275,7 @@ private slots:
 	void updatePredictionPlot();
 	void updateKpROI();
 	void updateG2oVisibility();
+	void updateStereoDisparityVisibility();
 	void useOdomFeatures();
 	void changeWorkingDirectory();
 	void changeDictionaryPath();
@@ -285,6 +298,7 @@ private slots:
 	void selectSourceStereoVideoPath();
 	void selectSourceOniPath();
 	void selectSourceOni2Path();
+	void selectSourceSvoPath();
 	void updateSourceGrpVisibility();
 	void testOdometry();
 	void testCamera();
@@ -292,8 +306,6 @@ private slots:
 protected:
 	virtual void showEvent ( QShowEvent * event );
 	virtual void closeEvent(QCloseEvent *event);
-
-	void setParameter(const std::string & key, const std::string & value);
 
 	virtual QString getParamMessage();
 
@@ -304,6 +316,8 @@ protected:
 	virtual void writeGuiSettings(const QString & filePath = QString()) const;
 	virtual void writeCameraSettings(const QString & filePath = QString()) const;
 	virtual void writeCoreSettings(const QString & filePath = QString()) const;
+
+	void setParameter(const std::string & key, const std::string & value);
 
 private:
 	void readSettings(const QString & filePath = QString());
