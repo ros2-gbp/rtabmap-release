@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2014, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -62,6 +62,9 @@ public slots:
 	void incrementStep();
 	void clear();
 	void resetProgress();
+
+private slots:
+	void closeDialog();
 
 private:
 	QLabel * _text;

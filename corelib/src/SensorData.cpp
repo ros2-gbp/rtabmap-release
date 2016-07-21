@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2014, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -448,7 +448,6 @@ void SensorData::setUserDataRaw(const cv::Mat & userDataRaw)
 		return;
 	}
 	_userDataRaw = userDataRaw;
-	_userDataCompressed = cv::Mat();
 }
 
 void SensorData::setUserData(const cv::Mat & userData)
@@ -605,6 +604,18 @@ void SensorData::uncompressDataConst(cv::Mat * imageRaw, cv::Mat * depthRaw, cv:
 			}
 		}
 	}
+}
+
+long SensorData::getMemoryUsed() const // Return memory usage in Bytes
+{
+	return _imageCompressed.total()*_imageCompressed.elemSize() +
+			_imageRaw.total()*_imageRaw.elemSize() +
+			_depthOrRightCompressed.total()*_depthOrRightCompressed.elemSize() +
+			_depthOrRightRaw.total()*_depthOrRightRaw.elemSize() +
+			_userDataCompressed.total()*_userDataCompressed.elemSize() +
+			_userDataRaw.total()*_userDataRaw.elemSize() +
+			_laserScanCompressed.total()*_laserScanCompressed.elemSize() +
+			_laserScanRaw.total()*_laserScanRaw.elemSize();
 }
 
 } // namespace rtabmap
