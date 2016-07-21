@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2014, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -203,7 +203,7 @@ std::string CameraOpenni::getSerial() const
 	return "";
 }
 
-SensorData CameraOpenni::captureImage()
+SensorData CameraOpenni::captureImage(CameraInfo * info)
 {
 	SensorData data;
 #ifdef HAVE_OPENNI
@@ -317,7 +317,7 @@ bool CameraOpenNICV::isCalibrated() const
 	return true;
 }
 
-SensorData CameraOpenNICV::captureImage()
+SensorData CameraOpenNICV::captureImage(CameraInfo * info)
 {
 	SensorData data;
 	if(_capture.isOpened())
@@ -671,7 +671,7 @@ std::string CameraOpenNI2::getSerial() const
 	return "";
 }
 
-SensorData CameraOpenNI2::captureImage()
+SensorData CameraOpenNI2::captureImage(CameraInfo * info)
 {
 	SensorData data;
 #ifdef RTABMAP_OPENNI2
@@ -1033,7 +1033,7 @@ std::string CameraFreenect::getSerial() const
 	return "";
 }
 
-SensorData CameraFreenect::captureImage()
+SensorData CameraFreenect::captureImage(CameraInfo * info)
 {
 	SensorData data;
 #ifdef RTABMAP_FREENECT
@@ -1272,9 +1272,10 @@ bool CameraFreenect2::init(const std::string & calibrationFolder, const std::str
 				const CameraModel & l = stereoModel_.left();
 				const CameraModel & r = stereoModel_.right();
 				stereoModel_ = StereoCameraModel(stereoModel_.name(),
-						depthSize, l.K(), l.D(), l.R(), depthP,
-						colorSize, r.K(), r.D(), r.R(), colorP,
+						depthSize, l.K_raw(), l.D_raw(), l.R(), depthP,
+						colorSize, r.K_raw(), r.D_raw(), r.R(), colorP,
 						stereoModel_.R(), stereoModel_.T(), stereoModel_.E(), stereoModel_.F());
+				stereoModel_.initRectificationMap();
 			}
 		}
 
@@ -1307,7 +1308,7 @@ std::string CameraFreenect2::getSerial() const
 	return "";
 }
 
-SensorData CameraFreenect2::captureImage()
+SensorData CameraFreenect2::captureImage(CameraInfo * info)
 {
 	SensorData data;
 #ifdef RTABMAP_FREENECT2
@@ -1720,12 +1721,12 @@ std::string CameraRGBDImages::getSerial() const
 	return this->cameraModel().name();
 }
 
-SensorData CameraRGBDImages::captureImage()
+SensorData CameraRGBDImages::captureImage(CameraInfo * info)
 {
 	SensorData data;
 
 	SensorData rgb, depth;
-	rgb = CameraImages::captureImage();
+	rgb = CameraImages::captureImage(info);
 	if(!rgb.imageRaw().empty())
 	{
 		depth = cameraDepth_.takeImage();

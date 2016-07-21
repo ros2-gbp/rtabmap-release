@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2014, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -47,9 +47,6 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 namespace rtabmap {
 class CameraThread;
-class DBReader;
-class CameraOpenni;
-class CameraFreenect;
 class OdometryThread;
 class CloudViewer;
 class LoopClosureViewer;
@@ -72,6 +69,7 @@ class ExportCloudsDialog;
 class ExportScansDialog;
 class PostProcessingDialog;
 class DataRecorder;
+class OctoMap;
 
 class RTABMAPGUI_EXP MainWindow : public QMainWindow, public UEventsHandler
 {
@@ -140,6 +138,7 @@ private slots:
 	void exportPosesTORO();
 	void exportPosesG2O();
 	void exportImages();
+	void exportOctomap();
 	void postProcessing();
 	void deleteMemory();
 	void openWorkingDirectory();
@@ -174,7 +173,7 @@ private slots:
 	void takeScreenshot();
 	void updateElapsedTime();
 	void processCameraInfo(const rtabmap::CameraInfo & info);
-	void processOdometry(const rtabmap::OdometryEvent & odom);
+	void processOdometry(const rtabmap::OdometryEvent & odom, bool dataIgnored);
 	void applyPrefSettings(PreferencesDialog::PANEL_FLAGS flags);
 	void applyPrefSettings(const rtabmap::ParametersMap & parameters);
 	void processRtabmapEventInit(int status, const QString & info);
@@ -207,11 +206,12 @@ private slots:
 	void dataRecorder();
 	void dataRecorderDestroyed();
 	void updateNodeVisibility(int, bool);
+	void updateGraphView();
 
 signals:
 	void statsReceived(const rtabmap::Statistics &);
 	void cameraInfoReceived(const rtabmap::CameraInfo &);
-	void odometryReceived(const rtabmap::OdometryEvent &);
+	void odometryReceived(const rtabmap::OdometryEvent &, bool);
 	void thresholdsChanged(int, int);
 	void stateChanged(MainWindow::State);
 	void rtabmapEventInitReceived(int status, const QString & info);
@@ -236,7 +236,13 @@ private:
 			const std::map<int, std::string> & labels,
 			const std::map<int, Transform> & groundTruths,
 			bool verboseProgress = false);
-	void createAndAddCloudToMap(int nodeId,	const Transform & pose, int mapId);
+	std::pair<pcl::PointCloud<pcl::PointXYZRGB>::Ptr, pcl::IndicesPtr> createAndAddCloudToMap(int nodeId,	const Transform & pose, int mapId);
+	void createAndAddProjectionMap(
+			const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud,
+			const pcl::IndicesPtr & indices,
+			int nodeId,
+			const Transform & pose,
+			bool updateOctomap = false);
 	void createAndAddScanToMap(int nodeId, const Transform & pose, int mapId);
 	void createAndAddFeaturesToMap(int nodeId, const Transform & pose, int mapId);
 	Transform alignPosesToGroundTruth(std::map<int, Transform> & poses, const std::map<int, Transform> & groundTruth);
@@ -254,7 +260,6 @@ private:
 
 	State _state;
 	rtabmap::CameraThread * _camera;
-	rtabmap::DBReader * _dbReader;
 	rtabmap::OdometryThread * _odomThread;
 
 	//Dialogs
@@ -267,6 +272,7 @@ private:
 
 	QSet<int> _lastIds;
 	int _lastId;
+	double _firstStamp;
 	bool _processingStatistics;
 	bool _processingDownloadedMap;
 	bool _odometryReceived;
@@ -281,17 +287,21 @@ private:
 	int _waypointsIndex;
 
 	QMap<int, Signature> _cachedSignatures;
+	long _cachedMemoryUsage;
 	std::map<int, Transform> _currentPosesMap; // <nodeId, pose>
 	std::map<int, Transform> _currentGTPosesMap; // <nodeId, pose>
 	std::multimap<int, Link> _currentLinksMap; // <nodeFromId, link>
 	std::map<int, int> _currentMapIds;   // <nodeId, mapId>
 	std::map<int, std::string> _currentLabels; // <nodeId, label>
-	std::map<int, std::pair<pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr, pcl::IndicesPtr> > _createdClouds;
-	std::pair<int, std::pair<pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr, pcl::IndicesPtr> > _previousCloud; // used for subtraction
+	std::map<int, std::pair<pcl::PointCloud<pcl::PointXYZRGB>::Ptr, pcl::IndicesPtr> > _cachedClouds;
+	long _createdCloudsMemoryUsage;
+	std::pair<int, std::pair<std::pair<pcl::PointCloud<pcl::PointXYZRGB>::Ptr, pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr>, pcl::IndicesPtr> > _previousCloud; // used for subtraction
 
 	std::map<int, cv::Mat> _createdScans;
 	std::map<int, std::pair<cv::Mat, cv::Mat> > _projectionLocalMaps; // <ground, obstacles>
 	std::map<int, std::pair<cv::Mat, cv::Mat> > _gridLocalMaps; // <ground, obstacles>
+
+	rtabmap::OctoMap * _octomap;
 
 	std::map<int, pcl::PointCloud<pcl::PointXYZRGB>::Ptr> _createdFeatures;
 
