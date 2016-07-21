@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2014, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -113,14 +113,16 @@ Transform RegistrationIcp::computeTransformationImpl(
 	if(!guess.isNull() && !dataFrom.laserScanRaw().empty() && !dataTo.laserScanRaw().empty())
 	{
 		// ICP with guess transform
-		int maxLaserScans = dataTo.laserScanMaxPts()?dataTo.laserScanMaxPts():dataFrom.laserScanMaxPts();
+		int maxLaserScansTo = dataTo.laserScanMaxPts();
+		int maxLaserScansFrom = dataFrom.laserScanMaxPts();
 		cv::Mat fromScan = dataFrom.laserScanRaw();
 		cv::Mat toScan = dataTo.laserScanRaw();
 		if(_downsamplingStep>1)
 		{
 			fromScan = util3d::downsample(fromScan, _downsamplingStep);
 			toScan = util3d::downsample(toScan, _downsamplingStep);
-			maxLaserScans/=_downsamplingStep;
+			maxLaserScansTo/=_downsamplingStep;
+			maxLaserScansFrom/=_downsamplingStep;
 			UDEBUG("Downsampling time (step=%d) = %f s", _downsamplingStep, timer.ticks());
 		}
 
@@ -140,6 +142,7 @@ Transform RegistrationIcp::computeTransformationImpl(
 				//special case if we have already normals computed and there is no filtering
 				pcl::PointCloud<pcl::PointNormal>::Ptr fromCloudNormals = util3d::laserScanToPointCloudNormal(fromScan, Transform());
 				pcl::PointCloud<pcl::PointNormal>::Ptr toCloudNormals = util3d::laserScanToPointCloudNormal(toScan, guess);
+
 				UDEBUG("Conversion time = %f s", timer.ticks());
 				pcl::PointCloud<pcl::PointNormal>::Ptr fromCloudNormalsRegistered(new pcl::PointCloud<pcl::PointNormal>());
 				icpT = util3d::icpPointToPlane(
@@ -186,26 +189,42 @@ Transform RegistrationIcp::computeTransformationImpl(
 				bool filtered = false;
 				if(_voxelSize > 0.0f)
 				{
+					int pointsBeforeFiltering = fromCloudFiltered->size();
 					fromCloudFiltered = util3d::voxelize(fromCloudFiltered, _voxelSize);
-					int pointsBeforeFiltering = toCloudFiltered->size();
+					maxLaserScansFrom = maxLaserScansFrom * fromCloudFiltered->size() / pointsBeforeFiltering;
+
+					pointsBeforeFiltering = toCloudFiltered->size();
 					toCloudFiltered = util3d::voxelize(toCloudFiltered, _voxelSize);
+					maxLaserScansTo = maxLaserScansTo * toCloudFiltered->size() / pointsBeforeFiltering;
+
 					filtered = true;
 					UDEBUG("Voxel filtering time (voxel=%f m) = %f s", _voxelSize, timer.ticks());
 
 					//Adjust maxLaserScans
-					maxLaserScans = maxLaserScans * toCloudFiltered->size() / pointsBeforeFiltering;
+
 				}
 
 				bool correspondencesComputed = false;
 				pcl::PointCloud<pcl::PointXYZ>::Ptr fromCloudRegistered(new pcl::PointCloud<pcl::PointXYZ>());
 				if(_pointToPlane) // ICP Point To Plane, only in 3D
 				{
-					pcl::PointCloud<pcl::PointNormal>::Ptr fromCloudNormals = util3d::computeNormals(fromCloudFiltered, _pointToPlaneNormalNeighbors);
-					pcl::PointCloud<pcl::PointNormal>::Ptr toCloudNormals = util3d::computeNormals(toCloudFiltered, _pointToPlaneNormalNeighbors);
+					pcl::PointCloud<pcl::Normal>::Ptr normals;
+
+					normals = util3d::computeNormals(fromCloudFiltered, _pointToPlaneNormalNeighbors);
+					pcl::PointCloud<pcl::PointNormal>::Ptr fromCloudNormals(new pcl::PointCloud<pcl::PointNormal>);
+					pcl::concatenateFields(*fromCloudFiltered, *normals, *fromCloudNormals);
+
+					normals = util3d::computeNormals(toCloudFiltered, _pointToPlaneNormalNeighbors);
+					pcl::PointCloud<pcl::PointNormal>::Ptr toCloudNormals(new pcl::PointCloud<pcl::PointNormal>);
+					pcl::concatenateFields(*toCloudFiltered, *normals, *toCloudNormals);
 
 					std::vector<int> indices;
 					toCloudNormals = util3d::removeNaNNormalsFromPointCloud(toCloudNormals);
 					fromCloudNormals = util3d::removeNaNNormalsFromPointCloud(fromCloudNormals);
+
+					// update output scans
+					fromSignature.sensorData().setLaserScanRaw(util3d::laserScanFromPointCloud(*fromCloudNormals), maxLaserScansFrom, fromSignature.sensorData().laserScanMaxRange());
+					toSignature.sensorData().setLaserScanRaw(util3d::laserScanFromPointCloud(*toCloudNormals, guess.inverse()), maxLaserScansTo, toSignature.sensorData().laserScanMaxRange());
 
 					UDEBUG("Compute normals time = %f s", timer.ticks());
 
@@ -237,6 +256,13 @@ Transform RegistrationIcp::computeTransformationImpl(
 				}
 				else // ICP Point to Point
 				{
+					if(_voxelSize > 0.0f)
+					{
+						// update output scans
+						fromSignature.sensorData().setLaserScanRaw(util3d::laserScanFromPointCloud(*fromCloudFiltered), maxLaserScansFrom, fromSignature.sensorData().laserScanMaxRange());
+						toSignature.sensorData().setLaserScanRaw(util3d::laserScanFromPointCloud(*toCloudFiltered, guess.inverse()), maxLaserScansTo, toSignature.sensorData().laserScanMaxRange());
+					}
+
 					icpT = util3d::icp(
 							fromCloudFiltered,
 							toCloudFiltered,
@@ -287,15 +313,17 @@ Transform RegistrationIcp::computeTransformationImpl(
 				float ix,iy,iz, iroll,ipitch,iyaw;
 				Transform icpInTargetReferential = guess.inverse() * icpT.inverse() * guess; // actual local ICP refinement
 				icpInTargetReferential.getTranslationAndEulerAngles(ix,iy,iz,iroll,ipitch,iyaw);
+				info.icpTranslation = uMax3(fabs(ix), fabs(iy), fabs(iz));
+				info.icpRotation = uMax3(fabs(iroll), fabs(ipitch), fabs(iyaw));
 				if((_maxTranslation>0.0f &&
-					uMax3(fabs(ix), fabs(iy), fabs(iz)) > _maxTranslation)
+						info.icpTranslation > _maxTranslation)
 				   ||
 				   (_maxRotation>0.0f &&
-					uMax3(fabs(iroll), fabs(ipitch), fabs(iyaw)) > _maxRotation))
+						info.icpRotation > _maxRotation))
 				{
 					msg = uFormat("Cannot compute transform (ICP correction too large -> %f m %f rad, limits=%f m, %f rad)",
-							uMax3(fabs(ix), fabs(iy), fabs(iz)),
-							uMax3(fabs(iroll), fabs(ipitch), fabs(iyaw)),
+							info.icpTranslation,
+							info.icpRotation,
 							_maxTranslation,
 							_maxRotation);
 					UINFO(msg.c_str());
@@ -303,6 +331,7 @@ Transform RegistrationIcp::computeTransformationImpl(
 				else
 				{
 					// verify if there are enough correspondences
+					int maxLaserScans = maxLaserScansTo?maxLaserScansTo:maxLaserScansFrom;
 					if(maxLaserScans)
 					{
 						correspondencesRatio = float(correspondences)/float(maxLaserScans);
@@ -324,7 +353,7 @@ Transform RegistrationIcp::computeTransformationImpl(
 							hasConverged?"true":"false",
 							variance,
 							correspondences,
-							maxLaserScans>0?maxLaserScans:dataTo.laserScanMaxPts()?dataTo.laserScanMaxPts():(int)(toScan.cols>fromScan.cols?toScan.cols:fromScan.cols),
+							maxLaserScans>0?maxLaserScans:(int)(toScan.cols>fromScan.cols?toScan.cols:fromScan.cols),
 							correspondencesRatio*100.0f);
 
 					info.variance = variance>0.0f?variance:0.0001; // epsilon if exact transform
