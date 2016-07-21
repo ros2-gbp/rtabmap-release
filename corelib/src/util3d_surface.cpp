@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2014, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -33,7 +33,6 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <pcl/search/kdtree.h>
 #include <pcl/surface/gp3.h>
 #include <pcl/features/normal_3d_omp.h>
-#include <pcl/features/normal_3d.h>
 #include <pcl/surface/mls.h>
 #include <pcl/surface/texture_mapping.h>
 #include <pcl/features/integral_image_normal.h>
@@ -500,7 +499,8 @@ pcl::TextureMesh::Ptr createTextureMesh(
 		const std::map<int, Transform> & poses,
 		const std::map<int, CameraModel> & cameraModels,
 		const std::map<int, cv::Mat> & images,
-		const std::string & tmpDirectory)
+		const std::string & tmpDirectory,
+		int kNormalSearch)
 {
 	pcl::TextureMesh::Ptr textureMesh(new pcl::TextureMesh);
 	textureMesh->cloud = mesh->cloud;
@@ -583,26 +583,30 @@ pcl::TextureMesh::Ptr createTextureMesh(
 	{
 		pcl::PointCloud<pcl::PointXYZ>::Ptr cloud (new pcl::PointCloud<pcl::PointXYZ>);
 		pcl::fromPCLPointCloud2(textureMesh->cloud, *cloud);
-		pcl::PointCloud<pcl::PointNormal>::Ptr cloudWithNormals = computeNormals(cloud, 20);
+		pcl::PointCloud<pcl::Normal>::Ptr normals = computeNormals(cloud, kNormalSearch);
+		// Concatenate the XYZ and normal fields
+		pcl::PointCloud<pcl::PointNormal>::Ptr cloudWithNormals;
+		pcl::concatenateFields (*cloud, *normals, *cloudWithNormals);
 		pcl::toPCLPointCloud2 (*cloudWithNormals, textureMesh->cloud);
 	}
 
 	return textureMesh;
 }
 
-pcl::PointCloud<pcl::PointNormal>::Ptr computeNormals(
+pcl::PointCloud<pcl::Normal>::Ptr computeNormals(
 		const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud,
-		int normalKSearch)
+		int normalKSearch,
+		const Eigen::Vector3f & viewPoint)
 {
 	pcl::IndicesPtr indices(new std::vector<int>);
-	return computeNormals(cloud, indices, normalKSearch);
+	return computeNormals(cloud, indices, normalKSearch, viewPoint);
 }
-pcl::PointCloud<pcl::PointNormal>::Ptr computeNormals(
+pcl::PointCloud<pcl::Normal>::Ptr computeNormals(
 		const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud,
 		const pcl::IndicesPtr & indices,
-		int normalKSearch)
+		int normalKSearch,
+		const Eigen::Vector3f & viewPoint)
 {
-	pcl::PointCloud<pcl::PointNormal>::Ptr cloud_with_normals(new pcl::PointCloud<pcl::PointNormal>);
 	pcl::search::KdTree<pcl::PointXYZ>::Ptr tree (new pcl::search::KdTree<pcl::PointXYZ>);
 	if(indices->size())
 	{
@@ -614,38 +618,40 @@ pcl::PointCloud<pcl::PointNormal>::Ptr computeNormals(
 	}
 
 	// Normal estimation*
+#ifdef PCL_OMP
 	pcl::NormalEstimationOMP<pcl::PointXYZ, pcl::Normal> n;
+#else
+	pcl::NormalEstimation<pcl::PointXYZ, pcl::Normal> n;
+#endif
 	pcl::PointCloud<pcl::Normal>::Ptr normals (new pcl::PointCloud<pcl::Normal>);
 	n.setInputCloud (cloud);
-	if(indices->size())
-	{
-		n.setIndices(indices);
-	}
+	// Commented: Keep the output normals size the same as the input cloud
+	//if(indices->size())
+	//{
+	//	n.setIndices(indices);
+	//}
 	n.setSearchMethod (tree);
 	n.setKSearch (normalKSearch);
+	n.setViewPoint(viewPoint[0], viewPoint[1], viewPoint[2]);
 	n.compute (*normals);
-	//* normals should not contain the point normals + surface curvatures
 
-	// Concatenate the XYZ and normal fields*
-	pcl::concatenateFields (*cloud, *normals, *cloud_with_normals);
-	//* cloud_with_normals = cloud + normals*/
-
-	return cloud_with_normals;
+	return normals;
 }
 
-pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr computeNormals(
+pcl::PointCloud<pcl::Normal>::Ptr computeNormals(
 		const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud,
-		int normalKSearch)
+		int normalKSearch,
+		const Eigen::Vector3f & viewPoint)
 {
 	pcl::IndicesPtr indices(new std::vector<int>);
-	return computeNormals(cloud, indices, normalKSearch);
+	return computeNormals(cloud, indices, normalKSearch, viewPoint);
 }
-pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr computeNormals(
+pcl::PointCloud<pcl::Normal>::Ptr computeNormals(
 		const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud,
 		const pcl::IndicesPtr & indices,
-		int normalKSearch)
+		int normalKSearch,
+		const Eigen::Vector3f & viewPoint)
 {
-	pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud_with_normals(new pcl::PointCloud<pcl::PointXYZRGBNormal>);
 	pcl::search::KdTree<pcl::PointXYZRGB>::Ptr tree (new pcl::search::KdTree<pcl::PointXYZRGB>);
 	if(indices->size())
 	{
@@ -657,42 +663,43 @@ pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr computeNormals(
 	}
 
 	// Normal estimation*
+#ifdef PCL_OMP
 	pcl::NormalEstimationOMP<pcl::PointXYZRGB, pcl::Normal> n;
+#else
+	pcl::NormalEstimation<pcl::PointXYZRGB, pcl::Normal> n;
+#endif
 	pcl::PointCloud<pcl::Normal>::Ptr normals (new pcl::PointCloud<pcl::Normal>);
 	n.setInputCloud (cloud);
-	if(indices->size())
-	{
-		n.setIndices(indices);
-	}
+	// Commented: Keep the output normals size the same as the input cloud
+	//if(indices->size())
+	//{
+	//	n.setIndices(indices);
+	//}
 	n.setSearchMethod (tree);
 	n.setKSearch (normalKSearch);
+	n.setViewPoint(viewPoint[0], viewPoint[1], viewPoint[2]);
 	n.compute (*normals);
-	//* normals should not contain the point normals + surface curvatures
 
-	// Concatenate the XYZ and normal fields*
-	pcl::concatenateFields (*cloud, *normals, *cloud_with_normals);
-	//* cloud_with_normals = cloud + normals*/
-
-	return cloud_with_normals;
+	return normals;
 }
 
-pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr computeFastOrganizedNormals(
+pcl::PointCloud<pcl::Normal>::Ptr computeFastOrganizedNormals(
 		const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud,
 		float maxDepthChangeFactor,
-		float normalSmoothingSize)
+		float normalSmoothingSize,
+		const Eigen::Vector3f & viewPoint)
 {
 	pcl::IndicesPtr indices(new std::vector<int>);
-	return computeFastOrganizedNormals(cloud, indices, maxDepthChangeFactor, normalSmoothingSize);
+	return computeFastOrganizedNormals(cloud, indices, maxDepthChangeFactor, normalSmoothingSize, viewPoint);
 }
-pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr computeFastOrganizedNormals(
+pcl::PointCloud<pcl::Normal>::Ptr computeFastOrganizedNormals(
 		const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud,
 		const pcl::IndicesPtr & indices,
 		float maxDepthChangeFactor,
-		float normalSmoothingSize)
+		float normalSmoothingSize,
+		const Eigen::Vector3f & viewPoint)
 {
 	UASSERT(cloud->isOrganized());
-
-	pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud_with_normals(new pcl::PointCloud<pcl::PointXYZRGBNormal>);
 
 	// Normal estimation
 	pcl::PointCloud<pcl::Normal>::Ptr normals (new pcl::PointCloud<pcl::Normal>);
@@ -701,16 +708,15 @@ pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr computeFastOrganizedNormals(
 	ne.setMaxDepthChangeFactor(maxDepthChangeFactor);
 	ne.setNormalSmoothingSize(normalSmoothingSize);
 	ne.setInputCloud(cloud);
-	if(indices->size())
-	{
-		ne.setIndices(indices);
-	}
+	// Commented: Keep the output normals size the same as the input cloud
+	//if(indices->size())
+	//{
+	//	ne.setIndices(indices);
+	//}
+	ne.setViewPoint(viewPoint[0], viewPoint[1], viewPoint[2]);
 	ne.compute(*normals);
 
-	// Concatenate the XYZ and normal fields
-	pcl::concatenateFields (*cloud, *normals, *cloud_with_normals);
-
-	return cloud_with_normals;
+	return normals;
 }
 
 pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr mls(
@@ -792,6 +798,16 @@ pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr mls(
 	}
 	mls.setSearchMethod (tree);
 	mls.process (*cloud_with_normals);
+
+	// It seems that returned normals are not normalized!? FIXME: Is it a bug only in PCL 1.7.1?
+	for(unsigned int i=0; i<cloud_with_normals->size(); ++i)
+	{
+		Eigen::Vector3f normal(cloud_with_normals->at(i).normal_x, cloud_with_normals->at(i).normal_y, cloud_with_normals->at(i).normal_z);
+		normal.normalize();
+		cloud_with_normals->at(i).normal_x = normal[0];
+		cloud_with_normals->at(i).normal_y = normal[1];
+		cloud_with_normals->at(i).normal_z = normal[2];
+	}
 
 	return cloud_with_normals;
 }

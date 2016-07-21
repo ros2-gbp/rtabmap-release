@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2014, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -145,6 +145,7 @@ public:
 	void setRefImageId(int refImageId) {_refImageId = refImageId;}
 	void setLoopClosureId(int loopClosureId) {_loopClosureId = loopClosureId;}
 	void setProximityDetectionId(int id) {_proximiyDetectionId = id;}
+	void setStamp(double stamp) {_stamp = stamp;}
 
 	void setSignatures(const std::map<int, Signature> & signatures) {_signatures = signatures;}
 
@@ -165,6 +166,7 @@ public:
 	int refImageId() const {return _refImageId;}
 	int loopClosureId() const {return _loopClosureId;}
 	int proximityDetectionId() const {return _proximiyDetectionId;}
+	double stamp() const {return _stamp;}
 
 	const std::map<int, Signature> & getSignatures() const {return _signatures;}
 
@@ -188,6 +190,7 @@ private:
 	int _refImageId;
 	int _loopClosureId;
 	int _proximiyDetectionId;
+	double _stamp;
 
 	std::map<int, Signature> _signatures;
 

@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2014, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -415,7 +415,7 @@ std::string CameraStereoDC1394::getSerial() const
 	return "";
 }
 
-SensorData CameraStereoDC1394::captureImage()
+SensorData CameraStereoDC1394::captureImage(CameraInfo * info)
 {
 	SensorData data;
 #ifdef RTABMAP_DC1394
@@ -610,7 +610,7 @@ struct ImageContainer
 } ;
 #endif
 
-SensorData CameraStereoFlyCapture2::captureImage()
+SensorData CameraStereoFlyCapture2::captureImage(CameraInfo * info)
 {
 	SensorData data;
 #ifdef RTABMAP_FLYCAPTURE2
@@ -747,11 +747,61 @@ bool CameraStereoZed::available()
 #endif
 }
 
-CameraStereoZed::CameraStereoZed(bool rgbdMode, float imageRate, const Transform & localTransform) :
-		Camera(imageRate, localTransform),
-		zed_(0),
-		rgbdMode_(rgbdMode)
+CameraStereoZed::CameraStereoZed(
+		int deviceId,
+		int resolution,
+		int quality,
+		int sensingMode,
+		int confidenceThr,
+		bool computeOdometry,
+		float imageRate,
+		const Transform & localTransform) :
+	Camera(imageRate, localTransform),
+	zed_(0),
+	src_(CameraVideo::kUsbDevice),
+	usbDevice_(deviceId),
+	svoFilePath_(""),
+	resolution_(resolution),
+	quality_(quality),
+	sensingMode_(sensingMode),
+	confidenceThr_(confidenceThr),
+	computeOdometry_(computeOdometry),
+	lost_(true)
 {
+#ifdef RTABMAP_ZED
+	UASSERT(resolution_ >= sl::zed::HD2K && resolution_ <sl::zed::LAST_RESOLUTION);
+	UASSERT(quality_ >= sl::zed::NONE && quality_ <sl::zed::LAST_MODE);
+	UASSERT(sensingMode_ >= sl::zed::FILL && sensingMode_ <sl::zed::LAST_SENSING_MODE);
+	UASSERT(confidenceThr_ >= 0 && confidenceThr_ <=100);
+#endif
+}
+
+CameraStereoZed::CameraStereoZed(
+		const std::string & filePath,
+		int quality,
+		int sensingMode,
+		int confidenceThr,
+		bool computeOdometry,
+		float imageRate,
+		const Transform & localTransform) :
+	Camera(imageRate, localTransform),
+	zed_(0),
+	src_(CameraVideo::kVideoFile),
+	usbDevice_(0),
+	svoFilePath_(filePath),
+	resolution_(2),
+	quality_(quality),
+	sensingMode_(sensingMode),
+	confidenceThr_(confidenceThr),
+	computeOdometry_(computeOdometry),
+	lost_(true)
+{
+#ifdef RTABMAP_ZED
+	UASSERT(resolution_ >= sl::zed::HD2K && resolution_ <sl::zed::LAST_RESOLUTION);
+	UASSERT(quality_ >= sl::zed::NONE && quality_ <sl::zed::LAST_MODE);
+	UASSERT(sensingMode_ >= sl::zed::FILL && sensingMode_ <sl::zed::LAST_SENSING_MODE);
+	UASSERT(confidenceThr_ >= 0 && confidenceThr_ <=100);
+#endif
 }
 
 CameraStereoZed::~CameraStereoZed()
@@ -773,29 +823,54 @@ bool CameraStereoZed::init(const std::string & calibrationFolder, const std::str
 		zed_ = 0;
 	}
 	
-	if(zed_->isZEDconnected())
+	lost_ = true;
+	if(src_ == CameraVideo::kVideoFile)
 	{
-		zed_ = new sl::zed::Camera(sl::zed::HD720); // Use in Live Mode
-		//zed_ = new sl::zed::Camera(argv[1]); // Use in SVO playback mode
-
-		//init WITH self-calibration (- last parameter to false -)
-		sl::zed::ERRCODE err = zed_->init(sl::zed::MODE::PERFORMANCE, 0, true, false, false);
-
-		// Quit if an error occurred
-		if (err != sl::zed::SUCCESS)
-		{
-			UERROR("ZED camera initialization failed: %s", sl::zed::errcode2str(err).c_str());
-			delete zed_;
-			zed_ = 0;
-			return false;
-		}
+		zed_ = new sl::zed::Camera(svoFilePath_); // Use in SVO playback mode
 	}
 	else
 	{
-		UERROR("ZED camera initialization failed: ZED is not connected!");
+		if(zed_->isZEDconnected())
+		{
+			zed_ = new sl::zed::Camera((sl::zed::ZEDResolution_mode)resolution_, getImageRate(), usbDevice_); // Use in Live Mode
+		}
+		else
+		{
+			UERROR("ZED camera initialization failed: ZED is not connected!");
+			return false;
+		}
+	}
+
+	//init WITH self-calibration
+	sl::zed::InitParams parameters(
+		(sl::zed::MODE)quality_, //MODE
+		sl::zed::METER,  //UNIT
+		sl::zed::IMAGE,  //COORDINATE_SYSTEM
+		false,  // verbose
+		-1,     //device
+		-1.,    //minDist
+		false,  //disableSelfCalib
+		false); //vflip
+	sl::zed::ERRCODE err = zed_->init(parameters);
+
+	// Quit if an error occurred
+	if (err != sl::zed::SUCCESS)
+	{
+		UERROR("ZED camera initialization failed: %s", sl::zed::errcode2str(err).c_str());
+		delete zed_;
+		zed_ = 0;
 		return false;
 	}
-	
+
+	zed_->setConfidenceThreshold(confidenceThr_);
+
+	if (computeOdometry_)
+	{
+		Eigen::Matrix4f initPose;
+		initPose.setIdentity(4, 4);
+		zed_->enableTracking(initPose, false);
+	}
+
 	sl::zed::StereoParameters * stereoParams = zed_->getParameters();
 	sl::zed::resolution res = zed_->getImageSize();
 				
@@ -804,7 +879,7 @@ bool CameraStereoZed::init(const std::string & calibrationFolder, const std::str
 		stereoParams->LeftCam.fy, 
 		stereoParams->LeftCam.cx, 
 		stereoParams->LeftCam.cy, 
-		stereoParams->baseline/1000.0f,
+		stereoParams->baseline,
 		this->getLocalTransform(),
 		cv::Size(res.width, res.height));
 
@@ -831,15 +906,20 @@ std::string CameraStereoZed::getSerial() const
 	return "";
 }
 
-SensorData CameraStereoZed::captureImage()
+SensorData CameraStereoZed::captureImage(CameraInfo * info)
 {
 	SensorData data;
 #ifdef RTABMAP_ZED
 	if(zed_)
 	{
-		sl::zed::SENSING_MODE dm_type = sl::zed::RAW;
-		bool res = zed_->grab(dm_type);
-
+		UTimer timer;
+		bool res = zed_->grab((sl::zed::SENSING_MODE)sensingMode_, quality_ > 0, quality_ > 0, false);
+		while (src_ == CameraVideo::kUsbDevice && res && timer.elapsed() < 2.0)
+		{
+			// maybe there is a latency with the USB, try again in 10 ms (for the next 2 seconds)
+			uSleep(10);
+			res = zed_->grab((sl::zed::SENSING_MODE)sensingMode_, quality_ > 0, quality_ > 0, false);
+		}
 		if(!res)
 		{
 			// get left image
@@ -847,12 +927,11 @@ SensorData CameraStereoZed::captureImage()
 			cv::Mat left;
 			cv::cvtColor(rgbaLeft, left, cv::COLOR_BGRA2BGR);
 
-			if(rgbdMode_)
+			if(quality_ > 0)
 			{
 				// get depth image
 				cv::Mat depth;
 				slMat2cvMat(zed_->retrieveMeasure(sl::zed::MEASURE::DEPTH)).copyTo(depth);
-				depth /= 1000.0;
 
 				data = SensorData(left, depth, stereoModel_.left(), this->getNextSeqID(), UTimer::now());
 			}
@@ -865,10 +944,48 @@ SensorData CameraStereoZed::captureImage()
 			
 				data = SensorData(left, right, stereoModel_, this->getNextSeqID(), UTimer::now());
 			}
+
+			if (computeOdometry_ && info)
+			{
+				Eigen::Matrix4f path;
+				int trackingConfidence = zed_->getTrackingConfidence();
+				if (trackingConfidence)
+				{
+					zed_->getPosition(path);
+					info->odomPose = Transform::fromEigen4f(path);
+					if (!info->odomPose.isNull())
+					{
+						//transform x->forward, y->left, z->up
+						Transform opticalTransform(0, 0, 1, 0, -1, 0, 0, 0, 0, -1, 0, 0);
+						info->odomPose = opticalTransform * info->odomPose * opticalTransform.inverse();
+					}
+					if (lost_)
+					{
+						info->odomCovariance = cv::Mat::eye(6, 6, CV_64FC1) * 9999.0f; // don't know transform with previous pose
+						lost_ = false;
+						UDEBUG("Init %s (var=%f)", info->odomPose.prettyPrint().c_str(), 9999.0f);
+					}
+					else
+					{
+						info->odomCovariance = cv::Mat::eye(6, 6, CV_64FC1) * 1.0f / float(trackingConfidence);
+						UDEBUG("Run %s (var=%f)", info->odomPose.prettyPrint().c_str(), 1.0f / float(trackingConfidence));
+					}
+				}
+				else
+				{
+					info->odomCovariance = cv::Mat::eye(6, 6, CV_64FC1) * 9999.0f; // lost
+					lost_ = true;
+					UWARN("ZED lost!");
+				}
+			}
+		}
+		else if(src_ == CameraVideo::kUsbDevice)
+		{
+			UERROR("CameraStereoZed: Failed to grab images after 2 seconds!");
 		}
 		else
 		{
-			UERROR("CameraStereoZed: Failed to grab images!");
+			UWARN("CameraStereoZed: end of stream is reached!");
 		}
 	}
 #else
@@ -1007,21 +1124,21 @@ std::string CameraStereoImages::getSerial() const
 	return stereoModel_.name();
 }
 
-SensorData CameraStereoImages::captureImage()
+SensorData CameraStereoImages::captureImage(CameraInfo * info)
 {
 	SensorData data;
 
 	SensorData left, right;
-	left = CameraImages::captureImage();
+	left = CameraImages::captureImage(info);
 	if(!left.imageRaw().empty())
 	{
 		if(camera2_)
 		{
-			right = camera2_->takeImage();
+			right = camera2_->takeImage(info);
 		}
 		else
 		{
-			right = this->takeImage();
+			right = this->takeImage(info);
 		}
 
 		if(!right.imageRaw().empty())
@@ -1076,11 +1193,12 @@ CameraStereoVideo::CameraStereoVideo(
 
 CameraStereoVideo::CameraStereoVideo(
 	int device,
+	bool rectifyImages,
 	float imageRate,
 	const Transform & localTransform) :
 	Camera(imageRate, localTransform),
 	path_(""),
-	rectifyImages_(false),
+	rectifyImages_(rectifyImages),
 	src_(CameraVideo::kUsbDevice),
 	usbDevice_(device)
 {
@@ -1169,7 +1287,7 @@ std::string CameraStereoVideo::getSerial() const
 	return cameraName_;
 }
 
-SensorData CameraStereoVideo::captureImage()
+SensorData CameraStereoVideo::captureImage(CameraInfo * info)
 {
 	SensorData data;
 
@@ -1190,7 +1308,7 @@ SensorData CameraStereoVideo::captureImage()
 				rightCvt = true;
 			}
 
-			if((src_ != CameraVideo::kVideoFile || rectifyImages_) && stereoModel_.left().isValidForRectification() && stereoModel_.right().isValidForRectification())
+			if(rectifyImages_ && stereoModel_.left().isValidForRectification() && stereoModel_.right().isValidForRectification())
 			{
 				leftImage = stereoModel_.left().rectifyImage(leftImage);
 				rightImage = stereoModel_.right().rectifyImage(rightImage);
