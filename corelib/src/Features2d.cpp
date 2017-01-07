@@ -210,7 +210,14 @@ void Feature2D::limitKeypoints(std::vector<cv::KeyPoint> & keypoints, int maxKey
 
 void Feature2D::limitKeypoints(std::vector<cv::KeyPoint> & keypoints, cv::Mat & descriptors, int maxKeypoints)
 {
+	std::vector<cv::Point3f> keypoints3D;
+	limitKeypoints(keypoints, keypoints3D, descriptors, maxKeypoints);
+}
+
+void Feature2D::limitKeypoints(std::vector<cv::KeyPoint> & keypoints, std::vector<cv::Point3f> & keypoints3D, cv::Mat & descriptors, int maxKeypoints)
+{
 	UASSERT_MSG((int)keypoints.size() == descriptors.rows || descriptors.rows == 0, uFormat("keypoints=%d descriptors=%d", (int)keypoints.size(), descriptors.rows).c_str());
+	UASSERT_MSG(keypoints.size() == keypoints3D.size() || keypoints3D.size() == 0, uFormat("keypoints=%d keypoints3D=%d", (int)keypoints.size(), (int)keypoints3D.size()).c_str());
 	if(maxKeypoints > 0 && (int)keypoints.size() > maxKeypoints)
 	{
 		UTimer timer;
@@ -229,6 +236,7 @@ void Feature2D::limitKeypoints(std::vector<cv::KeyPoint> & keypoints, cv::Mat & 
 		int removed = (int)hessianMap.size()-maxKeypoints;
 		std::multimap<float, int>::reverse_iterator iter = hessianMap.rbegin();
 		std::vector<cv::KeyPoint> kptsTmp(maxKeypoints);
+		std::vector<cv::Point3f> kpts3DTmp(maxKeypoints);
 		cv::Mat descriptorsTmp;
 		if(descriptors.rows)
 		{
@@ -237,6 +245,10 @@ void Feature2D::limitKeypoints(std::vector<cv::KeyPoint> & keypoints, cv::Mat & 
 		for(unsigned int k=0; k < kptsTmp.size() && iter!=hessianMap.rend(); ++k, ++iter)
 		{
 			kptsTmp[k] = keypoints[iter->second];
+			if(keypoints3D.size())
+			{
+				kpts3DTmp[k] = keypoints3D[iter->second];
+			}
 			if(descriptors.rows)
 			{
 				if(descriptors.type() == CV_32FC1)
@@ -252,6 +264,7 @@ void Feature2D::limitKeypoints(std::vector<cv::KeyPoint> & keypoints, cv::Mat & 
 		ULOGGER_DEBUG("%d keypoints removed, (kept %d), minimum response=%f", removed, (int)kptsTmp.size(), kptsTmp.size()?kptsTmp.back().response:0.0f);
 		ULOGGER_DEBUG("removing words time = %f s", timer.ticks());
 		keypoints = kptsTmp;
+		keypoints3D = kpts3DTmp;
 		if(descriptors.rows)
 		{
 			descriptors = descriptorsTmp;
@@ -261,78 +274,12 @@ void Feature2D::limitKeypoints(std::vector<cv::KeyPoint> & keypoints, cv::Mat & 
 
 cv::Rect Feature2D::computeRoi(const cv::Mat & image, const std::string & roiRatios)
 {
-	std::list<std::string> strValues = uSplit(roiRatios, ' ');
-	if(strValues.size() != 4)
-	{
-		UERROR("The number of values must be 4 (roi=\"%s\")", roiRatios.c_str());
-	}
-	else
-	{
-		std::vector<float> values(4);
-		unsigned int i=0;
-		for(std::list<std::string>::iterator iter = strValues.begin(); iter!=strValues.end(); ++iter)
-		{
-			values[i] = uStr2Float(*iter);
-			++i;
-		}
-
-		if(values[0] >= 0 && values[0] < 1 && values[0] < 1.0f-values[1] &&
-			values[1] >= 0 && values[1] < 1 && values[1] < 1.0f-values[0] &&
-			values[2] >= 0 && values[2] < 1 && values[2] < 1.0f-values[3] &&
-			values[3] >= 0 && values[3] < 1 && values[3] < 1.0f-values[2])
-		{
-			return computeRoi(image, values);
-		}
-		else
-		{
-			UERROR("The roi ratios are not valid (roi=\"%s\")", roiRatios.c_str());
-		}
-	}
-	return cv::Rect();
+	return util2d::computeRoi(image, roiRatios);
 }
 
 cv::Rect Feature2D::computeRoi(const cv::Mat & image, const std::vector<float> & roiRatios)
 {
-	if(!image.empty() && roiRatios.size() == 4)
-	{
-		float width = image.cols;
-		float height = image.rows;
-		cv::Rect roi(0, 0, width, height);
-		UDEBUG("roi ratios = %f, %f, %f, %f", roiRatios[0],roiRatios[1],roiRatios[2],roiRatios[3]);
-		UDEBUG("roi = %d, %d, %d, %d", roi.x, roi.y, roi.width, roi.height);
-
-		//left roi
-		if(roiRatios[0] > 0 && roiRatios[0] < 1 - roiRatios[1])
-		{
-			roi.x = width * roiRatios[0];
-		}
-
-		//right roi
-		if(roiRatios[1] > 0 && roiRatios[1] < 1 - roiRatios[0])
-		{
-			roi.width -= width * roiRatios[1] + width * roiRatios[0];
-		}
-
-		//top roi
-		if(roiRatios[2] > 0 && roiRatios[2] < 1 - roiRatios[3])
-		{
-			roi.y = height * roiRatios[2];
-		}
-
-		//bottom roi
-		if(roiRatios[3] > 0 && roiRatios[3] < 1 - roiRatios[2])
-		{
-			roi.height -= height * roiRatios[3] + height * roiRatios[2];
-		}
-		UDEBUG("roi = %d, %d, %d, %d", roi.x, roi.y, roi.width, roi.height);
-
-		return roi;
-	}
-	else
-	{
-		UERROR("Image is null or _roiRatios(=%d) != 4", roiRatios.size());
-		return cv::Rect();
-	}
+	return util2d::computeRoi(image, roiRatios);
 }
 
 /////////////////////

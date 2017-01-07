@@ -61,13 +61,20 @@ public:
 	bool process(const cv::Mat & image, int id=0); // for convenience, an id is automatically generated if id=0
 	bool process(
 			const SensorData & data,
-			const Transform & odomPose,
+			Transform odomPose,
 			const cv::Mat & covariance = cv::Mat::eye(6,6,CV_64FC1)); // for convenience
 
 	void init(const ParametersMap & parameters, const std::string & databasePath = "");
 	void init(const std::string & configFile = "", const std::string & databasePath = "");
 
-	void close(bool databaseSaved = true);
+	/**
+	 * Close rtabmap. This will delete rtabmap object if set.
+	 * @param databaseSaved true=database saved, false=database discarded.
+	 * @param databasePath output database file name, ignored if
+	 *                     Db/Sqlite3InMemory=false (opened database is
+	 *                     then overwritten).
+	 */
+	void close(bool databaseSaved = true, const std::string & ouputDatabasePath = "");
 
 	const std::string & getWorkingDir() const {return _wDir;}
 	bool isRGBDMode() const { return _rgbdSlamMode; }
@@ -101,6 +108,13 @@ public:
 
 	int triggerNewMap();
 	bool labelLocation(int id, const std::string & label);
+	/**
+	 * Set user data. Detect automatically if raw or compressed. If raw, the data is
+	 * compressed too. A matrix of type CV_8UC1 with 1 row is considered as compressed.
+	 * If you have one dimension unsigned 8 bits raw data, make sure to transpose it
+	 * (to have multiple rows instead of multiple columns) in order to be detected as
+	 * not compressed.
+	 */
 	bool setUserData(int id, const cv::Mat & data);
 	void generateDOTGraph(const std::string & path, int id=0, int margin=5);
 	void exportPoses(
@@ -128,6 +142,7 @@ public:
 			bool global,
 			std::map<int, Signature> * signatures = 0);
 	int detectMoreLoopClosures(float clusterRadius = 0.5f, float clusterAngle = M_PI/6.0f, int iterations = 1);
+	int refineLinks();
 
 	int getPathStatus() const {return _pathStatus;} // -1=failed 0=idle/executing 1=success
 	void clearPath(int status); // -1=failed 0=idle/executing 1=success
@@ -142,7 +157,7 @@ public:
 	const Transform & getPathTransformToGoal() const {return _pathTransformToGoal;}
 
 	std::map<int, Transform> getForwardWMPoses(int fromId, int maxNearestNeighbors, float radius, int maxDiffID) const;
-	std::list<std::map<int, Transform> > getPaths(std::map<int, Transform> poses) const;
+	std::map<int, std::map<int, Transform> > getPaths(std::map<int, Transform> poses, const Transform & target, int maxGraphDepth = 0) const;
 	void adjustLikelihood(std::map<int, float> & likelihood) const;
 	std::pair<int, float> selectHypothesis(const std::map<int, float> & posterior,
 											const std::map<int, float> & likelihood) const;
@@ -195,6 +210,8 @@ private:
 	float _localRadius;
 	float _localImmunizationRatio;
 	int _proximityMaxGraphDepth;
+	int _proximityMaxPaths;
+	int _proximityMaxNeighbors;
 	float _proximityFilteringRadius;
 	bool _proximityRawPosesUsed;
 	float _proximityAngle;
@@ -235,6 +252,7 @@ private:
 	std::map<int, Transform> _optimizedPoses;
 	std::multimap<int, Link> _constraints;
 	Transform _mapCorrection;
+	Transform _mapCorrectionBackup; // used in localization mode when odom is lost
 	Transform _lastLocalizationPose; // Corrected odometry pose. In mapping mode, this corresponds to last pose return by getLocalOptimizedPoses().
 	int _lastLocalizationNodeId; // for localization mode
 

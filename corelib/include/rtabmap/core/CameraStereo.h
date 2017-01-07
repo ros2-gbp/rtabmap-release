@@ -32,6 +32,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/core/CameraModel.h"
 #include "rtabmap/core/Camera.h"
 #include "rtabmap/core/CameraRGB.h"
+#include "rtabmap/core/Version.h"
 #include <list>
 
 namespace FlyCapture2
@@ -73,8 +74,10 @@ protected:
 	virtual SensorData captureImage(CameraInfo * info = 0);
 
 private:
+#ifdef RTABMAP_DC1394
 	DC1394Device *device_;
 	StereoCameraModel stereoModel_;
+#endif
 };
 
 /////////////////////////
@@ -98,8 +101,10 @@ protected:
 	virtual SensorData captureImage(CameraInfo * info = 0);
 
 private:
+#ifdef RTABMAP_FLYCAPTURE2
 	FlyCapture2::Camera * camera_;
 	void * triclopsCtx_; // TriclopsContext
+#endif
 };
 
 /////////////////////////
@@ -120,7 +125,8 @@ public:
 			int confidenceThr = 100,
 			bool computeOdometry = false,
 			float imageRate=0.0f,
-			const Transform & localTransform = Transform::getIdentity());
+			const Transform & localTransform = Transform::getIdentity(),
+			bool selfCalibration = false);
 	CameraStereoZed(
 			const std::string & svoFilePath,
 			int quality = 1,    // 0=NONE, 1=PERFORMANCE, 2=QUALITY
@@ -128,18 +134,20 @@ public:
 			int confidenceThr = 100,
 			bool computeOdometry = false,
 			float imageRate=0.0f,
-			const Transform & localTransform = Transform::getIdentity());
+			const Transform & localTransform = Transform::getIdentity(),
+			bool selfCalibration = false);
 	virtual ~CameraStereoZed();
 
 	virtual bool init(const std::string & calibrationFolder = ".", const std::string & cameraName = "");
 	virtual bool isCalibrated() const;
 	virtual std::string getSerial() const;
-	virtual bool odomProvided() const { return computeOdometry_; }
+	virtual bool odomProvided() const;
 
 protected:
 	virtual SensorData captureImage(CameraInfo * info = 0);
 
 private:
+#ifdef RTABMAP_ZED
 	sl::zed::Camera * zed_;
 	StereoCameraModel stereoModel_;
 	CameraVideo::Source src_;
@@ -147,10 +155,12 @@ private:
 	std::string svoFilePath_;
 	int resolution_;
 	int quality_;
+	bool selfCalibration_;
 	int sensingMode_;
 	int confidenceThr_;
 	bool computeOdometry_;
 	bool lost_;
+#endif
 };
 
 /////////////////////////
@@ -202,7 +212,13 @@ public:
 
 public:
 	CameraStereoVideo(
-			const std::string & path,
+			const std::string & pathSideBySide,
+			bool rectifyImages = false,
+			float imageRate=0.0f,
+			const Transform & localTransform = Transform::getIdentity());
+	CameraStereoVideo(
+			const std::string & pathLeft,
+			const std::string & pathRight,
 			bool rectifyImages = false,
 			float imageRate=0.0f,
 			const Transform & localTransform = Transform::getIdentity());
@@ -222,7 +238,9 @@ protected:
 
 private:
 	cv::VideoCapture capture_;
+	cv::VideoCapture capture2_;
 	std::string path_;
+	std::string path2_;
 	bool rectifyImages_;
 	StereoCameraModel stereoModel_;
 	std::string cameraName_;

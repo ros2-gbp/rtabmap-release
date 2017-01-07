@@ -8,15 +8,22 @@
     <group android:id="@+id/group_actions">
        <item android:id="@+id/post_processing" android:title="Post-Processing...">
           <menu>
-	         <group android:id="@+id/group_post_processing">
-	            <item android:id="@+id/detect_more_loop_closures" android:title="Detect More Loop Closures" />
-	            <item android:id="@+id/global_graph_optimization" android:title="Global Graph Optimization" />
-	            <item android:id="@+id/sba" android:title="Bundle Adjustement" />
-	         </group>   
+             <item android:id="@+id/post_processing_standard" android:title="Standard Optimization" />
+             <item android:id="@+id/post_processing_advanced" android:title="Advanced..." >
+	            <menu>
+	              <item android:id="@+id/global_graph_optimization" android:title="Global Graph Optimization" />
+	              <item android:id="@+id/detect_more_loop_closures" android:title="Detect More Loop Closures" />
+	              <item android:id="@+id/icp_refining" android:title="ICP Refining" />
+	              <item android:id="@+id/gain_compensation_fast" android:title="Adjust Colors (Fast)" />
+	              <item android:id="@+id/gain_compensation_full" android:title="Adjust Colors (Full)" />
+	              <item android:id="@+id/bilateral_filtering" android:title="Mesh Smoothing" />
+	              <item android:id="@+id/sba" android:title="Bundle Adjustement" />
+	              <item android:id="@+id/polygons_filtering" android:title="Noise Filtering" />
+	            </menu>  
+	         </item>
           </menu>
        </item>
        <item android:id="@+id/open" android:title="Open"/>
-       <item android:id="@+id/save" android:title="Save"/>
        <item android:id="@+id/export" android:title="Export...">
           <menu>
 	         <group android:id="@+id/group_export">
@@ -25,20 +32,31 @@
 	         </group>   
           </menu>
        </item>
+       <item android:id="@+id/save" android:title="Save"/>
        <item android:id="@+id/reset" android:title="Reset"/>
        
        <item android:id="@+id/menu_rendering_settings" android:title="Rendering Options...">
         <menu >
         <group android:id="@+id/group_rendering_visibility" android:checkableBehavior="all">
             <item android:id="@+id/debug" android:checked="false" android:title="Debug" />
-            <item android:id="@+id/mesh_rendering" android:checked="true" android:title="Mesh Rendering" />
+            <item android:id="@+id/menu_rendering" android:checkable="false" android:title="Mesh Rendering..." >
+           			<menu>
+           			   <group android:checkableBehavior="single">
+	           			   <item android:id="@+id/point_cloud" android:title="Point Cloud" />
+				           <item android:id="@+id/mesh" android:title="Mesh" />
+				           <item android:id="@+id/texture_mesh" android:checked="true" android:title="Texture Mesh" />
+			           </group>
+			           <item android:id="@+id/mesh_decimation" android:checkable="false" android:title="Mesh Decimation..." />
+			           <item android:id="@+id/mesh_angle_tolerance" android:checkable="false" android:title="Mesh Angle Tolerance..." />
+            		   <item android:id="@+id/mesh_triangle_size" android:checkable="false" android:title="Mesh Triangle Size..." />
+            		   <item android:id="@+id/max_depth" android:checkable="false" android:title="Max Depth..." />
+			       </menu>
+            </item>
             <item android:id="@+id/map_shown" android:checked="true" android:title="Map Visible" />
             <item android:id="@+id/odom_shown" android:checked="true" android:title="Odom Visible" />
             <item android:id="@+id/graph_visible" android:checked="true" android:title="Graph Visible" />
-            <item android:id="@+id/auto_exposure" android:checked="false" android:title="Auto Exposure" />
-            <item android:id="@+id/max_depth" android:checkable="false" android:title="Cloud/Mesh Max Depth..." />
-            <item android:id="@+id/mesh_angle_tolerance" android:checkable="false" android:title="Mesh Angle Tolerance..." />
-            <item android:id="@+id/mesh_triangle_size" android:checkable="false" android:title="Mesh Triangle Size..." />
+            <item android:id="@+id/grid_visible" android:checked="true" android:title="Grid Visible" />
+            <item android:id="@+id/graph_optimization" android:checked="true" android:title="Optimized Graph" />
         </group>   
         </menu>
 	    </item>
@@ -47,9 +65,12 @@
 	       <group android:id="@+id/group_mapping_visibility" android:checkableBehavior="all">
 	           <item android:id="@+id/localization_mode" android:checked="false" android:title="Localization Mode" />
 	           <item android:id="@+id/trajectory_mode" android:checked="false" android:title="Trajectory Mode" />
-	           <item android:id="@+id/graph_optimization" android:checked="true" android:title="Optimized Graph" />
+	           <item android:id="@+id/append" android:checked="true" android:title="Append Mode" />
 	           <item android:id="@+id/nodes_filtering" android:checked="false" android:title="Nodes Filtering" />
-	           <item android:id="@+id/resolution" android:checked="false" android:title="720p Mode" />
+	           <item android:id="@+id/drift_correction" android:checked="false" android:title="Drift Correction" />
+	           <item android:id="@+id/auto_exposure" android:checked="true" android:title="Auto Exposure" />
+	           <item android:id="@+id/resolution" android:checked="false" android:title="HD Mode" />
+	           <item android:id="@+id/data_recorder" android:checked="false" android:title="Data Recorder Mode" />
 	           <item android:id="@+id/menu_param_settings" android:checkable="false" android:title="Parameters...">
 		           <menu >
 			           <item android:id="@+id/update_rate" android:title="Map Update Rate..." />

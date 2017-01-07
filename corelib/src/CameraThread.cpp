@@ -34,6 +34,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/core/util3d_surface.h"
 #include "rtabmap/core/util3d_filtering.h"
 #include "rtabmap/core/StereoDense.h"
+#include "rtabmap/core/clams/discrete_depth_distortion_model.h"
 
 #include <rtabmap/utilite/UTimer.h>
 #include <rtabmap/utilite/ULogger.h>
@@ -56,7 +57,11 @@ CameraThread::CameraThread(Camera * camera, const ParametersMap & parameters) :
 		_scanMinDepth(0.0f),
 		_scanVoxelSize(0.0f),
 		_scanNormalsK(0),
-		_stereoDense(new StereoBM(parameters))
+		_stereoDense(new StereoBM(parameters)),
+		_distortionModel(0),
+		_bilateralFiltering(false),
+		_bilateralSigmaS(10),
+		_bilateralSigmaR(0.1)
 {
 	UASSERT(_camera != 0);
 }
@@ -69,6 +74,10 @@ CameraThread::~CameraThread()
 	{
 		delete _camera;
 	}
+	if(_distortionModel)
+	{
+		delete _distortionModel;
+	}
 	delete _stereoDense;
 }
 
@@ -80,8 +89,42 @@ void CameraThread::setImageRate(float imageRate)
 	}
 }
 
+void CameraThread::setDistortionModel(const std::string & path)
+{
+	if(_distortionModel)
+	{
+		delete _distortionModel;
+		_distortionModel = 0;
+	}
+	if(!path.empty())
+	{
+		_distortionModel = new clams::DiscreteDepthDistortionModel();
+		_distortionModel->load(path);
+		if(!_distortionModel->isValid())
+		{
+			UERROR("Loaded distortion model \"%s\" is not valid!", path.c_str());
+			delete _distortionModel;
+			_distortionModel = 0;
+		}
+	}
+}
+
+void CameraThread::enableBilateralFiltering(float sigmaS, float sigmaR)
+{
+	UASSERT(sigmaS > 0.0f && sigmaR > 0.0f);
+	_bilateralFiltering = true;
+	_bilateralSigmaS = sigmaS;
+	_bilateralSigmaR = sigmaR;
+}
+
+void CameraThread::mainLoopBegin()
+{
+	ULogger::registerCurrentThread("Camera");
+}
+
 void CameraThread::mainLoop()
 {
+	UTimer totalTime;
 	UDEBUG("");
 	CameraInfo info;
 	SensorData data = _camera->takeImage(&info);
@@ -92,6 +135,33 @@ void CameraThread::mainLoop()
 		{
 			data.setDepthOrRightRaw(cv::Mat());
 		}
+
+		if(_distortionModel && !data.depthRaw().empty())
+		{
+			UTimer timer;
+			if(_distortionModel->getWidth() == data.depthRaw().cols &&
+			   _distortionModel->getHeight() == data.depthRaw().rows	)
+			{
+				cv::Mat depth = data.depthRaw().clone();// make sure we are not modifying data in cached signatures.
+				_distortionModel->undistort(depth);
+				data.setDepthOrRightRaw(depth);
+			}
+			else
+			{
+				UERROR("Distortion model size is %dx%d but dpeth image is %dx%d!",
+						_distortionModel->getWidth(), _distortionModel->getHeight(),
+						data.depthRaw().cols, data.depthRaw().rows);
+			}
+			info.timeUndistortDepth = timer.ticks();
+		}
+
+		if(_bilateralFiltering && !data.depthRaw().empty())
+		{
+			UTimer timer;
+			data.setDepthOrRightRaw(util2d::fastBilateralFiltering(data.depthRaw(), _bilateralSigmaS, _bilateralSigmaR));
+			info.timeBilateralFiltering = timer.ticks();
+		}
+
 		if(_imageDecimation>1 && !data.imageRaw().empty())
 		{
 			UDEBUG("");
@@ -158,7 +228,15 @@ void CameraThread::mainLoop()
 					_stereoDense->computeDisparity(data.imageRaw(), data.rightRaw()),
 					data.stereoCameraModel().left().fx(),
 					data.stereoCameraModel().baseline());
-			data.setCameraModel(data.stereoCameraModel().left());
+			// set Tx for stereo bundle adjustment (when used)
+			CameraModel model = CameraModel(
+					data.stereoCameraModel().left().fx(),
+					data.stereoCameraModel().left().fy(),
+					data.stereoCameraModel().left().cx(),
+					data.stereoCameraModel().left().cy(),
+					data.stereoCameraModel().localTransform(),
+					-data.stereoCameraModel().baseline()*data.stereoCameraModel().left().fx());
+			data.setCameraModel(model);
 			data.setDepthOrRightRaw(depth);
 			data.setStereoCameraModel(StereoCameraModel());
 			info.timeDisparity = timer.ticks();
@@ -175,9 +253,15 @@ void CameraThread::mainLoop()
 				UASSERT(_scanDecimation >= 1);
 				UTimer timer;
 				pcl::IndicesPtr validIndices(new std::vector<int>);
-				pcl::PointCloud<pcl::PointXYZ>::Ptr cloud = util3d::cloudFromSensorData(data, _scanDecimation, _scanMaxDepth, _scanMinDepth, validIndices.get());
+				pcl::PointCloud<pcl::PointXYZ>::Ptr cloud = util3d::cloudFromSensorData(
+						data,
+						_scanDecimation,
+						_scanMaxDepth,
+						_scanMinDepth,
+						validIndices.get());
 				float maxPoints = (data.depthRaw().rows/_scanDecimation)*(data.depthRaw().cols/_scanDecimation);
 				cv::Mat scan;
+				const Transform & baseToScan = data.cameraModels()[0].localTransform();
 				if(validIndices->size())
 				{
 					if(_scanVoxelSize>0.0f)
@@ -197,32 +281,19 @@ void CameraThread::mainLoop()
 					{
 						if(_scanNormalsK>0)
 						{
-							// view point
-							Eigen::Vector3f viewPoint(0.0f,0.0f,0.0f);
-							if(data.cameraModels().size() && !data.cameraModels()[0].localTransform().isNull())
-							{
-								viewPoint[0] = data.cameraModels()[0].localTransform().x();
-								viewPoint[1] = data.cameraModels()[0].localTransform().y();
-								viewPoint[2] = data.cameraModels()[0].localTransform().z();
-							}
-							else if(!data.stereoCameraModel().localTransform().isNull())
-							{
-								viewPoint[0] = data.stereoCameraModel().localTransform().x();
-								viewPoint[1] = data.stereoCameraModel().localTransform().y();
-								viewPoint[2] = data.stereoCameraModel().localTransform().z();
-							}
+							Eigen::Vector3f viewPoint(baseToScan.x(), baseToScan.y(), baseToScan.z());
 							pcl::PointCloud<pcl::Normal>::Ptr normals = util3d::computeNormals(cloud, _scanNormalsK, viewPoint);
 							pcl::PointCloud<pcl::PointNormal>::Ptr cloudNormals(new pcl::PointCloud<pcl::PointNormal>);
 							pcl::concatenateFields(*cloud, *normals, *cloudNormals);
-							scan = util3d::laserScanFromPointCloud(*cloudNormals);
+							scan = util3d::laserScanFromPointCloud(*cloudNormals, baseToScan.inverse());
 						}
 						else
 						{
-							scan = util3d::laserScanFromPointCloud(*cloud);
+							scan = util3d::laserScanFromPointCloud(*cloud, baseToScan.inverse());
 						}
 					}
 				}
-				data.setLaserScanRaw(scan, (int)maxPoints, _scanMaxDepth);
+				data.setLaserScanRaw(scan, LaserScanInfo((int)maxPoints, _scanMaxDepth, baseToScan));
 				info.timeScanFromDepth = timer.ticks();
 				UDEBUG("Computing scan from depth = %f s", info.timeScanFromDepth);
 			}
@@ -235,6 +306,7 @@ void CameraThread::mainLoop()
 		}
 
 		info.cameraName = _camera->getSerial();
+		info.timeTotal = totalTime.ticks();
 		this->post(new CameraEvent(data, info));
 	}
 	else if(!this->isKilled())

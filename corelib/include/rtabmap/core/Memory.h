@@ -55,6 +55,7 @@ class Registration;
 class RegistrationInfo;
 class RegistrationIcp;
 class Stereo;
+class OccupancyGrid;
 
 class RTABMAP_EXP Memory
 {
@@ -79,7 +80,7 @@ public:
 			bool dbOverwritten = false,
 			const ParametersMap & parameters = ParametersMap(),
 			bool postInitClosingEvents = false);
-	void close(bool databaseSaved = true, bool postInitClosingEvents = false);
+	void close(bool databaseSaved = true, bool postInitClosingEvents = false, const std::string & ouputDatabasePath = "");
 	std::map<int, float> computeLikelihood(const Signature * signature,
 			const std::list<int> & ids);
 	int incrementMapId(std::map<int, int> * reducedIds = 0);
@@ -89,11 +90,11 @@ public:
 	std::set<int> reactivateSignatures(const std::list<int> & ids, unsigned int maxLoaded, double & timeDbAccess);
 
 	int cleanup();
+	void saveStatistics(const Statistics & statistics);
 	void emptyTrash();
 	void joinTrashThread();
 	bool addLink(const Link & link, bool addInDatabase = false);
-	void updateLink(int fromId, int toId, const Transform & transform, float rotVariance, float transVariance);
-	void updateLink(int fromId, int toId, const Transform & transform, const cv::Mat & covariance);
+	void updateLink(const Link & link, bool updateInDatabase = false);
 	void removeAllVirtualLinks();
 	void removeVirtualLinks(int signatureId);
 	std::map<int, int> getNeighborsId(
@@ -132,6 +133,13 @@ public:
 	int getSignatureIdByLabel(const std::string & label, bool lookInDatabase = true) const;
 	bool labelSignature(int id, const std::string & label);
 	std::map<int, std::string> getAllLabels() const;
+	/**
+	 * Set user data. Detect automatically if raw or compressed. If raw, the data is
+	 * compressed too. A matrix of type CV_8UC1 with 1 row is considered as compressed.
+	 * If you have one dimension unsigned 8 bits raw data, make sure to transpose it
+	 * (to have multiple rows instead of multiple columns) in order to be detected as
+	 * not compressed.
+	 */
 	bool setUserData(int id, const cv::Mat & data);
 	int getDatabaseMemoryUsed() const; // in bytes
 	std::string getDatabaseVersion() const;
@@ -155,7 +163,7 @@ public:
 	void getNodeCalibration(int nodeId,
 			std::vector<CameraModel> & models,
 			StereoCameraModel & stereoModel);
-	SensorData getSignatureDataConst(int locationId) const;
+	SensorData getSignatureDataConst(int locationId, bool images = true, bool scan = true, bool userData = true, bool occupancyGrid = true) const;
 	std::set<int> getAllSignatureIds() const;
 	bool memoryChanged() const {return _memoryChanged;}
 	bool isIncremental() const {return _incrementalMemory;}
@@ -185,8 +193,8 @@ public:
 			std::multimap<int, Link> & links,
 			bool lookInDatabase = false);
 
-	Transform computeTransform(Signature & fromS, Signature & toS, Transform guess, RegistrationInfo * info = 0) const;
-	Transform computeTransform(int fromId, int toId, Transform guess, RegistrationInfo * info = 0);
+	Transform computeTransform(Signature & fromS, Signature & toS, Transform guess, RegistrationInfo * info = 0, bool useKnownCorrespondencesIfPossible = false) const;
+	Transform computeTransform(int fromId, int toId, Transform guess, RegistrationInfo * info = 0, bool useKnownCorrespondencesIfPossible = false);
 	Transform computeIcpTransform(int fromId, int toId, Transform guess, RegistrationInfo * info = 0);
 	Transform computeIcpTransformMulti(
 			int newId,
@@ -198,6 +206,7 @@ private:
 	void preUpdate();
 	void addSignatureToStm(Signature * signature, const cv::Mat & covariance);
 	void clear();
+	void loadDataFromDb(bool postInitClosingEvents);
 	void moveToTrash(Signature * s, bool keepLinkedToGraph = true, std::list<int> * deletedWords = 0);
 
 	void moveSignatureToWMFromSTM(int id, int * reducedTo = 0);
@@ -247,11 +256,13 @@ private:
 	int _imagePreDecimation;
 	int _imagePostDecimation;
 	float _laserScanDownsampleStepSize;
+	int _laserScanNormalK;
 	bool _reextractLoopClosureFeatures;
 	float _rehearsalMaxDistance;
 	float _rehearsalMaxAngle;
 	bool _rehearsalWeightIgnoredWhileMoving;
 	bool _useOdometryFeatures;
+	bool _createOccupancyGrid;
 
 	int _idCount;
 	int _idMapCount;
@@ -274,6 +285,8 @@ private:
 
 	Registration * _registrationPipeline;
 	RegistrationIcp * _registrationIcp;
+
+	OccupancyGrid * _occupancy;
 };
 
 } // namespace rtabmap

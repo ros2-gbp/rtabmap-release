@@ -50,6 +50,7 @@ class CameraThread;
 class OdometryThread;
 class CloudViewer;
 class LoopClosureViewer;
+class OccupancyGrid;
 }
 
 class QGraphicsScene;
@@ -68,6 +69,7 @@ class TwistGridWidget;
 class ExportCloudsDialog;
 class ExportScansDialog;
 class PostProcessingDialog;
+class DepthCalibrationDialog;
 class DataRecorder;
 class OctoMap;
 
@@ -108,6 +110,7 @@ public slots:
 	void processStats(const rtabmap::Statistics & stat);
 	void updateCacheFromDatabase(const QString & path);
 	void openDatabase(const QString & path);
+	void updateParameters(const rtabmap::ParametersMap & parameters);
 
 protected:
 	virtual void closeEvent(QCloseEvent* event);
@@ -120,6 +123,7 @@ protected:
 private slots:
 	void changeState(MainWindow::State state);
 	void beep();
+	void cancelProgress();
 	void configGUIModified();
 	void saveConfigGUI();
 	void newDatabase();
@@ -140,6 +144,7 @@ private slots:
 	void exportImages();
 	void exportOctomap();
 	void postProcessing();
+	void depthCalibration();
 	void deleteMemory();
 	void openWorkingDirectory();
 	void updateEditMenu();
@@ -150,6 +155,7 @@ private slots:
 	void selectOpenniCvAsus();
 	void selectOpenni2();
 	void selectFreenect2();
+	void selectRealSense();
 	void selectStereoDC1394();
 	void selectStereoFlyCapture2();
 	void selectStereoZed();
@@ -237,15 +243,9 @@ private:
 			const std::map<int, Transform> & groundTruths,
 			bool verboseProgress = false);
 	std::pair<pcl::PointCloud<pcl::PointXYZRGB>::Ptr, pcl::IndicesPtr> createAndAddCloudToMap(int nodeId,	const Transform & pose, int mapId);
-	void createAndAddProjectionMap(
-			const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud,
-			const pcl::IndicesPtr & indices,
-			int nodeId,
-			const Transform & pose,
-			bool updateOctomap = false);
 	void createAndAddScanToMap(int nodeId, const Transform & pose, int mapId);
 	void createAndAddFeaturesToMap(int nodeId, const Transform & pose, int mapId);
-	Transform alignPosesToGroundTruth(std::map<int, Transform> & poses, const std::map<int, Transform> & groundTruth);
+	Transform alignPosesToGroundTruth(std::map<int, Transform> & poses, const std::map<int, Transform> & groundTruth, double stamp = 0.0, int refId = -1);
 	void drawKeypoints(const std::multimap<int, cv::KeyPoint> & refWords, const std::multimap<int, cv::KeyPoint> & loopWords);
 	void setupMainLayout(bool vertical);
 	void updateSelectSourceMenu();
@@ -268,6 +268,7 @@ private:
 	ExportCloudsDialog * _exportCloudsDialog;
 	ExportScansDialog * _exportScansDialog;
 	PostProcessingDialog * _postProcessingDialog;
+	DepthCalibrationDialog * _depthCalibrationDialog;
 	DataRecorder * _dataRecorder;
 
 	QSet<int> _lastIds;
@@ -298,9 +299,11 @@ private:
 	std::pair<int, std::pair<std::pair<pcl::PointCloud<pcl::PointXYZRGB>::Ptr, pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr>, pcl::IndicesPtr> > _previousCloud; // used for subtraction
 
 	std::map<int, cv::Mat> _createdScans;
-	std::map<int, std::pair<cv::Mat, cv::Mat> > _projectionLocalMaps; // <ground, obstacles>
 	std::map<int, std::pair<cv::Mat, cv::Mat> > _gridLocalMaps; // <ground, obstacles>
+	std::map<int, cv::Point3f> _gridViewPoints;
+	long _cachedGridsMemoryUsage;
 
+	rtabmap::OccupancyGrid * _occupancyGrid;
 	rtabmap::OctoMap * _octomap;
 
 	std::map<int, pcl::PointCloud<pcl::PointXYZRGB>::Ptr> _createdFeatures;
@@ -332,6 +335,7 @@ private:
 	QVector<int> _loopClosureIds;
 
 	bool _firstCall;
+	bool _progressCanceled;
 };
 
 }

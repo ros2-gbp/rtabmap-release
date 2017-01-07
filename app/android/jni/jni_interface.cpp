@@ -56,6 +56,13 @@ Java_com_introlab_rtabmap_RTABMapLib_onCreate(
 }
 
 JNIEXPORT void JNICALL
+Java_com_introlab_rtabmap_RTABMapLib_openEmptyDatabase(
+    JNIEnv* env, jobject)
+{
+	return app.openDatabase();
+}
+
+JNIEXPORT void JNICALL
 Java_com_introlab_rtabmap_RTABMapLib_openDatabase(
     JNIEnv* env, jobject, jstring databasePath)
 {
@@ -133,9 +140,9 @@ Java_com_introlab_rtabmap_RTABMapLib_setOdomCloudShown(
 }
 JNIEXPORT void JNICALL
 Java_com_introlab_rtabmap_RTABMapLib_setMeshRendering(
-		JNIEnv*, jobject, bool enabled)
+		JNIEnv*, jobject, bool enabled, bool withTexture)
 {
-	return app.setMeshRendering(enabled);
+	return app.setMeshRendering(enabled, withTexture);
 }
 JNIEXPORT void JNICALL
 Java_com_introlab_rtabmap_RTABMapLib_setLocalizationMode(
@@ -162,10 +169,22 @@ Java_com_introlab_rtabmap_RTABMapLib_setNodesFiltering(
 	return app.setNodesFiltering(enabled);
 }
 JNIEXPORT void JNICALL
+Java_com_introlab_rtabmap_RTABMapLib_setDriftCorrection(
+		JNIEnv*, jobject, bool enabled)
+{
+	return app.setDriftCorrection(enabled);
+}
+JNIEXPORT void JNICALL
 Java_com_introlab_rtabmap_RTABMapLib_setGraphVisible(
 		JNIEnv*, jobject, bool visible)
 {
 	return app.setGraphVisible(visible);
+}
+JNIEXPORT void JNICALL
+Java_com_introlab_rtabmap_RTABMapLib_setGridVisible(
+		JNIEnv*, jobject, bool visible)
+{
+	return app.setGridVisible(visible);
 }
 JNIEXPORT void JNICALL
 Java_com_introlab_rtabmap_RTABMapLib_setAutoExposure(
@@ -180,10 +199,28 @@ Java_com_introlab_rtabmap_RTABMapLib_setFullResolution(
 	return app.setFullResolution(enabled);
 }
 JNIEXPORT void JNICALL
+Java_com_introlab_rtabmap_RTABMapLib_setAppendMode(
+		JNIEnv*, jobject, bool enabled)
+{
+	return app.setAppendMode(enabled);
+}
+JNIEXPORT void JNICALL
+Java_com_introlab_rtabmap_RTABMapLib_setDataRecorderMode(
+		JNIEnv*, jobject, bool enabled)
+{
+	return app.setDataRecorderMode(enabled);
+}
+JNIEXPORT void JNICALL
 Java_com_introlab_rtabmap_RTABMapLib_setMaxCloudDepth(
 		JNIEnv*, jobject, float value)
 {
 	return app.setMaxCloudDepth(value);
+}
+JNIEXPORT void JNICALL
+Java_com_introlab_rtabmap_RTABMapLib_setMeshDecimation(
+		JNIEnv*, jobject, int value)
+{
+	return app.setMeshDecimation(value);
 }
 JNIEXPORT void JNICALL
 Java_com_introlab_rtabmap_RTABMapLib_setMeshAngleTolerance(
@@ -216,9 +253,11 @@ Java_com_introlab_rtabmap_RTABMapLib_resetMapping(
 
 JNIEXPORT void JNICALL
 Java_com_introlab_rtabmap_RTABMapLib_save(
-		JNIEnv* env, jobject)
+		JNIEnv* env, jobject, jstring databasePath)
 {
-	return app.save();
+	std::string databasePathC;
+	GetJStringContent(env,databasePath,databasePathC);
+	return app.save(databasePathC);
 }
 
 JNIEXPORT bool JNICALL
