@@ -1,4 +1,4 @@
-From 9e6cabd994e4c49334cc62d1a3ce48e0f8ca528d Mon Sep 17 00:00:00 2001
+From 72330ae1f8854e5b465629a8c0c211611ec1d17e Mon Sep 17 00:00:00 2001
 From: matlabbe <matlabbe@gmail.com>
 Date: Fri, 6 May 2016 14:13:01 -0400
 Subject: [PATCH 1/2] Update rules
@@ -21,5 +21,5 @@ index 4bb6847..5a0eedc 100755
  override_dh_auto_install:
  	# In case we're installing to a non-standard location, look for a setup.sh
 -- 
-2.7.4
+1.9.1
 
