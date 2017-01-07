@@ -139,9 +139,13 @@ public:
 			const pcl::TextureMesh::Ptr & textureMesh,
 			const Transform & pose = Transform::getIdentity());
 
-	bool addOctomap(const OctoMap * octomap, unsigned int treeDepth = 0, bool showEdges = true, bool lightingOn = false);
+	bool addOctomap(const OctoMap * octomap, unsigned int treeDepth = 0);
 	void removeOctomap();
 
+	bool addTextureMesh (
+		   const pcl::TextureMesh &mesh,
+		   const std::string &id = "texture",
+		   int viewport = 0);
 	bool addOccupancyGridMap(
 			const cv::Mat & map8U,
 			float resolution, // cell size
@@ -237,6 +241,8 @@ public:
 
 	void setBackfaceCulling(bool enabled, bool frontfaceCulling);
 	void setRenderingRate(double rate);
+	void setLighting(bool on);
+	void setEdgeVisibility(bool visible);
 	double getRenderingRate() const;
 
 	void getCameraPosition(
@@ -308,6 +314,9 @@ private:
     QAction * _aSetGridCellSize;
     QAction * _aSetBackgroundColor;
     QAction * _aSetRenderingRate;
+    QAction * _aSetLighting;
+    QAction * _aSetEdgeVisibility;
+    QAction * _aBackfaceCulling;
     QMenu * _menu;
     std::set<std::string> _graphes;
     std::set<std::string> _coordinates;
@@ -329,7 +338,6 @@ private:
     QString _workingDirectory;
     QColor _defaultBgColor;
     QColor _currentBgColor;
-    bool _backfaceCulling;
     bool _frontfaceCulling;
     double _renderingRate;
     vtkProp * _octomapActor;

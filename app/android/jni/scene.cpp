@@ -55,9 +55,10 @@ const std::string kPointCloudVertexShader =
 const std::string kPointCloudFragmentShader =
     "precision mediump float;\n"
     "precision mediump int;\n"
+	"uniform float u_gain;\n"
     "varying vec3 v_color;\n"
     "void main() {\n"
-    "  gl_FragColor = vec4(v_color.z, v_color.y, v_color.x, 1.0);\n"
+    "  gl_FragColor = vec4(v_color.z*u_gain, v_color.y*u_gain, v_color.x*u_gain, 1.0);\n"
     "}\n";
 
 const std::string kTextureMeshVertexShader =
@@ -75,9 +76,13 @@ const std::string kTextureMeshFragmentShader =
     "precision mediump float;\n"
     "precision mediump int;\n"
 	"uniform sampler2D u_Texture;\n"
+	"uniform float u_gain;\n"
     "varying vec2 v_TexCoordinate;\n"
     "void main() {\n"
     "  gl_FragColor = texture2D(u_Texture, v_TexCoordinate);\n"
+    "  gl_FragColor.x *= u_gain;\n"
+	"  gl_FragColor.y *= u_gain;\n"
+	"  gl_FragColor.z *= u_gain;\n"
     "}\n";
 
 const std::string kGraphVertexShader =
@@ -109,6 +114,7 @@ Scene::Scene() :
 		trace_(0),
 		graph_(0),
 		graphVisible_(true),
+		gridVisible_(true),
 		traceVisible_(true),
 		currentPose_(0),
 		cloud_shader_program_(0),
@@ -116,6 +122,7 @@ Scene::Scene() :
 		graph_shader_program_(0),
 		mapRendering_(true),
 		meshRendering_(true),
+		meshRenderingTexture_(true),
 		pointSize_(3.0f) {}
 
 Scene::~Scene() {DeleteResources();}
@@ -250,7 +257,7 @@ int Scene::Render() {
 	  }
 	  else
 	  {
-		// In third person or top down more, we follow the camera movement.
+		// In third person or top down mode, we follow the camera movement.
 		gesture_camera_->SetAnchorPosition(position, rotation);
 
 		frustum_->SetPosition(position);
@@ -275,9 +282,11 @@ int Scene::Render() {
 	  }
   }
 
-
-	grid_->Render(gesture_camera_->GetProjectionMatrix(),
-				  gesture_camera_->GetViewMatrix());
+  	if(gridVisible_)
+  	{
+  		grid_->Render(gesture_camera_->GetProjectionMatrix(),
+  					  gesture_camera_->GetViewMatrix());
+  	}
 
 	bool frustumCulling = true;
 	int cloudDrawn=0;
@@ -327,7 +336,7 @@ int Scene::Render() {
 			for(unsigned int i=0; i<indices->size(); ++i)
 			{
 				++cloudDrawn;
-				pointClouds_.find(ids[indices->at(i)])->second->Render(gesture_camera_->GetProjectionMatrix(), gesture_camera_->GetViewMatrix(), meshRendering_, pointSize_);
+				pointClouds_.find(ids[indices->at(i)])->second->Render(gesture_camera_->GetProjectionMatrix(), gesture_camera_->GetViewMatrix(), meshRendering_, pointSize_, meshRenderingTexture_);
 			}
 		}
 	}
@@ -338,7 +347,7 @@ int Scene::Render() {
 			if((mapRendering_ || iter->first < 0) && iter->second->isVisible())
 			{
 				++cloudDrawn;
-				iter->second->Render(gesture_camera_->GetProjectionMatrix(), gesture_camera_->GetViewMatrix(), meshRendering_, pointSize_);
+				iter->second->Render(gesture_camera_->GetProjectionMatrix(), gesture_camera_->GetViewMatrix(), meshRendering_, pointSize_, meshRenderingTexture_);
 			}
 		}
 	}
@@ -400,6 +409,11 @@ void Scene::setGraphVisible(bool visible)
 	graphVisible_ = visible;
 }
 
+void Scene::setGridVisible(bool visible)
+{
+	gridVisible_ = visible;
+}
+
 void Scene::setTraceVisible(bool visible)
 {
 	traceVisible_ = visible;
@@ -409,11 +423,10 @@ void Scene::setTraceVisible(bool visible)
 void Scene::addCloud(
 		int id,
 		const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud,
-		const std::vector<pcl::Vertices> & polygons,
-		const rtabmap::Transform & pose,
-		const cv::Mat & image)
+		const pcl::IndicesPtr & indices,
+		const rtabmap::Transform & pose)
 {
-	LOGI("addOrUpdateCloud cloud %d", id);
+	LOGI("add cloud %d", id);
 	std::map<int, PointCloudDrawable*>::iterator iter=pointClouds_.find(id);
 	if(iter != pointClouds_.end())
 	{
@@ -427,8 +440,33 @@ void Scene::addCloud(
 			cloud_shader_program_,
 			texture_mesh_shader_program_,
 			cloud,
-			polygons,
-			image);
+			indices,
+			1.0f);
+	drawable->setPose(pose);
+	pointClouds_.insert(std::make_pair(id, drawable));
+}
+
+void Scene::addMesh(
+		int id,
+		const Mesh & mesh,
+		const cv::Mat & texture,
+		const rtabmap::Transform & pose)
+{
+	LOGI("add mesh %d", id);
+	std::map<int, PointCloudDrawable*>::iterator iter=pointClouds_.find(id);
+	if(iter != pointClouds_.end())
+	{
+		delete iter->second;
+		pointClouds_.erase(iter);
+	}
+
+	//create
+	UASSERT(cloud_shader_program_ != 0 && texture_mesh_shader_program_!=0);
+	PointCloudDrawable * drawable = new PointCloudDrawable(
+			cloud_shader_program_,
+			texture_mesh_shader_program_,
+			mesh,
+			texture);
 	drawable->setPose(pose);
 	pointClouds_.insert(std::make_pair(id, drawable));
 }
@@ -458,7 +496,30 @@ bool Scene::hasCloud(int id) const
 	return pointClouds_.find(id) != pointClouds_.end();
 }
 
+bool Scene::hasTexture(int id) const
+{
+	return pointClouds_.find(id) != pointClouds_.end() && pointClouds_.at(id)->hasTexture();
+}
+
 std::set<int> Scene::getAddedClouds() const
 {
 	return uKeysSet(pointClouds_);
+}
+
+void Scene::updateCloudPolygons(int id, const std::vector<pcl::Vertices> & polygons)
+{
+	std::map<int, PointCloudDrawable*>::iterator iter=pointClouds_.find(id);
+	if(iter != pointClouds_.end())
+	{
+		iter->second->updatePolygons(polygons);
+	}
+}
+
+void Scene::updateMesh(int id, const Mesh & mesh, const cv::Mat & texture)
+{
+	std::map<int, PointCloudDrawable*>::iterator iter=pointClouds_.find(id);
+	if(iter != pointClouds_.end())
+	{
+		iter->second->updateMesh(mesh, texture);
+	}
 }

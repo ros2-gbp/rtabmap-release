@@ -39,120 +39,35 @@ PointCloudDrawable::PointCloudDrawable(
 		GLuint cloudShaderProgram,
 		GLuint textureShaderProgram,
 		const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud,
-		const std::vector<pcl::Vertices> & polygons,
-		const cv::Mat & image) :
+		const pcl::IndicesPtr & indices,
+		float gain) :
 		vertex_buffers_(0),
 		textures_(0),
 		nPoints_(0),
 		pose_(1.0f),
 		visible_(true),
 		cloud_shader_program_(cloudShaderProgram),
-		texture_shader_program_(textureShaderProgram)
+		texture_shader_program_(textureShaderProgram),
+		gain_(1.0f)
 {
-	UASSERT(!cloud->empty());
+	updateCloud(cloud, indices, gain);
+}
 
-	glGenBuffers(1, &vertex_buffers_);
-	if(!vertex_buffers_)
-	{
-		LOGE("OpenGL: could not generate vertex buffers\n");
-		return;
-	}
-
-	if(!cloud->is_dense && !image.empty())
-	{
-		LOGI("cloud=%dx%d image=%dx%d\n", (int)cloud->width, (int)cloud->height, image.cols, image.rows);
-		UASSERT(polygons.size() && !cloud->is_dense && !image.empty() && image.type() == CV_8UC3);
-		glGenTextures(1, &textures_);
-		if(!textures_)
-		{
-			vertex_buffers_ = 0;
-			LOGE("OpenGL: could not generate vertex buffers\n");
-			return;
-		}
-	}
-
-	LOGI("Creating cloud buffer %d", vertex_buffers_);
-	std::vector<float> vertices;
-	if(textures_)
-	{
-		vertices = std::vector<float>(cloud->size()*6);
-		for(unsigned int i=0; i<cloud->size(); ++i)
-		{
-			vertices[i*6] = cloud->at(i).x;
-			vertices[i*6+1] = cloud->at(i).y;
-			vertices[i*6+2] = cloud->at(i).z;
-
-			// rgb
-			vertices[i*6+3] = cloud->at(i).rgb;
-
-			// texture uv
-			vertices[i*6+4] = float(i % cloud->width)/float(cloud->width); //u
-			vertices[i*6+5] = float(i/cloud->width)/float(cloud->height);  //v
-		}
-	}
-	else
-	{
-		vertices = std::vector<float>(cloud->size()*4);
-		for(unsigned int i=0; i<cloud->size(); ++i)
-		{
-			vertices[i*4] = cloud->at(i).x;
-			vertices[i*4+1] = cloud->at(i).y;
-			vertices[i*4+2] = cloud->at(i).z;
-			vertices[i*4+3] = cloud->at(i).rgb;
-		}
-	}
-
-	glBindBuffer(GL_ARRAY_BUFFER, vertex_buffers_);
-	glBufferData(GL_ARRAY_BUFFER, sizeof(GLfloat) * (int)vertices.size(), (const void *)vertices.data(), GL_STATIC_DRAW);
-	glBindBuffer(GL_ARRAY_BUFFER, 0);
-
-	GLint error = glGetError();
-	if(error != GL_NO_ERROR)
-	{
-		LOGE("OpenGL: Could not allocate point cloud (0x%x)\n", error);
-		vertex_buffers_ = 0;
-		return;
-	}
-
-	if(textures_)
-	{
-		// gen texture from image
-		glBindTexture(GL_TEXTURE_2D, textures_);
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-		cv::Mat rgbImage;
-		cv::cvtColor(image, rgbImage, CV_BGR2RGB);
-		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, rgbImage.cols, rgbImage.rows, 0, GL_RGB, GL_UNSIGNED_BYTE, rgbImage.data);
-
-		GLint error = glGetError();
-		if(error != GL_NO_ERROR)
-		{
-			LOGE("OpenGL: Could not allocate texture (0x%x)\n", error);
-			textures_ = 0;
-
-			glDeleteBuffers(1, &vertex_buffers_);
-			vertex_buffers_ = 0;
-			return;
-		}
-	}
-
-	nPoints_ = cloud->size();
-
-	if(polygons.size())
-	{
-		int polygonSize = polygons[0].vertices.size();
-		UASSERT(polygonSize == 3);
-		polygons_.resize(polygons.size() * polygonSize);
-		int oi = 0;
-		for(unsigned int i=0; i<polygons.size(); ++i)
-		{
-			UASSERT((int)polygons[i].vertices.size() == polygonSize);
-			for(int j=0; j<polygonSize; ++j)
-			{
-				polygons_[oi++] = (unsigned short)polygons[i].vertices[j];
-			}
-		}
-	}
+PointCloudDrawable::PointCloudDrawable(
+		GLuint cloudShaderProgram,
+		GLuint textureShaderProgram,
+		const Mesh & mesh,
+		const cv::Mat & texture) :
+		vertex_buffers_(0),
+		textures_(0),
+		nPoints_(0),
+		pose_(1.0f),
+		visible_(true),
+		cloud_shader_program_(cloudShaderProgram),
+		texture_shader_program_(textureShaderProgram),
+		gain_(1.0f)
+{
+	updateMesh(mesh, texture);
 }
 
 PointCloudDrawable::~PointCloudDrawable()
@@ -173,6 +88,202 @@ PointCloudDrawable::~PointCloudDrawable()
 	}
 }
 
+void PointCloudDrawable::updatePolygons(const std::vector<pcl::Vertices> & polygons)
+{
+	polygons_.clear();
+	if(polygons.size() && organizedToDenseIndices_.size())
+	{
+		int polygonSize = polygons[0].vertices.size();
+		UASSERT(polygonSize == 3);
+		polygons_.resize(polygons.size() * polygonSize);
+		int oi = 0;
+		for(unsigned int i=0; i<polygons.size(); ++i)
+		{
+			UASSERT((int)polygons[i].vertices.size() == polygonSize);
+			for(int j=0; j<polygonSize; ++j)
+			{
+				polygons_[oi++] = organizedToDenseIndices_.at((unsigned short)polygons[i].vertices[j]);
+			}
+		}
+	}
+}
+
+void PointCloudDrawable::updateCloud(const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud, const pcl::IndicesPtr & indices, float gain)
+{
+	UASSERT(cloud.get() && !cloud->empty() && indices.get() && !indices->empty());
+	nPoints_ = 0;
+	polygons_.clear();
+	gain_ = gain;
+
+	if (vertex_buffers_)
+	{
+		glDeleteBuffers(1, &vertex_buffers_);
+		tango_gl::util::CheckGlError("PointCloudDrawable::~PointCloudDrawable()");
+		vertex_buffers_ = 0;
+	}
+
+	if (textures_)
+	{
+		glDeleteTextures(1, &textures_);
+		tango_gl::util::CheckGlError("PointCloudDrawable::~PointCloudDrawable()");
+		textures_ = 0;
+	}
+
+	glGenBuffers(1, &vertex_buffers_);
+	if(!vertex_buffers_)
+	{
+		LOGE("OpenGL: could not generate vertex buffers\n");
+		return;
+	}
+
+	LOGI("Creating cloud buffer %d", vertex_buffers_);
+	std::vector<float> vertices(indices->size()*4);
+	for(unsigned int i=0; i<indices->size(); ++i)
+	{
+		vertices[i*4] = cloud->at(indices->at(i)).x;
+		vertices[i*4+1] = cloud->at(indices->at(i)).y;
+		vertices[i*4+2] = cloud->at(indices->at(i)).z;
+		vertices[i*4+3] = cloud->at(indices->at(i)).rgb;
+	}
+
+	glBindBuffer(GL_ARRAY_BUFFER, vertex_buffers_);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(GLfloat) * (int)vertices.size(), (const void *)vertices.data(), GL_STATIC_DRAW);
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+	GLint error = glGetError();
+	if(error != GL_NO_ERROR)
+	{
+		LOGE("OpenGL: Could not allocate point cloud (0x%x)\n", error);
+		vertex_buffers_ = 0;
+		return;
+	}
+
+	nPoints_ = indices->size();
+}
+
+void PointCloudDrawable::updateMesh(const Mesh & mesh, const cv::Mat & texture)
+{
+	UASSERT(mesh.cloud.get() && !mesh.cloud->empty() && mesh.indices.get() && !mesh.indices->empty());
+	nPoints_ = 0;
+
+	if (vertex_buffers_)
+	{
+		glDeleteBuffers(1, &vertex_buffers_);
+		tango_gl::util::CheckGlError("PointCloudDrawable::~PointCloudDrawable()");
+		vertex_buffers_ = 0;
+	}
+
+	gain_ = mesh.gain;
+
+	bool textureUpdate = false;
+	if(!texture.empty() && texture.type() == CV_8UC3)
+	{
+		if (textures_)
+		{
+			glDeleteTextures(1, &textures_);
+			tango_gl::util::CheckGlError("PointCloudDrawable::~PointCloudDrawable()");
+			textures_ = 0;
+		}
+		textureUpdate = true;
+	}
+
+	glGenBuffers(1, &vertex_buffers_);
+	if(!vertex_buffers_)
+	{
+		LOGE("OpenGL: could not generate vertex buffers\n");
+		return;
+	}
+
+	if(textureUpdate)
+	{
+		UASSERT(!mesh.cloud->is_dense);
+		glGenTextures(1, &textures_);
+		if(!textures_)
+		{
+			vertex_buffers_ = 0;
+			LOGE("OpenGL: could not generate texture buffers\n");
+			return;
+		}
+	}
+
+	LOGI("Creating cloud buffer %d", vertex_buffers_);
+	std::vector<float> vertices;
+	organizedToDenseIndices_ = std::vector<int>(mesh.cloud->width*mesh.cloud->height, -1);
+	if(textures_)
+	{
+		vertices = std::vector<float>(mesh.indices->size()*6);
+		for(unsigned int i=0; i<mesh.indices->size(); ++i)
+		{
+			vertices[i*6] = mesh.cloud->at(mesh.indices->at(i)).x;
+			vertices[i*6+1] = mesh.cloud->at(mesh.indices->at(i)).y;
+			vertices[i*6+2] = mesh.cloud->at(mesh.indices->at(i)).z;
+
+			// rgb
+			vertices[i*6+3] = mesh.cloud->at(mesh.indices->at(i)).rgb;
+
+			// texture uv
+			int index = mesh.indices->at(i);
+			vertices[i*6+4] = float(index % mesh.cloud->width)/float(mesh.cloud->width); //u
+			vertices[i*6+5] = float(index / mesh.cloud->width)/float(mesh.cloud->height);  //v
+
+			organizedToDenseIndices_[mesh.indices->at(i)] = i;
+		}
+	}
+	else
+	{
+		vertices = std::vector<float>(mesh.indices->size()*4);
+		for(unsigned int i=0; i<mesh.indices->size(); ++i)
+		{
+			vertices[i*4] = mesh.cloud->at(mesh.indices->at(i)).x;
+			vertices[i*4+1] = mesh.cloud->at(mesh.indices->at(i)).y;
+			vertices[i*4+2] = mesh.cloud->at(mesh.indices->at(i)).z;
+			vertices[i*4+3] = mesh.cloud->at(mesh.indices->at(i)).rgb;
+			organizedToDenseIndices_[mesh.indices->at(i)] = i;
+		}
+	}
+
+	glBindBuffer(GL_ARRAY_BUFFER, vertex_buffers_);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(GLfloat) * (int)vertices.size(), (const void *)vertices.data(), GL_STATIC_DRAW);
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+	GLint error = glGetError();
+	if(error != GL_NO_ERROR)
+	{
+		LOGE("OpenGL: Could not allocate point cloud (0x%x)\n", error);
+		vertex_buffers_ = 0;
+		return;
+	}
+
+	if(textures_ && textureUpdate)
+	{
+		// gen texture from image
+		glBindTexture(GL_TEXTURE_2D, textures_);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		cv::Mat rgbImage;
+		cv::cvtColor(texture, rgbImage, CV_BGR2RGB);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, rgbImage.cols, rgbImage.rows, 0, GL_RGB, GL_UNSIGNED_BYTE, rgbImage.data);
+
+		GLint error = glGetError();
+		if(error != GL_NO_ERROR)
+		{
+			LOGE("OpenGL: Could not allocate texture (0x%x)\n", error);
+			textures_ = 0;
+
+			glDeleteBuffers(1, &vertex_buffers_);
+			vertex_buffers_ = 0;
+			return;
+		}
+	}
+
+	nPoints_ = mesh.indices->size();
+
+	if(polygons_.size() != mesh.polygons.size())
+	{
+		updatePolygons(mesh.polygons);
+	}
+}
+
 void PointCloudDrawable::setPose(const rtabmap::Transform & pose)
 {
 	UASSERT(!pose.isNull());
@@ -180,11 +291,11 @@ void PointCloudDrawable::setPose(const rtabmap::Transform & pose)
 	pose_ = glmFromTransform(pose);
 }
 
-void PointCloudDrawable::Render(const glm::mat4 & projectionMatrix, const glm::mat4 & viewMatrix, bool meshRendering, float pointSize) {
+void PointCloudDrawable::Render(const glm::mat4 & projectionMatrix, const glm::mat4 & viewMatrix, bool meshRendering, float pointSize, bool textureRendering) {
 
 	if(vertex_buffers_ && nPoints_ && visible_)
 	{
-		if(meshRendering && textures_)
+		if(meshRendering && textureRendering && textures_)
 		{
 			glUseProgram(texture_shader_program_);
 
@@ -199,6 +310,9 @@ void PointCloudDrawable::Render(const glm::mat4 & projectionMatrix, const glm::m
 			// Tell the texture uniform sampler to use this texture in the shader by binding to texture unit 0.
 			GLuint texture_handle = glGetUniformLocation(texture_shader_program_, "u_Texture");
 			glUniform1i(texture_handle, 0);
+
+			GLuint gain_handle = glGetUniformLocation(texture_shader_program_, "u_gain");
+			glUniform1f(gain_handle, gain_);
 
 			GLint attribute_vertex = glGetAttribLocation(texture_shader_program_, "vertex");
 			GLint attribute_texture = glGetAttribLocation(texture_shader_program_, "a_TexCoordinate");
@@ -221,6 +335,9 @@ void PointCloudDrawable::Render(const glm::mat4 & projectionMatrix, const glm::m
 
 			GLuint point_size_handle_ = glGetUniformLocation(cloud_shader_program_, "point_size");
 			glUniform1f(point_size_handle_, pointSize);
+
+			GLuint gain_handle = glGetUniformLocation(cloud_shader_program_, "u_gain");
+			glUniform1f(gain_handle, gain_);
 
 			GLint attribute_vertex = glGetAttribLocation(cloud_shader_program_, "vertex");
 			GLint attribute_color = glGetAttribLocation(cloud_shader_program_, "color");

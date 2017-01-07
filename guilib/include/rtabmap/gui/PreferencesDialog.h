@@ -89,7 +89,8 @@ public:
 		kSrcOpenNI_CV_ASUS = 3,
 		kSrcOpenNI2        = 4,
 		kSrcFreenect2      = 5,
-		kSrcRGBDImages     = 6,
+		kSrcRealSense      = 6,
+		kSrcRGBDImages     = 7,
 
 		kSrcStereo         = 100,
 		kSrcDC1394         = 100,
@@ -129,6 +130,7 @@ public:
 	QString loadCustomConfig(const QString & section, const QString & key);
 
 	rtabmap::ParametersMap getAllParameters() const;
+	std::string getParameter(const std::string & key) const;
 	void updateParameters(const ParametersMap & parameters);
 
 	//General panel
@@ -138,14 +140,19 @@ public:
 	int getGeneralLoggerType() const;
 	bool getGeneralLoggerPrintTime() const;
 	bool getGeneralLoggerPrintThreadId() const;
+	std::vector<std::string> getGeneralLoggerThreads() const;
 	bool isVerticalLayoutUsed() const;
 	bool imageRejectedShown() const;
 	bool imageHighestHypShown() const;
 	bool beepOnPause() const;
 	bool isTimeUsedInFigures() const;
+	bool isCacheSavedInFigures() const;
 	bool notifyWhenNewGlobalPathIsReceived() const;
 	int getOdomQualityWarnThr() const;
 	bool isPosteriorGraphView() const;
+	int getOdomRegistrationApproach() const;
+	bool isOdomDisabled() const;
+	bool isGroundTruthAligned() const;
 
 	bool isGraphsShown() const;
 	bool isLabelsShown() const;
@@ -153,9 +160,13 @@ public:
 	double getMapNoiseRadius() const;
 	int getMapNoiseMinNeighbors() const;
 	bool isCloudsShown(int index) const;      // 0=map, 1=odom
+	bool isOctomapUpdated() const;
 	bool isOctomapShown() const;
+	bool isOctomapCubeRendering() const;
+	bool isOctomap2dGrid() const;
 	int getOctomapTreeDepth() const;
 	bool isOctomapGroundAnObstacle() const;
+	double getOctomapOccupancyThr() const;
 	int getCloudDecimation(int index) const;   // 0=map, 1=odom
 	double getCloudMaxDepth(int index) const;  // 0=map, 1=odom
 	double getCloudMinDepth(int index) const;  // 0=map, 1=odom
@@ -179,10 +190,13 @@ public:
 	double getSubtractFilteringRadius() const;
 	double getSubtractFilteringAngle() const;
 	int getNormalKSearch() const;
+	bool gainCompensation() const;
 
 	bool getGridMapShown() const;
 	double getGridMapResolution() const;;
 	bool isGridMapEroded() const;
+	bool isGridMapIncremental() const;
+	double getGridMapFootprintRadius() const;
 	bool isGridMapFrom3DCloud() const;
 	bool projMapFrame() const;
 	double projMaxGroundAngle() const;
@@ -195,6 +209,7 @@ public:
 	bool isCloudMeshing() const;
 	double getCloudMeshingAngle() const;
 	bool isCloudMeshingQuad() const;
+	bool isCloudMeshingTexture() const;
 	int getCloudMeshingTriangleSize();
 
 	QString getWorkingDirectory() const;
@@ -207,8 +222,13 @@ public:
 	QString getSourceDriverStr() const;
 	QString getSourceDevice() const;
 
-	bool getSourceDatabaseStampsUsed() const;
+	bool isSourceDatabaseStampsUsed() const;
 	bool isSourceRGBDColorOnly() const;
+	bool isDepthFilteringAvailable() const;
+	QString getSourceDistortionModel() const;
+	bool isBilateralFiltering() const;
+	double getBilateralSigmaS() const;
+	double getBilateralSigmaR() const;
 	int getSourceImageDecimation() const;
 	bool isSourceStereoDepthGenerated() const;
 	bool isSourceScanFromDepth() const;
@@ -218,7 +238,7 @@ public:
 	int getSourceScanNormalsK() const;
 	Transform getSourceLocalTransform() const;    //Openni group
 	Transform getLaserLocalTransform() const; // directory images
-	Camera * createCamera(bool useRawImages = false); // return camera should be deleted if not null
+	Camera * createCamera(bool useRawImages = false, bool useColor = true); // return camera should be deleted if not null
 
 	int getIgnoredDCComponents() const;
 
@@ -274,28 +294,30 @@ private slots:
 	void addParameter(const QString & value);
 	void updatePredictionPlot();
 	void updateKpROI();
-	void updateG2oVisibility();
 	void updateStereoDisparityVisibility();
 	void useOdomFeatures();
 	void changeWorkingDirectory();
 	void changeDictionaryPath();
-	void changeOdomBowFixedLocalMapPath();
 	void readSettingsEnd();
 	void setupTreeView();
 	void updateBasicParameter();
 	void openDatabaseViewer();
+	void visualizeDistortionModel();
 	void selectSourceDatabase();
 	void selectCalibrationPath();
 	void selectSourceImagesStamps();
 	void selectSourceRGBDImagesPathRGB();
 	void selectSourceRGBDImagesPathDepth();
 	void selectSourceImagesPathScans();
+	void selectSourceImagesPathOdom();
 	void selectSourceImagesPathGt();
 	void selectSourceStereoImagesPathLeft();
 	void selectSourceStereoImagesPathRight();
 	void selectSourceImagesPath();
 	void selectSourceVideoPath();
 	void selectSourceStereoVideoPath();
+	void selectSourceStereoVideoPath2();
+	void selectSourceDistortionModel();
 	void selectSourceOniPath();
 	void selectSourceOni2Path();
 	void selectSourceSvoPath();

@@ -27,6 +27,8 @@ SET(headers_ui
 	../include/${PROJECT_PREFIX}/gui/GraphViewer.h
 	./CreateSimpleCalibrationDialog.h
 	./ParametersToolBox.h
+	./DepthCalibrationDialog.h
+	./3rdParty/QMultiComboBox.h
 )
 
 SET(uis
@@ -42,6 +44,7 @@ SET(uis
     ./ui/exportScansDialog.ui
     ./ui/calibrationDialog.ui
     ./ui/createSimpleCalibrationDialog.ui
+    ./ui/depthCalibrationDialog.ui
 )
 
 SET(qrc 
@@ -91,6 +94,9 @@ SET(SRC_FILES
 	./GraphViewer.cpp
 	./CreateSimpleCalibrationDialog.cpp
 	./ParametersToolBox.cpp
+	./DepthCalibrationDialog.cpp
+	./3rdParty/QMultiComboBox.cpp
+	
 	${moc_srcs} 
 	${moc_uis} 
 	${srcs_qrc}
