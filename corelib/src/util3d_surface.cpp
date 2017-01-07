@@ -100,6 +100,81 @@ void createPolygonIndexes(
 	}
 }
 
+std::list<std::list<int> > clusterPolygons(
+		const std::vector<std::set<int> > & neighborPolygons,
+		int minClusterSize)
+{
+	std::set<int> polygonsChecked;
+
+	std::list<std::list<int> > clusters;
+
+	for(unsigned int i=0; i<neighborPolygons.size(); ++i)
+	{
+		if(polygonsChecked.find(i) == polygonsChecked.end())
+		{
+			std::list<int> currentCluster;
+			currentCluster.push_back(i);
+			polygonsChecked.insert(i);
+
+			for(std::list<int>::iterator iter=currentCluster.begin(); iter!=currentCluster.end(); ++iter)
+			{
+				// get neighbor polygons
+				std::set<int> neighbors = neighborPolygons[*iter];
+				for(std::set<int>::iterator jter=neighbors.begin(); jter!=neighbors.end(); ++jter)
+				{
+					if(polygonsChecked.insert(*jter).second)
+					{
+						currentCluster.push_back(*jter);
+					}
+				}
+			}
+			if((int)currentCluster.size() > minClusterSize)
+			{
+				clusters.push_back(currentCluster);
+			}
+		}
+	}
+	return clusters;
+}
+
+std::vector<pcl::Vertices> organizedFastMesh(
+		const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud,
+		double angleTolerance,
+		bool quad,
+		int trianglePixelSize,
+		const Eigen::Vector3f & viewpoint)
+{
+	UDEBUG("size=%d angle=%f quad=%d triangleSize=%d", (int)cloud->size(), angleTolerance, quad?1:0, trianglePixelSize);
+	UASSERT(cloud->is_dense == false);
+	UASSERT(cloud->width > 1 && cloud->height > 1);
+
+	pcl::OrganizedFastMesh<pcl::PointXYZ> ofm;
+	ofm.setTrianglePixelSize (trianglePixelSize);
+	ofm.setTriangulationType (quad?pcl::OrganizedFastMesh<pcl::PointXYZ>::QUAD_MESH:pcl::OrganizedFastMesh<pcl::PointXYZ>::TRIANGLE_RIGHT_CUT);
+	ofm.setInputCloud (cloud);
+	ofm.setAngleTolerance(angleTolerance);
+	ofm.setViewpoint(viewpoint);
+
+	std::vector<pcl::Vertices> vertices;
+	ofm.reconstruct (vertices);
+
+	if(quad)
+	{
+		//flip all polygons (right handed)
+		std::vector<pcl::Vertices> output(vertices.size());
+		for(unsigned int i=0; i<vertices.size(); ++i)
+		{
+			output[i].vertices.resize(4);
+			output[i].vertices[0] = vertices[i].vertices[0];
+			output[i].vertices[3] = vertices[i].vertices[1];
+			output[i].vertices[2] = vertices[i].vertices[2];
+			output[i].vertices[1] = vertices[i].vertices[3];
+		}
+		return output;
+	}
+
+	return vertices;
+}
 std::vector<pcl::Vertices> organizedFastMesh(
 		const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud,
 		double angleTolerance,
@@ -229,7 +304,7 @@ void appendMesh(
 	}
 }
 
-std::map<int, int> filterNotUsedVerticesFromMesh(
+std::vector<int> filterNotUsedVerticesFromMesh(
 		const pcl::PointCloud<pcl::PointXYZRGBNormal> & cloud,
 		const std::vector<pcl::Vertices> & polygons,
 		pcl::PointCloud<pcl::PointXYZRGBNormal> & outputCloud,
@@ -237,7 +312,8 @@ std::map<int, int> filterNotUsedVerticesFromMesh(
 {
 	UDEBUG("size=%d polygons=%d", (int)cloud.size(), (int)polygons.size());
 	std::map<int, int> addedVertices; //<oldIndex, newIndex>
-	std::map<int, int> output; //<newIndex, oldIndex>
+	std::vector<int> output; //<oldIndex>
+	output.resize(cloud.size());
 	outputCloud.resize(cloud.size());
 	outputCloud.is_dense = true;
 	outputPolygons.resize(polygons.size());
@@ -253,7 +329,7 @@ std::map<int, int> filterNotUsedVerticesFromMesh(
 			{
 				outputCloud[oi] = cloud.at(polygons[i].vertices[j]);
 				addedVertices.insert(std::make_pair(polygons[i].vertices[j], oi));
-				output.insert(std::make_pair(oi, polygons[i].vertices[j]));
+				output[oi] = polygons[i].vertices[j];
 				v.vertices[j] = oi++;
 			}
 			else
@@ -263,11 +339,12 @@ std::map<int, int> filterNotUsedVerticesFromMesh(
 		}
 	}
 	outputCloud.resize(oi);
+	output.resize(oi);
 
 	return output;
 }
 
-std::map<int, int> filterNotUsedVerticesFromMesh(
+std::vector<int> filterNotUsedVerticesFromMesh(
 		const pcl::PointCloud<pcl::PointXYZRGB> & cloud,
 		const std::vector<pcl::Vertices> & polygons,
 		pcl::PointCloud<pcl::PointXYZRGB> & outputCloud,
@@ -275,7 +352,8 @@ std::map<int, int> filterNotUsedVerticesFromMesh(
 {
 	UDEBUG("size=%d polygons=%d", (int)cloud.size(), (int)polygons.size());
 	std::map<int, int> addedVertices; //<oldIndex, newIndex>
-	std::map<int, int> output; //<newIndex, oldIndex>
+	std::vector<int> output; //<oldIndex>
+	output.resize(cloud.size());
 	outputCloud.resize(cloud.size());
 	outputCloud.is_dense = true;
 	outputPolygons.resize(polygons.size());
@@ -291,7 +369,7 @@ std::map<int, int> filterNotUsedVerticesFromMesh(
 			{
 				outputCloud[oi] = cloud.at(polygons[i].vertices[j]);
 				addedVertices.insert(std::make_pair(polygons[i].vertices[j], oi));
-				output.insert(std::make_pair(oi, polygons[i].vertices[j]));
+				output[oi] = polygons[i].vertices[j];
 				v.vertices[j] = oi++;
 			}
 			else
@@ -301,6 +379,50 @@ std::map<int, int> filterNotUsedVerticesFromMesh(
 		}
 	}
 	outputCloud.resize(oi);
+	output.resize(oi);
+
+	return output;
+}
+
+std::vector<int> filterNaNPointsFromMesh(
+		const pcl::PointCloud<pcl::PointXYZRGB> & cloud,
+		const std::vector<pcl::Vertices> & polygons,
+		pcl::PointCloud<pcl::PointXYZRGB> & outputCloud,
+		std::vector<pcl::Vertices> & outputPolygons)
+{
+	UDEBUG("size=%d polygons=%d", (int)cloud.size(), (int)polygons.size());
+	std::map<int, int> addedVertices; //<oldIndex, newIndex>
+	std::vector<int> output; //<oldIndex>
+	output.resize(cloud.size());
+	outputCloud.resize(cloud.size());
+	outputCloud.is_dense = true;
+	std::vector<int> organizedToDense(cloud.size(), -1);
+
+	int oi = 0;
+	for(unsigned int i=0; i<cloud.size(); ++i)
+	{
+		if(pcl::isFinite(cloud.at(i)))
+		{
+			outputCloud.at(oi) = cloud.at(i);
+			output[oi] = i;
+			organizedToDense[i] = oi;
+			++oi;
+ 		}
+	}
+	outputCloud.resize(oi);
+	output.resize(oi);
+
+	// remap polygons to dense cloud
+	outputPolygons = polygons;
+	for(unsigned int i=0; i<outputPolygons.size(); ++i)
+	{
+		pcl::Vertices & v = outputPolygons[i];
+		for(unsigned int j=0; j<v.vertices.size(); ++j)
+		{
+			UASSERT(organizedToDense[v.vertices[j]] >= 0);
+			v.vertices[j] = organizedToDense[v.vertices[j]];
+		}
+	}
 
 	return output;
 }
@@ -585,8 +707,9 @@ pcl::TextureMesh::Ptr createTextureMesh(
 		pcl::fromPCLPointCloud2(textureMesh->cloud, *cloud);
 		pcl::PointCloud<pcl::Normal>::Ptr normals = computeNormals(cloud, kNormalSearch);
 		// Concatenate the XYZ and normal fields
-		pcl::PointCloud<pcl::PointNormal>::Ptr cloudWithNormals;
+		pcl::PointCloud<pcl::PointNormal>::Ptr cloudWithNormals(new pcl::PointCloud<pcl::PointNormal>);
 		pcl::concatenateFields (*cloud, *normals, *cloudWithNormals);
+		textureMesh->cloud = pcl::PCLPointCloud2();
 		pcl::toPCLPointCloud2 (*cloudWithNormals, textureMesh->cloud);
 	}
 

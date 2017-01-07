@@ -2,6 +2,9 @@ package com.introlab.rtabmap;
 
 import java.io.File;
 import java.io.FilenameFilter;
+import java.text.SimpleDateFormat;
+import java.util.Arrays;
+import java.util.Date;
 
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -49,10 +52,10 @@ public class RTABMapActivity extends Activity implements OnClickListener {
   private static final String TAG = RTABMapActivity.class.getSimpleName();
 
   // The minimum Tango Core version required from this application.
-  private static final int  MIN_TANGO_CORE_VERSION = 6804;
+  private static final int  MIN_TANGO_CORE_VERSION = 9377;
 
   // The package name of Tang Core, used for checking minimum Tango Core version.
-  private static final String TANGO_PACKAGE_NAME = "com.projecttango.tango";
+  private static final String TANGO_PACKAGE_NAME = "com.google.tango";
   
   public static final String EXTRA_KEY_PERMISSIONTYPE = "PERMISSIONTYPE";
   public static final String EXTRA_VALUE_ADF = "ADF_LOAD_SAVE_PERMISSION";
@@ -66,7 +69,9 @@ public class RTABMapActivity extends Activity implements OnClickListener {
 
   // Screen size for normalizing the touch input for orbiting the render camera.
   private Point mScreenSize = new Point();
-
+  private boolean mPauseFirstTime = true;
+  private boolean mOnPause = false;
+  
   private MenuItem mItemPause;
   private MenuItem mItemSave;
   private MenuItem mItemOpen;
@@ -74,21 +79,26 @@ public class RTABMapActivity extends Activity implements OnClickListener {
   private MenuItem mItemExport;
   private MenuItem mItemLocalizationMode;
   private MenuItem mItemTrajectoryMode;
+  private MenuItem mItemAppendMode;
+  private MenuItem mItemRenderingPointCloud;
+  private MenuItem mItemRenderingMesh;
+  private MenuItem mItemRenderingTextureMesh;
+  private MenuItem mItemDataRecorderMode;
+  
   
   private String mOpenedDatabasePath = "";
-  private String mTempDatabasePath = "";
-  private String mNewDatabasePath = "";
   private String mWorkingDirectory = "";
   
   private int mMaxDepthIndex = 5;
-  private int mMeshAngleToleranceIndex = 1;
+  private int mMeshDecimationIndex = 0;
+  private int mMeshAngleToleranceIndex = 2;
   private int mMeshTriangleSizeIndex = 0;
   
   private int mParamUpdateRateHzIndex = 1;
   private int mParamTimeThrMsIndex = 4;
-  private int mParamMaxFeaturesIndex = 4;
+  private int mParamMaxFeaturesIndex = 2;
   private int mParamLoopThrMsIndex = 1;
-  private int mParamOptimizeErrorIndex = 3;
+  private int mParamOptimizeErrorIndex = 4;
   
   final String[] mUpdateRateValues = {"0.5", "1", "2", "Max"};
   final String[] mTimeThrValues = {"400", "500", "600", "700", "800", "900", "1000", "1100", "1200", "1300", "1400", "1500", "No Limit"};
@@ -99,6 +109,7 @@ public class RTABMapActivity extends Activity implements OnClickListener {
   private LinearLayout mLayoutDebug;
   
   private int mTotalLoopClosures = 0;
+  private boolean mMapIsEmpty = false;
   
   private Toast mToast = null;
   
@@ -124,7 +135,7 @@ public class RTABMapActivity extends Activity implements OnClickListener {
   protected void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
     setTitle(R.string.menu_name);
-
+    
     // Query screen size, the screen size is used for computing the normalized
     // touch point.
     Display display = getWindowManager().getDefaultDisplay();
@@ -156,6 +167,7 @@ public class RTABMapActivity extends Activity implements OnClickListener {
     mLayoutDebug.setVisibility(LinearLayout.GONE);
     
     mProgressDialog = new ProgressDialog(this);
+    mProgressDialog.setCanceledOnTouchOutside(false);
     mRenderer.setProgressDialog(mProgressDialog);
 
     // Check if the Tango Core is out dated.
@@ -166,8 +178,6 @@ public class RTABMapActivity extends Activity implements OnClickListener {
     }   
     
     mOpenedDatabasePath = "";
-    mTempDatabasePath = "";
-    mNewDatabasePath = "";
     mWorkingDirectory = "";
     mTotalLoopClosures = 0;
     
@@ -177,13 +187,6 @@ public class RTABMapActivity extends Activity implements OnClickListener {
     	mWorkingDirectory = extStore.getAbsolutePath() + "/" + getString(R.string.app_name) + "/";
     	extStore = new File(mWorkingDirectory);
     	extStore.mkdirs();
-    	mTempDatabasePath = mWorkingDirectory + "rtabmap.tmp.db";
-    	extStore = new File(mTempDatabasePath);
-    	
-    	if(extStore.exists())
-    	{
-    		extStore.delete();
-    	}   	
     }
     else
     {
@@ -194,7 +197,7 @@ public class RTABMapActivity extends Activity implements OnClickListener {
     }
     
     RTABMapLib.onCreate(this);
-    RTABMapLib.openDatabase(mTempDatabasePath);
+    RTABMapLib.openEmptyDatabase();
   }
   
   @Override
@@ -213,6 +216,21 @@ public class RTABMapActivity extends Activity implements OnClickListener {
   @Override
   protected void onResume() {
     super.onResume();
+
+    mProgressDialog.setTitle("");
+	mProgressDialog.setMessage(String.format("Hold Tight! Initializing Tango Service..."));
+	mProgressDialog.show();
+    
+	if(mOnPause)
+	{
+		mToast.makeText(this, "Mapping is paused!", mToast.LENGTH_LONG).show();
+	}
+	else
+	{
+		mToast.makeText(this, "Tip: If the camera is still drifting just after the mapping has started, do \"Reset\".", mToast.LENGTH_LONG).show();
+	}
+	
+	mOnPause = false;
     
     TangoInitializationHelper.bindTangoService(this, mTangoServiceConnection);
     
@@ -221,16 +239,6 @@ public class RTABMapActivity extends Activity implements OnClickListener {
     if (Tango.hasPermission(this, Tango.PERMISSIONTYPE_MOTION_TRACKING)) {
 
     	mGLView.onResume();
-        
-        mTotalLoopClosures = 0;
-        if(mItemOpen != null)
-        {
-    	    mItemOpen.setEnabled(false);
-    	    mItemPause.setChecked(false);
-    	    mItemSave.setEnabled(false);
-    		mItemExport.setEnabled(false);
-    		mItemPostProcessing.setEnabled(false);
-        }
 
     } else {
     	Log.i(TAG, String.format("Asking for motion tracking permission"));
@@ -243,14 +251,20 @@ public class RTABMapActivity extends Activity implements OnClickListener {
   @Override
   protected void onPause() {
     super.onPause();
+    
+    // This deletes OpenGL context!
     mGLView.onPause();
     
-    // Delete all the non-OpenGl resources.
+    mOnPause = true;
+    
     RTABMapLib.onPause();
-    mOpenedDatabasePath = "";
-    RTABMapLib.openDatabase(mTempDatabasePath);
     
     unbindService(mTangoServiceConnection);
+    
+    if(!mItemPause.isChecked())
+    {
+    	onOptionsItemSelected(mItemPause);
+    }
   }
 
   @Override
@@ -316,10 +330,16 @@ public class RTABMapActivity extends Activity implements OnClickListener {
 	  mItemExport = menu.findItem(R.id.export);
 	  mItemLocalizationMode = menu.findItem(R.id.localization_mode);
 	  mItemTrajectoryMode = menu.findItem(R.id.trajectory_mode);
+	  mItemAppendMode = menu.findItem(R.id.append);
+	  mItemRenderingPointCloud = menu.findItem(R.id.point_cloud);
+	  mItemRenderingMesh = menu.findItem(R.id.mesh);
+	  mItemRenderingTextureMesh = menu.findItem(R.id.texture_mesh);
+	  mItemDataRecorderMode = menu.findItem(R.id.data_recorder);
 	  mItemSave.setEnabled(false);
 	  mItemExport.setEnabled(false);
 	  mItemOpen.setEnabled(false);
 	  mItemPostProcessing.setEnabled(false);
+	  mItemDataRecorderMode.setEnabled(false);
 	  
 	  return true;
   }
@@ -342,7 +362,7 @@ public class RTABMapActivity extends Activity implements OnClickListener {
   {
 	  if(mItemPause!=null)
 	  {
-		  ((TextView)findViewById(R.id.status)).setText(mItemPause.isChecked()?"Paused":mItemLocalizationMode.isChecked()?String.format("Localization (%s Hz)", mUpdateRateValues[mParamUpdateRateHzIndex]):String.format("Mapping (%s Hz)", mUpdateRateValues[mParamUpdateRateHzIndex]));
+		  ((TextView)findViewById(R.id.status)).setText(mItemPause.isChecked()?"Paused":mItemLocalizationMode.isChecked()?String.format("Localization (%s Hz)", mUpdateRateValues[mParamUpdateRateHzIndex]):mItemDataRecorderMode.isChecked()?String.format("Recording (%s Hz)", mUpdateRateValues[mParamUpdateRateHzIndex]):String.format("Mapping (%s Hz)", mUpdateRateValues[mParamUpdateRateHzIndex]));
 	  }
 	  
 	  ((TextView)findViewById(R.id.points)).setText(String.valueOf(points));
@@ -407,108 +427,7 @@ public class RTABMapActivity extends Activity implements OnClickListener {
 	  Log.i(TAG, String.format("rtabmapInitEventsUI() status=%d msg=%s", status, msg));
 	  
 	  ((TextView)findViewById(R.id.status)).setText(
-			  status == 1 && msg.isEmpty()?mItemPause!=null&&mItemPause.isChecked()?"Paused":mItemLocalizationMode!=null&&mItemLocalizationMode.isChecked()?"Localization":"Mapping":msg);
-	  
-	  /*0=kInitializing,
-		1=kInitialized,
-		2=kClosing,
-		3=kClosed,
-		4=kInfo,
-		5=kError*/
-	  
-		if(status == 3)
-		{
-			msg = "";
-			if(!mNewDatabasePath.isEmpty())
-			{
-				boolean removed = true;
-				File outputFile = new File(mNewDatabasePath);
-				if(outputFile.exists())
-				{
-					removed = outputFile.delete();
-				}
-				if(removed)
-				{
-					File tempFile = new File(mTempDatabasePath);
-					if(tempFile.renameTo(outputFile))
-					{
-						msg = String.format("Database saved to \"%s\".", mNewDatabasePath);
-						
-						Intent intent = new Intent(this, RTABMapActivity.class);
-						// use System.currentTimeMillis() to have a unique ID for the pending intent
-						PendingIntent pIntent = PendingIntent.getActivity(this, (int) System.currentTimeMillis(), intent, 0);
-
-						// build notification
-						// the addAction re-use the same intent to keep the example short
-						Notification n  = new Notification.Builder(this)
-						        .setContentTitle(getString(R.string.app_name))
-						        .setContentText(mNewDatabasePath + " saved!")
-						        .setSmallIcon(R.drawable.ic_launcher)
-						        .setContentIntent(pIntent)
-						        .setAutoCancel(true).build();
-						    
-						  
-						NotificationManager notificationManager = 
-						  (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-
-						notificationManager.notify(0, n); 
-					}
-					else
-					{
-						msg = String.format("Failed to rename temporary database from \"%s\" to \"%s\".",
-								mTempDatabasePath, mNewDatabasePath);
-					}
-				}
-				else
-				{
-					msg = String.format("Failed to overwrite the database \"%s\". The temporary database is still correctly saved at \"%s\".",
-							mNewDatabasePath, mTempDatabasePath);
-				}
-			}
-			else if(!mOpenedDatabasePath.isEmpty())
-			{
-				msg = String.format("Database \"%s\" updated.", mOpenedDatabasePath);
-			}
-
-			if(!msg.isEmpty())
-			{
-				mToast.makeText(this, msg, mToast.LENGTH_LONG).show();
-			}
-			
-			mOpenedDatabasePath = "";
-			mNewDatabasePath = "";
-			
-			//restart a new scan by default
-			RTABMapLib.openDatabase(mTempDatabasePath);
-			
-			((TextView)findViewById(R.id.points)).setText(String.valueOf(0));
-			((TextView)findViewById(R.id.polygons)).setText(String.valueOf(0));
-			((TextView)findViewById(R.id.nodes)).setText(String.valueOf(0));
-			((TextView)findViewById(R.id.words)).setText(String.valueOf(0));
-			((TextView)findViewById(R.id.memory)).setText(String.valueOf(Debug.getNativeHeapAllocatedSize()/(1024*1024)));
-			((TextView)findViewById(R.id.db_size)).setText(String.valueOf(0));
-			((TextView)findViewById(R.id.inliers)).setText(String.valueOf(0));
-			((TextView)findViewById(R.id.features)).setText(String.valueOf(0));
-			((TextView)findViewById(R.id.update_time)).setText(String.valueOf(0));
-			((TextView)findViewById(R.id.hypothesis)).setText(String.valueOf(0));
-			((TextView)findViewById(R.id.fps)).setText(String.valueOf(0));
-			mTotalLoopClosures = 0;
-			((TextView)findViewById(R.id.total_loop)).setText(String.valueOf(mTotalLoopClosures));
-			
-			if(mItemSave!=null)
-			{
-				if(mItemPause.isChecked())
-				{
-					mItemPause.setChecked(false);
-					mItemOpen.setEnabled(false);
-					mItemPostProcessing.setEnabled(false);
-					mItemSave.setEnabled(false);
-					mItemExport.setEnabled(false);
-					RTABMapLib.setPausedMapping(false); // resume mapping
-				}
-			}
-			mProgressDialog.dismiss();
-		}
+			  status == 1 && msg.isEmpty()?(mItemPause!=null&&mItemPause.isChecked()?"Paused":mItemLocalizationMode!=null&&mItemLocalizationMode.isChecked()?"Localization":mItemDataRecorderMode!=null&&mItemDataRecorderMode.isChecked()?"Recording":"Mapping"):msg);
   }
   
   //called from jni
@@ -623,6 +542,7 @@ public class RTABMapActivity extends Activity implements OnClickListener {
 
 	        };
 	        fileList = path.list(filter);
+	        Arrays.sort(fileList);
 	    }
 	    else {
 	    	fileList = new String[0];
@@ -637,21 +557,62 @@ public class RTABMapActivity extends Activity implements OnClickListener {
       {
     	  item.setChecked(!item.isChecked());
     	  mItemSave.setEnabled(item.isChecked());
-		  mItemExport.setEnabled(item.isChecked());
-    	  mItemOpen.setEnabled(item.isChecked());
-    	  mItemPostProcessing.setEnabled(item.isChecked());
-    	 // mItemSave.setEnabled(item.isChecked() && !mWorkingDirectory.isEmpty());
+		  mItemExport.setEnabled(item.isChecked() && !mItemDataRecorderMode.isChecked());
+    	  mItemOpen.setEnabled(item.isChecked() && !mItemDataRecorderMode.isChecked());
+    	  mItemPostProcessing.setEnabled(item.isChecked() && !mItemDataRecorderMode.isChecked());
+    	  mItemDataRecorderMode.setEnabled(item.isChecked());
+    	 
     	  if(item.isChecked())
     	  {
     		  RTABMapLib.setPausedMapping(true);
     		  ((TextView)findViewById(R.id.status)).setText("Paused");
+    		  if(mPauseFirstTime && !mOnPause)
+    		  {
+    			  mPauseFirstTime = false;
+    			  mToast.makeText(getActivity(), String.format("Tip: Try \"Post-Processing...\" to optimize even more the map!"), mToast.LENGTH_LONG).show();
+    		  }
+    		  mMapIsEmpty = false;
     	  }
     	  else
     	  {
     		  RTABMapLib.setPausedMapping(false);
-    		  ((TextView)findViewById(R.id.status)).setText(mItemLocalizationMode.isChecked()?"Localization":"Mapping");
+    		  ((TextView)findViewById(R.id.status)).setText(mItemLocalizationMode.isChecked()?"Localization":mItemDataRecorderMode.isChecked()?"Recording":"Mapping");
+    		  if(mItemDataRecorderMode.isChecked())
+    		  {
+    			  mToast.makeText(getActivity(), String.format("Data Recorder Mode: no map is created, only raw data is recorded."), mToast.LENGTH_LONG).show();
+    		  }
+    		  else if(!mMapIsEmpty)
+    		  {
+	    		  mToast.makeText(getActivity(), String.format("On resume, a new map is created. Tip: Try relocalizing in the previous area."), mToast.LENGTH_LONG).show();
+    		  }
     	  }
       } 
+      else if (itemId == R.id.post_processing_standard)
+      {
+			mProgressDialog.setTitle("Post-Processing");
+			mProgressDialog.setMessage(String.format("Please wait while optimizing..."));
+			mProgressDialog.show();
+			
+			Thread workingThread = new Thread(new Runnable() {
+				    public void run() {
+				    	final int loopDetected = RTABMapLib.postProcessing(-1);
+				    	runOnUiThread(new Runnable() {
+				    		public void run() {
+								if(loopDetected >= 0)
+								{
+									mTotalLoopClosures+=loopDetected;
+									mProgressDialog.setMessage(String.format("Optimization done! Increasing visual appeal..."));
+								}
+								else if(loopDetected < 0)
+								{
+									mToast.makeText(getActivity(), String.format("Optimization failed!"), mToast.LENGTH_SHORT).show();
+								}
+					    	}
+				    	});
+				    } 
+			});
+			workingThread.start();
+      }
       else if (itemId == R.id.detect_more_loop_closures)
       {
 			mProgressDialog.setTitle("Post-Processing");
@@ -672,6 +633,32 @@ public class RTABMapActivity extends Activity implements OnClickListener {
 								else if(loopDetected < 0)
 								{
 									mToast.makeText(getActivity(), String.format("Detection failed!"), mToast.LENGTH_SHORT).show();
+								}
+				    		}
+				    	});
+				    } 
+			});
+			workingThread.start();
+      }
+      else if (itemId == R.id.icp_refining)
+      {
+			mProgressDialog.setTitle("Post-Processing");
+			mProgressDialog.setMessage(String.format("Please wait while refining links..."));
+			mProgressDialog.show();
+			
+			Thread workingThread = new Thread(new Runnable() {
+				    public void run() {
+				    	final int linksRefined = RTABMapLib.postProcessing(3);
+				    	runOnUiThread(new Runnable() {
+				    		public void run() {
+								mProgressDialog.dismiss();
+								if(linksRefined >= 0)
+								{
+									mToast.makeText(getActivity(), String.format("Refining done! %d link(s) refined.", linksRefined), mToast.LENGTH_SHORT).show();
+								}
+								else if(linksRefined < 0)
+								{
+									mToast.makeText(getActivity(), String.format("Refining failed!"), mToast.LENGTH_SHORT).show();
 								}
 				    		}
 				    	});
@@ -704,6 +691,34 @@ public class RTABMapActivity extends Activity implements OnClickListener {
 				    } 
 			});
 			workingThread.start();
+      }
+      else if (itemId == R.id.polygons_filtering)
+      {		
+    	  mProgressDialog.setTitle("Post-Processing");
+		  mProgressDialog.setMessage(String.format("Noise filtering..."));
+		  mProgressDialog.show();
+    	  RTABMapLib.postProcessing(4);
+      }
+      else if (itemId == R.id.gain_compensation_fast)
+      {		
+    	  mProgressDialog.setTitle("Post-Processing");
+		  mProgressDialog.setMessage(String.format("Fast gain compensation..."));
+		  mProgressDialog.show();
+    	  RTABMapLib.postProcessing(5);
+      }
+      else if (itemId == R.id.gain_compensation_full)
+      {		
+    	  mProgressDialog.setTitle("Post-Processing");
+		  mProgressDialog.setMessage(String.format("Full gain compensation..."));
+		  mProgressDialog.show();
+    	  RTABMapLib.postProcessing(6);
+      }
+      else if (itemId == R.id.bilateral_filtering)
+      {		
+    	  mProgressDialog.setTitle("Post-Processing");
+		  mProgressDialog.setMessage(String.format("Mesh smoothing..."));
+		  mProgressDialog.show();
+    	  RTABMapLib.postProcessing(7);
       }
       else if (itemId == R.id.sba)
       {
@@ -743,10 +758,12 @@ public class RTABMapActivity extends Activity implements OnClickListener {
     		  mLayoutDebug.setVisibility(LinearLayout.VISIBLE);
     	  }
       }
-      else if(itemId == R.id.mesh_rendering)
+      else if(itemId == R.id.mesh || itemId == R.id.texture_mesh || itemId == R.id.point_cloud)
       {
-    	  item.setChecked(!item.isChecked());
-    	  RTABMapLib.setMeshRendering(item.isChecked());
+    	  item.setChecked(true);
+    	  RTABMapLib.setMeshRendering(
+    			  mItemRenderingMesh.isChecked() || mItemRenderingTextureMesh.isChecked(), 
+    			  mItemRenderingTextureMesh.isChecked());
       }
       else if(itemId == R.id.map_shown)
       {
@@ -778,10 +795,24 @@ public class RTABMapActivity extends Activity implements OnClickListener {
     	  item.setChecked(!item.isChecked());
     	  RTABMapLib.setNodesFiltering(item.isChecked());
       }
+      else if(itemId == R.id.drift_correction)
+      {
+    	  item.setChecked(!item.isChecked());
+    	  RTABMapLib.setDriftCorrection(item.isChecked());
+    	  if(item.isChecked())
+    	  {
+    		  mToast.makeText(getActivity(), String.format("Tip: With drift correction is enabled, move slowly to get better results."), mToast.LENGTH_LONG).show();
+    	  }
+      }
       else if(itemId == R.id.graph_visible)
       {
     	  item.setChecked(!item.isChecked());
     	  RTABMapLib.setGraphVisible(item.isChecked());
+      }
+      else if(itemId == R.id.grid_visible)
+      {
+    	  item.setChecked(!item.isChecked());
+    	  RTABMapLib.setGridVisible(item.isChecked());
       }
       else if(itemId == R.id.auto_exposure)
       {
@@ -797,6 +828,11 @@ public class RTABMapActivity extends Activity implements OnClickListener {
     	  item.setChecked(!item.isChecked());
     	  RTABMapLib.setFullResolution(item.isChecked());
       }
+      else if(itemId == R.id.append)
+      {
+    	  item.setChecked(!item.isChecked());
+    	  RTABMapLib.setAppendMode(item.isChecked());
+      }
       else if(itemId == R.id.max_depth)
       {
     	  // get double
@@ -811,6 +847,25 @@ public class RTABMapActivity extends Activity implements OnClickListener {
 		        {
 			        mMaxDepthIndex = which;
 			        RTABMapLib.setMaxCloudDepth(which < 5?Float.parseFloat(values[which]):0);
+		        }
+		    }
+		  });
+		  builder.show();
+      }
+      else if(itemId == R.id.mesh_decimation)
+      {
+    	  // get double
+		  AlertDialog.Builder builder = new AlertDialog.Builder(this);
+		  builder.setTitle("Mesh Decimation");
+		  final String[] values = {"Disabled", "Medium", "High"};
+		  builder.setSingleChoiceItems(values, mMeshDecimationIndex, new DialogInterface.OnClickListener() {
+		    @Override
+		    public void onClick(DialogInterface dialog, int which) {
+		        dialog.dismiss();
+		        if(which >=0 && which <= 2)
+		        {
+		        	mMeshDecimationIndex = which;
+			        RTABMapLib.setMeshDecimation(which);
 		        }
 		    }
 		  });
@@ -866,7 +921,7 @@ public class RTABMapActivity extends Activity implements OnClickListener {
 		        if(which >=0 && which < mUpdateRateValues.length)
 		        {
 		        	mParamUpdateRateHzIndex = which;
-			        if(RTABMapLib.setMappingParameter("Rtabmap/DetectionRate", mUpdateRateValues[which]) != 0)
+			        if(RTABMapLib.setMappingParameter("Rtabmap/DetectionRate", which == mUpdateRateValues.length-1?"0":mUpdateRateValues[which]) != 0)
 			        {
 			        	mToast.makeText(getActivity(), "Failed to set parameter \"Rtabmap/DetectionRate\"!", mToast.LENGTH_LONG).show();
 			        }
@@ -961,83 +1016,165 @@ public class RTABMapActivity extends Activity implements OnClickListener {
       }
       else if (itemId == R.id.save)
       {
-    	  if(mOpenedDatabasePath.isEmpty())
-    	  {
-			  AlertDialog.Builder builder = new AlertDialog.Builder(this);
-			  builder.setTitle("RTAB-Map Database Name (*.db):");
-			  final EditText input = new EditText(this);
-			  input.setInputType(InputType.TYPE_CLASS_TEXT);        
-			  builder.setView(input);
-			  builder.setPositiveButton("OK", new DialogInterface.OnClickListener() {
-				  @Override
-				  public void onClick(DialogInterface dialog, int which)
+		  AlertDialog.Builder builder = new AlertDialog.Builder(this);
+		  builder.setTitle("RTAB-Map Database Name (*.db):");
+		  final EditText input = new EditText(this);
+		  input.setInputType(InputType.TYPE_CLASS_TEXT); 
+		  if(mOpenedDatabasePath.isEmpty())
+		  {
+			  String timeStamp = new SimpleDateFormat("yyMMdd-hhmmss").format(new Date());
+			  input.setText(timeStamp);
+		  }
+		  else
+		  {
+			  File f = new File(mOpenedDatabasePath);
+			  String name = f.getName();
+			  input.setText(name.substring(0,name.lastIndexOf(".")));
+		  }
+		  input.setSelectAllOnFocus(true);
+		  input.selectAll();
+		  builder.setView(input);
+		  builder.setPositiveButton("OK", new DialogInterface.OnClickListener() {
+			  @Override
+			  public void onClick(DialogInterface dialog, int which)
+			  {
+				  final String fileName = input.getText().toString();  
+				  dialog.dismiss();
+				  if(!fileName.isEmpty())
 				  {
-					  final String fileName = input.getText().toString();  
-					  dialog.dismiss();
-					  if(!fileName.isEmpty())
+					  File newFile = new File(mWorkingDirectory + fileName + ".db");
+					  if(newFile.exists())
 					  {
-						  File newFile = new File(mWorkingDirectory + fileName + ".db");
-						  if(newFile.exists())
-						  {
-							  new AlertDialog.Builder(getActivity())
-				                .setTitle("File Already Exists")
-				                .setMessage("Do you want to overwrite the existing file?")
-				                .setPositiveButton("Yes", new DialogInterface.OnClickListener() {
-				                    public void onClick(DialogInterface dialog, int which) {
-				                    	mNewDatabasePath = mWorkingDirectory + fileName + ".db";
-				                    	
-				                    	mProgressDialog.setTitle("Saving");
-				                  	    mProgressDialog.setMessage(String.format("Please wait while saving \"%s\"...", mNewDatabasePath));
-				                  	    mProgressDialog.show();
-				                    	
-										RTABMapLib.save(); // send save event
-										//disable gui actions
-										mItemSave.setEnabled(false);
-										mItemOpen.setEnabled(false);
-										mItemPostProcessing.setEnabled(false);
-										mItemExport.setEnabled(false);
-				                    }
-				                })
-				                .setNegativeButton("No", new DialogInterface.OnClickListener() {
-				                    public void onClick(DialogInterface dialog, int which) {
-				                        dialog.dismiss();
-				                    }
-				                })
-				                .show();
-						  }
-						  else
-						  {
-							  mNewDatabasePath = mWorkingDirectory + fileName + ".db";
-							  
-							  mProgressDialog.setTitle("Saving");
-				        	  mProgressDialog.setMessage(String.format("Please wait while saving \"%s\"...", mNewDatabasePath));
-				        	  mProgressDialog.show();
-							  
-							  RTABMapLib.save(); // send save event
-							  //disable gui actions
-							  mItemSave.setEnabled(false);
-							  mItemOpen.setEnabled(false);
-							  mItemPostProcessing.setEnabled(false);
-							  mItemExport.setEnabled(false);
-						  }
+						  new AlertDialog.Builder(getActivity())
+			                .setTitle("File Already Exists")
+			                .setMessage("Do you want to overwrite the existing file?")
+			                .setPositiveButton("Yes", new DialogInterface.OnClickListener() {
+			                    public void onClick(DialogInterface dialog, int which) {
+			                    	
+			                    	final String newDatabasePath = mWorkingDirectory + fileName + ".db";
+			                    	mProgressDialog.setTitle("Saving");
+			                    	if(mOpenedDatabasePath.equals(newDatabasePath))
+			                    	{
+			                    		mProgressDialog.setMessage(String.format("Please wait while updating \"%s\"...", newDatabasePath));
+			                    	}
+			                    	else
+			                    	{
+			                    		mProgressDialog.setMessage(String.format("Please wait while saving \"%s\"...", newDatabasePath));
+			                    	}
+			                  	    mProgressDialog.show();
+			                    	
+			                  	  Thread saveThread = new Thread(new Runnable() {
+			                		    public void run() {
+			                		    	RTABMapLib.save(newDatabasePath); // save
+			                		    	runOnUiThread(new Runnable() {
+			                		    		public void run() {
+				                		    		if(mOpenedDatabasePath.equals(newDatabasePath))
+				        							{
+				        								mToast.makeText(getActivity(), String.format("Database \"%s\" updated.", newDatabasePath), mToast.LENGTH_LONG).show();
+				        							}
+				        							else
+				        							{
+				        								mToast.makeText(getActivity(), String.format("Database saved to \"%s\".", newDatabasePath), mToast.LENGTH_LONG).show();
+				        							
+				        								Intent intent = new Intent(getActivity(), RTABMapActivity.class);
+				        								// use System.currentTimeMillis() to have a unique ID for the pending intent
+				        								PendingIntent pIntent = PendingIntent.getActivity(getActivity(), (int) System.currentTimeMillis(), intent, 0);
+
+				        								// build notification
+				        								// the addAction re-use the same intent to keep the example short
+				        								Notification n  = new Notification.Builder(getActivity())
+				        								        .setContentTitle(getString(R.string.app_name))
+				        								        .setContentText(newDatabasePath + " saved!")
+				        								        .setSmallIcon(R.drawable.ic_launcher)
+				        								        .setContentIntent(pIntent)
+				        								        .setAutoCancel(true).build();
+				        								    
+				        								  
+				        								NotificationManager notificationManager = 
+				        								  (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+
+				        								notificationManager.notify(0, n); 
+				        							}
+				                		    		if(!mItemDataRecorderMode.isChecked())
+				                		    		{
+				                		    			mOpenedDatabasePath = newDatabasePath;
+				                		    		}
+					                		    	mProgressDialog.dismiss();
+			                		    		}
+			                		    	});
+			                		    } 
+			                		});
+					        	    saveThread.start();
+								}
+			                })
+			                .setNegativeButton("No", new DialogInterface.OnClickListener() {
+			                    public void onClick(DialogInterface dialog, int which) {
+			                        dialog.dismiss();
+			                    }
+			                })
+			                .show();
+					  }
+					  else
+					  {
+						    final String newDatabasePath = mWorkingDirectory + fileName + ".db";
+	                        mProgressDialog.setTitle("Saving");
+	                        if(mOpenedDatabasePath.equals(newDatabasePath))
+	                        {
+	                        	mProgressDialog.setMessage(String.format("Please wait while updating \"%s\"...", mOpenedDatabasePath));
+	                        }
+	                        else
+	                        {
+	                   	  		mProgressDialog.setMessage(String.format("Please wait while saving \"%s\"...", newDatabasePath));
+	                        }
+			        	    mProgressDialog.show();
+			        	    
+			        	    Thread saveThread = new Thread(new Runnable() {
+	                		    public void run() {
+	                		    	RTABMapLib.save(newDatabasePath); // save
+	                		    	runOnUiThread(new Runnable() {
+	                		    		public void run() {
+		                		    		if(mOpenedDatabasePath.equals(newDatabasePath))
+		        							{
+		        								mToast.makeText(getActivity(), String.format("Database \"%s\" updated.", newDatabasePath), mToast.LENGTH_LONG).show();
+		        							}
+		        							else
+		        							{
+		        								mToast.makeText(getActivity(), String.format("Database saved to \"%s\".", newDatabasePath), mToast.LENGTH_LONG).show();
+		        							
+		        								Intent intent = new Intent(getActivity(), RTABMapActivity.class);
+		        								// use System.currentTimeMillis() to have a unique ID for the pending intent
+		        								PendingIntent pIntent = PendingIntent.getActivity(getActivity(), (int) System.currentTimeMillis(), intent, 0);
+
+		        								// build notification
+		        								// the addAction re-use the same intent to keep the example short
+		        								Notification n  = new Notification.Builder(getActivity())
+		        								        .setContentTitle(getString(R.string.app_name))
+		        								        .setContentText(newDatabasePath + " saved!")
+		        								        .setSmallIcon(R.drawable.ic_launcher)
+		        								        .setContentIntent(pIntent)
+		        								        .setAutoCancel(true).build();
+		        								    
+		        								  
+		        								NotificationManager notificationManager = 
+		        								  (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+
+		        								notificationManager.notify(0, n); 
+		        							}
+		                		    		if(!mItemDataRecorderMode.isChecked())
+		                		    		{
+		                		    			mOpenedDatabasePath = newDatabasePath;
+		                		    		}
+			                		    	mProgressDialog.dismiss();
+	                		    		}
+	                		    	});
+	                		    } 
+	                		});
+			        	    saveThread.start();
 					  }
 				  }
-			  });
-			  builder.show();
-    	  }
-    	  else
-    	  {
-    		  mProgressDialog.setTitle("Saving");
-        	  mProgressDialog.setMessage(String.format("Please wait while updating \"%s\"...", mOpenedDatabasePath));
-        	  mProgressDialog.show();
-        	  
-    		  RTABMapLib.save(); // send save event
-    		  //disable gui actions
-			  mItemSave.setEnabled(false);
-			  mItemOpen.setEnabled(false);
-			  mItemPostProcessing.setEnabled(false);
-			  mItemExport.setEnabled(false);
-    	  }
+			  }
+		  });
+		  builder.show();
       }
       else if(itemId == R.id.reset)
       {
@@ -1062,8 +1199,62 @@ public class RTABMapActivity extends Activity implements OnClickListener {
 		  else
 		  {
 			  mOpenedDatabasePath = "";
-        	  RTABMapLib.openDatabase(mTempDatabasePath);
+        	  RTABMapLib.openEmptyDatabase();
 		  }
+		  mMapIsEmpty = true;
+      }
+      else if(itemId == R.id.data_recorder)
+      {
+		  final boolean dataRecorderOldState = item.isChecked();
+		  new AlertDialog.Builder(getActivity())
+          .setTitle("Data Recorder Mode")
+          .setMessage("Changing from/to data recorder mode will close the current session. Do you want to continue?")
+          .setPositiveButton("Yes", new DialogInterface.OnClickListener() {
+              public void onClick(DialogInterface dialog, int which) {           	  
+            	  // reset
+            	  ((TextView)findViewById(R.id.points)).setText(String.valueOf(0));
+            	  ((TextView)findViewById(R.id.polygons)).setText(String.valueOf(0));
+            	  ((TextView)findViewById(R.id.nodes)).setText(String.valueOf(0));
+            	  ((TextView)findViewById(R.id.words)).setText(String.valueOf(0));
+            	  ((TextView)findViewById(R.id.memory)).setText(String.valueOf(Debug.getNativeHeapAllocatedSize()/(1024*1024)));
+            	  ((TextView)findViewById(R.id.db_size)).setText(String.valueOf(0));
+            	  ((TextView)findViewById(R.id.inliers)).setText(String.valueOf(0));
+            	  ((TextView)findViewById(R.id.features)).setText(String.valueOf(0));
+            	  ((TextView)findViewById(R.id.update_time)).setText(String.valueOf(0));
+            	  ((TextView)findViewById(R.id.hypothesis)).setText(String.valueOf(0));
+            	  ((TextView)findViewById(R.id.fps)).setText(String.valueOf(0));
+        		  mTotalLoopClosures = 0;
+        		  ((TextView)findViewById(R.id.total_loop)).setText(String.valueOf(mTotalLoopClosures));
+            	   
+        		  mItemDataRecorderMode.setChecked(!dataRecorderOldState);
+            	  RTABMapLib.setDataRecorderMode(mItemDataRecorderMode.isChecked());
+            	  
+            	  mOpenedDatabasePath = "";
+        		  RTABMapLib.openEmptyDatabase();
+        		  
+        		  mItemOpen.setEnabled(!mItemDataRecorderMode.isChecked() && mItemPause.isChecked());
+    			  mItemPostProcessing.setEnabled(!mItemDataRecorderMode.isChecked() && mItemPause.isChecked());
+    			  mItemExport.setEnabled(!mItemDataRecorderMode.isChecked() && mItemPause.isChecked());
+    			  
+    			  mItemLocalizationMode.setEnabled(!mItemDataRecorderMode.isChecked());
+    			  mItemAppendMode.setEnabled(!mItemDataRecorderMode.isChecked());   			   
+            	  
+            	  if(mItemDataRecorderMode.isChecked())
+            	  {
+            		  mToast.makeText(getActivity(), String.format("Data recorder mode activated! Tip: You can increase data update rate in Parameters menu under Mapping options."), mToast.LENGTH_LONG).show();
+            	  }
+            	  else
+            	  {
+            		  mToast.makeText(getActivity(), String.format("Data recorder mode deactivated!"), mToast.LENGTH_LONG).show();
+            	  }
+              }
+          })
+          .setNegativeButton("No", new DialogInterface.OnClickListener() {
+              public void onClick(DialogInterface dialog, int which) {
+                  dialog.dismiss();
+              }
+          })
+          .show();
       }
       else if(itemId == R.id.export_obj || itemId == R.id.export_ply)
       {
@@ -1077,6 +1268,19 @@ public class RTABMapActivity extends Activity implements OnClickListener {
 		  final EditText input = new EditText(this);
 		  input.setInputType(InputType.TYPE_CLASS_TEXT);        
 		  builder.setView(input);
+		  if(mOpenedDatabasePath.isEmpty())
+		  {
+			  String timeStamp = new SimpleDateFormat("yyMMdd-hhmmss").format(new Date());
+			  input.setText(timeStamp);
+		  }
+		  else
+		  {
+			  File f = new File(mOpenedDatabasePath);
+			  String name = f.getName();
+			  input.setText(name.substring(0,name.lastIndexOf(".")));
+		  }
+		  input.setSelectAllOnFocus(true);
+		  input.selectAll();
 		  builder.setPositiveButton("OK", new DialogInterface.OnClickListener() {
 			  @Override
 			  public void onClick(DialogInterface dialog, int which)
@@ -1130,6 +1334,24 @@ public class RTABMapActivity extends Activity implements OnClickListener {
 					                		    		{
 					                		    			mToast.makeText(getActivity(), String.format("Mesh \"%s\" successfully exported!", path), mToast.LENGTH_LONG).show();
 					                		    		}
+					                		    		Intent intent = new Intent(getActivity(), RTABMapActivity.class);
+				        								// use System.currentTimeMillis() to have a unique ID for the pending intent
+				        								PendingIntent pIntent = PendingIntent.getActivity(getActivity(), (int) System.currentTimeMillis(), intent, 0);
+
+				        								// build notification
+				        								// the addAction re-use the same intent to keep the example short
+				        								Notification n  = new Notification.Builder(getActivity())
+				        								        .setContentTitle(getString(R.string.app_name))
+				        								        .setContentText(path + " exported!")
+				        								        .setSmallIcon(R.drawable.ic_launcher)
+				        								        .setContentIntent(pIntent)
+				        								        .setAutoCancel(true).build();
+				        								    
+				        								  
+				        								NotificationManager notificationManager = 
+				        								  (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+
+				        								notificationManager.notify(0, n); 
 							                    	}
 							                    	else
 							                    	{
@@ -1173,6 +1395,25 @@ public class RTABMapActivity extends Activity implements OnClickListener {
 			                		    		{
 			                		    			mToast.makeText(getActivity(), String.format("Mesh \"%s\" successfully exported!", path), mToast.LENGTH_LONG).show();
 			                		    		}
+			                		    		
+			                		    		Intent intent = new Intent(getActivity(), RTABMapActivity.class);
+		        								// use System.currentTimeMillis() to have a unique ID for the pending intent
+		        								PendingIntent pIntent = PendingIntent.getActivity(getActivity(), (int) System.currentTimeMillis(), intent, 0);
+
+		        								// build notification
+		        								// the addAction re-use the same intent to keep the example short
+		        								Notification n  = new Notification.Builder(getActivity())
+		        								        .setContentTitle(getString(R.string.app_name))
+		        								        .setContentText(path + " exported!")
+		        								        .setSmallIcon(R.drawable.ic_launcher)
+		        								        .setContentIntent(pIntent)
+		        								        .setAutoCancel(true).build();
+		        								    
+		        								  
+		        								NotificationManager notificationManager = 
+		        								  (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+
+		        								notificationManager.notify(0, n);
 					                    	}
 					                    	else
 					                    	{
@@ -1196,9 +1437,16 @@ public class RTABMapActivity extends Activity implements OnClickListener {
     	  final String[] files = loadFileList(mWorkingDirectory);
     	  if(files.length > 0)
     	  {
+    		  String[] filesWithSize = new String[files.length];
+    		  for(int i = 0; i<filesWithSize.length; ++i)
+  	          {
+  	        	  File filePath = new File(mWorkingDirectory+files[i]);
+  	        	  long mb = filePath.length()/(1024*1024);
+  	        	  filesWithSize[i] = files[i] + " ("+mb+" MB)";
+  	          }
     		  AlertDialog.Builder builder = new AlertDialog.Builder(this);
     		  builder.setTitle("Choose your file");
-              builder.setItems(files, new DialogInterface.OnClickListener() {
+              builder.setItems(filesWithSize, new DialogInterface.OnClickListener() {
                   public void onClick(DialogInterface dialog, int which) {
                 	  mOpenedDatabasePath = mWorkingDirectory + files[which];
                 	  
@@ -1211,12 +1459,6 @@ public class RTABMapActivity extends Activity implements OnClickListener {
 
                 	  RTABMapLib.openDatabase(mOpenedDatabasePath);
                 	  RTABMapLib.setCamera(1);
-                	  
-                	  File extStore = new File(mTempDatabasePath);
-                  	  if(extStore.exists())
-                  	  {
-                          extStore.delete();
-                  	  }  
                   }
               });
               builder.show();

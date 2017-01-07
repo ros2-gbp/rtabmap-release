@@ -61,7 +61,7 @@ void DBDriver::parseParameters(const ParametersMap & parameters)
 {
 }
 
-void DBDriver::closeConnection(bool save)
+void DBDriver::closeConnection(bool save, const std::string & outputUrl)
 {
 	UDEBUG("isRunning=%d", this->isRunning());
 	this->join(true);
@@ -78,7 +78,7 @@ void DBDriver::closeConnection(bool save)
 		_trashesMutex.unlock();
 	}
 	_dbSafeAccessMutex.lock();
-	this->disconnectDatabaseQuery(save);
+	this->disconnectDatabaseQuery(save, outputUrl);
 	_dbSafeAccessMutex.unlock();
 	UDEBUG("");
 }
@@ -195,6 +195,15 @@ ParametersMap DBDriver::getLastParameters() const
 	parameters = getLastParametersQuery();
 	_dbSafeAccessMutex.unlock();
 	return parameters;
+}
+
+std::map<std::string, float> DBDriver::getStatistics(int nodeId, double & stamp) const
+{
+	std::map<std::string, float> statistics;
+	_dbSafeAccessMutex.lock();
+	statistics = getStatisticsQuery(nodeId, stamp);
+	_dbSafeAccessMutex.unlock();
+	return statistics;
 }
 
 std::string DBDriver::getDatabaseVersion() const
@@ -405,6 +414,25 @@ void DBDriver::updateLink(const Link & link)
 	this->updateLinkQuery(link);
 	_dbSafeAccessMutex.unlock();
 }
+void DBDriver::updateOccupancyGrid(
+		int nodeId,
+		const cv::Mat & ground,
+		const cv::Mat & obstacles,
+		float cellSize,
+		const cv::Point3f & viewpoint)
+{
+	_dbSafeAccessMutex.lock();
+	//just to make sure the occupancy grids are compressed for convenience
+	SensorData data;
+	data.setOccupancyGrid(ground, obstacles, cellSize, viewpoint);
+	this->updateOccupancyGridQuery(
+			nodeId,
+			data.gridGroundCellsCompressed(),
+			data.gridObstacleCellsCompressed(),
+			cellSize,
+			viewpoint);
+	_dbSafeAccessMutex.unlock();
+}
 
 void DBDriver::load(VWDictionary * dictionary) const
 {
@@ -514,7 +542,7 @@ void DBDriver::loadWords(const std::set<int> & wordIds, std::list<VisualWord *> 
 	}
 }
 
-void DBDriver::loadNodeData(std::list<Signature *> & signatures) const
+void DBDriver::loadNodeData(std::list<Signature *> & signatures, bool images, bool scan, bool userData, bool occupancyGrid) const
 {
 	// Don't look in the trash, we assume that if we want to load
 	// data of a signature, it is not in thrash! Print an error if so.
@@ -530,13 +558,14 @@ void DBDriver::loadNodeData(std::list<Signature *> & signatures) const
 	_trashesMutex.unlock();
 
 	_dbSafeAccessMutex.lock();
-	this->loadNodeDataQuery(signatures);
+	this->loadNodeDataQuery(signatures, images, scan, userData, occupancyGrid);
 	_dbSafeAccessMutex.unlock();
 }
 
 void DBDriver::getNodeData(
 		int signatureId,
-		SensorData & data) const
+		SensorData & data,
+		bool images, bool scan, bool userData, bool occupancyGrid) const
 {
 	bool found = false;
 	// look in the trash
@@ -544,7 +573,11 @@ void DBDriver::getNodeData(
 	if(uContains(_trashSignatures, signatureId))
 	{
 		const Signature * s = _trashSignatures.at(signatureId);
-		if(!s->sensorData().imageCompressed().empty() || !s->isSaved())
+		if(!s->sensorData().imageCompressed().empty() ||
+			!s->sensorData().laserScanCompressed().empty() ||
+			!s->sensorData().userDataCompressed().empty() ||
+			s->sensorData().gridCellSize() != 0.0f ||
+			!s->isSaved())
 		{
 			data = (SensorData)s->sensorData();
 			found = true;
@@ -558,7 +591,7 @@ void DBDriver::getNodeData(
 		std::list<Signature *> signatures;
 		Signature tmp(signatureId);
 		signatures.push_back(&tmp);
-		loadNodeDataQuery(signatures);
+		loadNodeDataQuery(signatures, images, scan, userData, occupancyGrid);
 		data = signatures.front()->sensorData();
 		_dbSafeAccessMutex.unlock();
 	}
@@ -569,6 +602,7 @@ bool DBDriver::getCalibration(
 		std::vector<CameraModel> & models,
 		StereoCameraModel & stereoModel) const
 {
+	UDEBUG("");
 	bool found = false;
 	// look in the trash
 	_trashesMutex.lock();
@@ -750,6 +784,15 @@ void DBDriver::getLastNodeId(int & id) const
 
 	_dbSafeAccessMutex.lock();
 	this->getLastIdQuery("Node", id);
+	int statisticsId = 0;
+	if(uStrNumCmp(this->getDatabaseVersion(), "0.11.11") >= 0)
+	{
+		this->getLastIdQuery("Statistics", statisticsId);
+		if(statisticsId > id)
+		{
+			id = statisticsId;
+		}
+	}
 	_dbSafeAccessMutex.unlock();
 }
 
@@ -842,7 +885,7 @@ void DBDriver::getAllLabels(std::map<int, std::string> & labels) const
 	_dbSafeAccessMutex.unlock();
 }
 
-void DBDriver::addStatisticsAfterRun(
+void DBDriver::addInfoAfterRun(
 		int stMemSize,
 		int lastSignAdded,
 		int processMemUsed,
@@ -857,13 +900,26 @@ void DBDriver::addStatisticsAfterRun(
 		if(uStrNumCmp(this->getDatabaseVersion(), "0.11.8") >= 0)
 		{
 			std::string param = Parameters::serialize(parameters);
-			query << "INSERT INTO Statistics(STM_size,last_sign_added,process_mem_used,database_mem_used,dictionary_size,parameters) values("
-				  << stMemSize << ","
-				  << lastSignAdded << ","
-				  << processMemUsed << ","
-				  << databaseMemUsed << ","
-				  << dictionarySize << ","
-				  "\"" << param.c_str() << "\");";
+			if(uStrNumCmp(this->getDatabaseVersion(), "0.11.11") >= 0)
+			{
+				query << "INSERT INTO Info(STM_size,last_sign_added,process_mem_used,database_mem_used,dictionary_size,parameters) values("
+					  << stMemSize << ","
+					  << lastSignAdded << ","
+					  << processMemUsed << ","
+					  << databaseMemUsed << ","
+					  << dictionarySize << ","
+					  "\"" << param.c_str() << "\");";
+			}
+			else
+			{
+				query << "INSERT INTO Statistics(STM_size,last_sign_added,process_mem_used,database_mem_used,dictionary_size,parameters) values("
+					  << stMemSize << ","
+					  << lastSignAdded << ","
+					  << processMemUsed << ","
+					  << databaseMemUsed << ","
+					  << dictionarySize << ","
+					  "\"" << param.c_str() << "\");";
+			}
 		}
 		else
 		{
@@ -877,6 +933,13 @@ void DBDriver::addStatisticsAfterRun(
 
 		this->executeNoResultQuery(query.str());
 	}
+}
+
+void DBDriver::addStatistics(const Statistics & statistics) const
+{
+	_dbSafeAccessMutex.lock();
+	addStatisticsQuery(statistics);
+	_dbSafeAccessMutex.unlock();
 }
 
 void DBDriver::generateGraph(

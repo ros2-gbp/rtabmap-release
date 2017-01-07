@@ -46,12 +46,16 @@ class RTABMAPGUI_EXP StatItem : public QWidget
 	Q_OBJECT;
 
 public:
-	StatItem(const QString & name, const std::vector<float> & x, const std::vector<float> & y, const QString & unit = QString(), const QMenu * menu = 0, QGridLayout * grid = 0, QWidget * parent = 0);
+	StatItem(const QString & name, bool cacheOn, const std::vector<float> & x, const std::vector<float> & y, const QString & unit = QString(), const QMenu * menu = 0, QGridLayout * grid = 0, QWidget * parent = 0);
 	virtual ~StatItem();
 	void addValue(float y);
 	void addValue(float x, float y);
 	void setValues(const std::vector<float> & x, const std::vector<float> & y);
 	QString value() const;
+	std::vector<float> xValues() const {return _x;}
+	std::vector<float> yValues() const {return _y;}
+	void setCacheOn(bool on);
+	void clearCache();
 
 public slots:
 	void updateMenu(const QMenu * menu);
@@ -74,6 +78,10 @@ private:
 	QLabel * _value;
 	QLabel * _unit;
 	QMenu * _menu;
+
+	bool _cacheOn;
+	std::vector<float> _x;
+	std::vector<float> _y;
 };
 
 
@@ -88,14 +96,18 @@ public:
 	virtual ~StatsToolBox();
 
 	void getFiguresSetup(QList<int> & curvesPerFigure, QStringList & curveNames);
-	void addCurve(const QString & name, bool newFigure = true);
+	void addCurve(const QString & name, bool newFigure = true, bool cacheOn = false);
 	void setWorkingDirectory(const QString & workingDirectory);
+	void setNewFigureMaxItems(int value) {_newFigureMaxItems = value;}
 	void closeFigures();
+	void setCacheOn(bool on);
 
 public slots:
-	void updateStat(const QString & statFullName, float y);
-	void updateStat(const QString & statFullName, float x, float y);
-	void updateStat(const QString & statFullName, const std::vector<float> & x, const std::vector<float> & y);
+	void updateStat(const QString & statFullName, bool cacheOn);
+	void updateStat(const QString & statFullName, float y, bool cacheOn);
+	void updateStat(const QString & statFullName, float x, float y, bool cacheOn);
+	void updateStat(const QString & statFullName, const std::vector<float> & x, const std::vector<float> & y, bool cacheOn);
+	void clear();
 
 signals:
 	void menuChanged(const QMenu *);
@@ -112,6 +124,7 @@ private:
 	QMenu * _plotMenu;
 	QToolBox * _statBox;
 	QString _workingDirectory;
+	int _newFigureMaxItems;
 	QMap<QString, QWidget*> _figures;
 };
 
