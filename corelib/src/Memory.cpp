@@ -57,9 +57,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/core/Compression.h"
 #include "rtabmap/core/Graph.h"
 #include "rtabmap/core/Stereo.h"
-
 #include <pcl/io/pcd_io.h>
 #include <pcl/common/common.h>
+#include <rtabmap/core/OccupancyGrid.h>
 
 namespace rtabmap {
 
@@ -86,11 +86,13 @@ Memory::Memory(const ParametersMap & parameters) :
 	_imagePreDecimation(Parameters::defaultMemImagePreDecimation()),
 	_imagePostDecimation(Parameters::defaultMemImagePostDecimation()),
 	_laserScanDownsampleStepSize(Parameters::defaultMemLaserScanDownsampleStepSize()),
+	_laserScanNormalK(Parameters::defaultMemLaserScanNormalK()),
 	_reextractLoopClosureFeatures(Parameters::defaultRGBDLoopClosureReextractFeatures()),
 	_rehearsalMaxDistance(Parameters::defaultRGBDLinearUpdate()),
 	_rehearsalMaxAngle(Parameters::defaultRGBDAngularUpdate()),
 	_rehearsalWeightIgnoredWhileMoving(Parameters::defaultMemRehearsalWeightIgnoredWhileMoving()),
 	_useOdometryFeatures(Parameters::defaultMemUseOdomFeatures()),
+	_createOccupancyGrid(Parameters::defaultRGBDCreateOccupancyGrid()),
 	_idCount(kIdStart),
 	_idMapCount(kIdStart),
 	_lastSignature(0),
@@ -107,6 +109,7 @@ Memory::Memory(const ParametersMap & parameters) :
 	_vwd = new VWDictionary(parameters);
 	_registrationPipeline = Registration::create(parameters);
 	_registrationIcp = new RegistrationIcp(parameters);
+	_occupancy = new OccupancyGrid(parameters);
 	this->parseParameters(parameters);
 }
 
@@ -116,8 +119,6 @@ bool Memory::init(const std::string & dbUrl, bool dbOverwritten, const Parameter
 
 	UDEBUG("");
 	this->parseParameters(parameters);
-	bool loadAllNodesInWM = Parameters::defaultMemInitWMWithAllNodes();
-	Parameters::parse(parameters, Parameters::kMemInitWMWithAllNodes(), loadAllNodesInWM);
 
 	if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit("Clearing memory..."));
 	DBDriver * tmpDriver = 0;
@@ -148,7 +149,7 @@ bool Memory::init(const std::string & dbUrl, bool dbOverwritten, const Parameter
 		if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit("Closing database connection, done!"));
 	}
 
-	if(_dbDriver == 0 && !dbUrl.empty())
+	if(_dbDriver == 0)
 	{
 		_dbDriver = DBDriver::create(parameters);
 	}
@@ -158,82 +159,83 @@ bool Memory::init(const std::string & dbUrl, bool dbOverwritten, const Parameter
 	{
 		_dbDriver->setTimestampUpdateEnabled(true); // make sure that timestamp update is enabled (may be disabled above)
 		success = false;
-		if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(std::string("Connecting to database ") + dbUrl + "..."));
+		if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(std::string("Connecting to database \"") + dbUrl + "\"..."));
 		if(_dbDriver->openConnection(dbUrl, dbOverwritten))
 		{
 			success = true;
-			if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(std::string("Connecting to database ") + dbUrl + ", done!"));
-
-			// Load the last working memory...
-			std::list<Signature*> dbSignatures;
-
-			if(loadAllNodesInWM)
-			{
-				if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(std::string("Loading all nodes to WM...")));
-				std::set<int> ids;
-				_dbDriver->getAllNodeIds(ids, true);
-				_dbDriver->loadSignatures(std::list<int>(ids.begin(), ids.end()), dbSignatures);
-			}
-			else
-			{
-				// load previous session working memory
-				if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(std::string("Loading last nodes to WM...")));
-				_dbDriver->loadLastNodes(dbSignatures);
-			}
-			for(std::list<Signature*>::reverse_iterator iter=dbSignatures.rbegin(); iter!=dbSignatures.rend(); ++iter)
-			{
-				// ignore bad signatures
-				if(!((*iter)->isBadSignature() && _badSignaturesIgnored))
-				{
-					// insert all in WM
-					// Note: it doesn't make sense to keep last STM images
-					//       of the last session in the new STM because they can be
-					//       only linked with the ones of the current session by
-					//       global loop closures.
-					_signatures.insert(std::pair<int, Signature *>((*iter)->id(), *iter));
-					_workingMem.insert(std::make_pair((*iter)->id(), UTimer::now()));
-				}
-				else
-				{
-					delete *iter;
-				}
-			}
-			if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(std::string("Loading nodes to WM, done! (") + uNumber2Str(int(_workingMem.size() + _stMem.size())) + " loaded)"));
-
-			// Assign the last signature
-			if(_stMem.size()>0)
-			{
-				_lastSignature = uValue(_signatures, *_stMem.rbegin(), (Signature*)0);
-			}
-			else if(_workingMem.size()>0)
-			{
-				_lastSignature = uValue(_signatures, _workingMem.rbegin()->first, (Signature*)0);
-			}
-
-			// Last id
-			_dbDriver->getLastNodeId(_idCount);
-			_idMapCount = _lastSignature?_lastSignature->mapId()+1:kIdStart;
+			if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(std::string("Connecting to database \"") + dbUrl + "\", done!"));
 		}
 		else
 		{
 			if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(RtabmapEventInit::kError, std::string("Connecting to database ") + dbUrl + ", path is invalid!"));
 		}
 	}
-	else
-	{
-		_idCount = kIdStart;
-		_idMapCount = kIdStart;
-	}
 
-	_workingMem.insert(std::make_pair(kIdVirtual, 0));
+	loadDataFromDb(postInitClosingEvents);
 
-	UDEBUG("ids start with %d", _idCount+1);
-	UDEBUG("map ids start with %d", _idMapCount);
+	if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(RtabmapEventInit::kInitialized));
 
+	return success;
+}
 
-	// Now load the dictionary if we have a connection
+void Memory::loadDataFromDb(bool postInitClosingEvents)
+{
 	if(_dbDriver && _dbDriver->isConnected())
 	{
+		bool loadAllNodesInWM = Parameters::defaultMemInitWMWithAllNodes();
+		Parameters::parse(parameters_, Parameters::kMemInitWMWithAllNodes(), loadAllNodesInWM);
+
+		// Load the last working memory...
+		std::list<Signature*> dbSignatures;
+
+		if(loadAllNodesInWM)
+		{
+			if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(std::string("Loading all nodes to WM...")));
+			std::set<int> ids;
+			_dbDriver->getAllNodeIds(ids, true);
+			_dbDriver->loadSignatures(std::list<int>(ids.begin(), ids.end()), dbSignatures);
+		}
+		else
+		{
+			// load previous session working memory
+			if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(std::string("Loading last nodes to WM...")));
+			_dbDriver->loadLastNodes(dbSignatures);
+		}
+		for(std::list<Signature*>::reverse_iterator iter=dbSignatures.rbegin(); iter!=dbSignatures.rend(); ++iter)
+		{
+			// ignore bad signatures
+			if(!((*iter)->isBadSignature() && _badSignaturesIgnored))
+			{
+				// insert all in WM
+				// Note: it doesn't make sense to keep last STM images
+				//       of the last session in the new STM because they can be
+				//       only linked with the ones of the current session by
+				//       global loop closures.
+				_signatures.insert(std::pair<int, Signature *>((*iter)->id(), *iter));
+				_workingMem.insert(std::make_pair((*iter)->id(), UTimer::now()));
+			}
+			else
+			{
+				delete *iter;
+			}
+		}
+		if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(std::string("Loading nodes to WM, done! (") + uNumber2Str(int(_workingMem.size() + _stMem.size())) + " loaded)"));
+
+		// Assign the last signature
+		if(_stMem.size()>0)
+		{
+			_lastSignature = uValue(_signatures, *_stMem.rbegin(), (Signature*)0);
+		}
+		else if(_workingMem.size()>0)
+		{
+			_lastSignature = uValue(_signatures, _workingMem.rbegin()->first, (Signature*)0);
+		}
+
+		// Last id
+		_dbDriver->getLastNodeId(_idCount);
+		_idMapCount = _lastSignature?_lastSignature->mapId()+1:kIdStart;
+
+		// Now load the dictionary if we have a connection
 		if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit("Loading dictionary..."));
 		if(loadAllNodesInWM)
 		{
@@ -268,45 +270,58 @@ bool Memory::init(const std::string & dbUrl, bool dbOverwritten, const Parameter
 		UDEBUG("%d words loaded!", _vwd->getUnusedWordsSize());
 		_vwd->update();
 		if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(uFormat("Loading dictionary, done! (%d words)", (int)_vwd->getUnusedWordsSize())));
-	}
 
-	if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(std::string("Adding word references...")));
-	// Enable loaded signatures
-	const std::map<int, Signature *> & signatures = this->getSignatures();
-	for(std::map<int, Signature *>::const_iterator i=signatures.begin(); i!=signatures.end(); ++i)
-	{
-		Signature * s = this->_getSignature(i->first);
-		UASSERT(s != 0);
-
-		const std::multimap<int, cv::KeyPoint> & words = s->getWords();
-		if(words.size())
+		if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(std::string("Adding word references...")));
+		// Enable loaded signatures
+		const std::map<int, Signature *> & signatures = this->getSignatures();
+		for(std::map<int, Signature *>::const_iterator i=signatures.begin(); i!=signatures.end(); ++i)
 		{
-			UDEBUG("node=%d, word references=%d", s->id(), words.size());
-			for(std::multimap<int, cv::KeyPoint>::const_iterator iter = words.begin(); iter!=words.end(); ++iter)
+			Signature * s = this->_getSignature(i->first);
+			UASSERT(s != 0);
+
+			const std::multimap<int, cv::KeyPoint> & words = s->getWords();
+			if(words.size())
 			{
-				_vwd->addWordRef(iter->first, i->first);
+				UDEBUG("node=%d, word references=%d", s->id(), words.size());
+				for(std::multimap<int, cv::KeyPoint>::const_iterator iter = words.begin(); iter!=words.end(); ++iter)
+				{
+					_vwd->addWordRef(iter->first, i->first);
+				}
+				s->setEnabled(true);
 			}
-			s->setEnabled(true);
 		}
-	}
-	if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(uFormat("Adding word references, done! (%d)", _vwd->getTotalActiveReferences())));
+		if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(uFormat("Adding word references, done! (%d)", _vwd->getTotalActiveReferences())));
 
-	if(_vwd->getUnusedWordsSize())
+		if(_vwd->getUnusedWordsSize())
+		{
+			UWARN("_vwd->getUnusedWordsSize() must be empty... size=%d", _vwd->getUnusedWordsSize());
+		}
+		UDEBUG("Total word references added = %d", _vwd->getTotalActiveReferences());
+	}
+	else
 	{
-		UWARN("_vwd->getUnusedWordsSize() must be empty... size=%d", _vwd->getUnusedWordsSize());
+		_idCount = kIdStart;
+		_idMapCount = kIdStart;
 	}
-	UDEBUG("Total word references added = %d", _vwd->getTotalActiveReferences());
 
-	if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(RtabmapEventInit::kInitialized));
-	return success;
+	_workingMem.insert(std::make_pair(kIdVirtual, 0));
+
+	UDEBUG("ids start with %d", _idCount+1);
+	UDEBUG("map ids start with %d", _idMapCount);
 }
 
-void Memory::close(bool databaseSaved, bool postInitClosingEvents)
+void Memory::close(bool databaseSaved, bool postInitClosingEvents, const std::string & ouputDatabasePath)
 {
 	UINFO("databaseSaved=%d, postInitClosingEvents=%d", databaseSaved?1:0, postInitClosingEvents?1:0);
 	if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(RtabmapEventInit::kClosing));
 
-	if(!databaseSaved || (!_memoryChanged && !_linksChanged))
+	bool databaseNameChanged = false;
+	if(databaseSaved)
+	{
+		databaseNameChanged = ouputDatabasePath.size() && _dbDriver->getUrl().size() && _dbDriver->getUrl().compare(ouputDatabasePath) != 0?true:false;
+	}
+
+	if(!databaseSaved || (!_memoryChanged && !_linksChanged && !databaseNameChanged))
 	{
 		if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(uFormat("No changes added to database.")));
 
@@ -314,7 +329,7 @@ void Memory::close(bool databaseSaved, bool postInitClosingEvents)
 		if(_dbDriver)
 		{
 			if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(uFormat("Closing database \"%s\"...", _dbDriver->getUrl().c_str())));
-			_dbDriver->closeConnection(false);
+			_dbDriver->closeConnection(false, ouputDatabasePath);
 			delete _dbDriver;
 			_dbDriver = 0;
 			if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit("Closing database, done!"));
@@ -339,7 +354,7 @@ void Memory::close(bool databaseSaved, bool postInitClosingEvents)
 			_dbDriver->emptyTrashes();
 			if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit("Saving memory, done!"));
 			if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(uFormat("Closing database \"%s\"...", _dbDriver->getUrl().c_str())));
-			_dbDriver->closeConnection();
+			_dbDriver->closeConnection(true, ouputDatabasePath);
 			delete _dbDriver;
 			_dbDriver = 0;
 			if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit("Closing database, done!"));
@@ -376,6 +391,10 @@ Memory::~Memory()
 	{
 		delete _registrationIcp;
 	}
+	if(_occupancy)
+	{
+		delete _occupancy;
+	}
 }
 
 void Memory::parseParameters(const ParametersMap & parameters)
@@ -401,17 +420,25 @@ void Memory::parseParameters(const ParametersMap & parameters)
 	Parameters::parse(parameters, Parameters::kMemImagePreDecimation(), _imagePreDecimation);
 	Parameters::parse(parameters, Parameters::kMemImagePostDecimation(), _imagePostDecimation);
 	Parameters::parse(parameters, Parameters::kMemLaserScanDownsampleStepSize(), _laserScanDownsampleStepSize);
+	Parameters::parse(parameters, Parameters::kMemLaserScanNormalK(), _laserScanNormalK);
 	Parameters::parse(parameters, Parameters::kRGBDLoopClosureReextractFeatures(), _reextractLoopClosureFeatures);
 	Parameters::parse(parameters, Parameters::kRGBDLinearUpdate(), _rehearsalMaxDistance);
 	Parameters::parse(parameters, Parameters::kRGBDAngularUpdate(), _rehearsalMaxAngle);
 	Parameters::parse(parameters, Parameters::kMemRehearsalWeightIgnoredWhileMoving(), _rehearsalWeightIgnoredWhileMoving);
 	Parameters::parse(parameters, Parameters::kMemUseOdomFeatures(), _useOdometryFeatures);
+	Parameters::parse(parameters, Parameters::kRGBDCreateOccupancyGrid(), _createOccupancyGrid);
 
 	UASSERT_MSG(_maxStMemSize >= 0, uFormat("value=%d", _maxStMemSize).c_str());
 	UASSERT_MSG(_similarityThreshold >= 0.0f && _similarityThreshold <= 1.0f, uFormat("value=%f", _similarityThreshold).c_str());
 	UASSERT_MSG(_recentWmRatio >= 0.0f && _recentWmRatio <= 1.0f, uFormat("value=%f", _recentWmRatio).c_str());
-	UASSERT(_imagePreDecimation >= 1);
-	UASSERT(_imagePostDecimation >= 1);
+	if(_imagePreDecimation == 0)
+	{
+		_imagePreDecimation = 1;
+	}
+	if(_imagePostDecimation == 0)
+	{
+		_imagePostDecimation = 1;
+	}
 	UASSERT(_rehearsalMaxDistance >= 0.0f);
 	UASSERT(_rehearsalMaxAngle >= 0.0f);
 
@@ -479,6 +506,11 @@ void Memory::parseParameters(const ParametersMap & parameters)
 		_registrationIcp->parseParameters(parameters);
 	}
 
+	if(_occupancy)
+	{
+		_occupancy->parseParameters(parameters);
+	}
+
 	// do this after all parameters are parsed
 	// SLAM mode vs Localization mode
 	iter = parameters.find(Parameters::kMemIncrementalMemory());
@@ -495,7 +527,12 @@ void Memory::parseParameters(const ParametersMap & parameters)
 			if((_memoryChanged || _linksChanged) && _dbDriver)
 			{
 				UWARN("Switching from Mapping to Localization mode, the database will be saved and reloaded.");
-				this->init(_dbDriver->getUrl());
+				bool memoryChanged = _memoryChanged;
+				bool linksChanged = _linksChanged;
+				this->clear();
+				_memoryChanged = memoryChanged;
+				_linksChanged = linksChanged;
+				this->loadDataFromDb(false);
 				UWARN("Switching from Mapping to Localization mode, the database is reloaded!");
 			}
 		}
@@ -1270,13 +1307,15 @@ void Memory::clear()
 		UDEBUG("Adding statistics after run...");
 		if(_memoryChanged)
 		{
+			ParametersMap parameters = Parameters::getDefaultParameters();
+			uInsert(parameters, parameters_);
 			UDEBUG("");
-			_dbDriver->addStatisticsAfterRun(memSize,
+			_dbDriver->addInfoAfterRun(memSize,
 					_lastSignature?_lastSignature->id():0,
 					UProcessInfo::getMemoryUsage(),
 					_dbDriver->getMemoryUsed(),
 					(int)_vwd->getVisualWords().size(),
-					parameters_);
+					parameters);
 		}
 	}
 	UDEBUG("");
@@ -1566,6 +1605,14 @@ int Memory::cleanup()
 	}
 
 	return signatureRemoved;
+}
+
+void Memory::saveStatistics(const Statistics & statistics)
+{
+	if(_dbDriver)
+	{
+		_dbDriver->addStatistics(statistics);
+	}
 }
 
 void Memory::emptyTrash()
@@ -2049,7 +2096,7 @@ void Memory::removeRawData(int id, bool image, bool scan, bool userData)
 		}
 		if(scan && !_registrationPipeline->isScanRequired())
 		{
-			s->sensorData().setLaserScanRaw(cv::Mat(), s->sensorData().laserScanMaxPts(), s->sensorData().laserScanMaxRange());
+			s->sensorData().setLaserScanRaw(cv::Mat(), s->sensorData().laserScanInfo());
 		}
 		if(userData && !_registrationPipeline->isUserDataRequired())
 		{
@@ -2063,7 +2110,8 @@ Transform Memory::computeTransform(
 		int fromId,
 		int toId,
 		Transform guess,
-		RegistrationInfo * info)
+		RegistrationInfo * info,
+		bool useKnownCorrespondencesIfPossible)
 {
 	Signature * fromS = this->_getSignature(fromId);
 	Signature * toS = this->_getSignature(toId);
@@ -2072,7 +2120,7 @@ Transform Memory::computeTransform(
 
 	if(fromS && toS)
 	{
-		return computeTransform(*fromS, *toS, guess, info);
+		return computeTransform(*fromS, *toS, guess, info, useKnownCorrespondencesIfPossible);
 	}
 	else
 	{
@@ -2091,19 +2139,20 @@ Transform Memory::computeTransform(
 		Signature & fromS,
 		Signature & toS,
 		Transform guess,
-		RegistrationInfo * info) const
+		RegistrationInfo * info,
+		bool useKnownCorrespondencesIfPossible) const
 {
 	Transform transform;
 
 	// make sure we have all data needed
 	// load binary data from database if not in RAM (if image is already here, scan and userData should be or they are null)
-	if((_reextractLoopClosureFeatures && _registrationPipeline->isImageRequired() && fromS.sensorData().imageCompressed().empty()) ||
+	if(((_reextractLoopClosureFeatures && _registrationPipeline->isImageRequired()) && fromS.sensorData().imageCompressed().empty()) ||
 	   (_registrationPipeline->isScanRequired() && fromS.sensorData().imageCompressed().empty() && fromS.sensorData().laserScanCompressed().empty()) ||
 	   (_registrationPipeline->isUserDataRequired() && fromS.sensorData().imageCompressed().empty() && fromS.sensorData().userDataCompressed().empty()))
 	{
 		fromS.sensorData() = getNodeData(fromS.id());
 	}
-	if((_reextractLoopClosureFeatures && _registrationPipeline->isImageRequired() && toS.sensorData().imageCompressed().empty()) ||
+	if(((_reextractLoopClosureFeatures && _registrationPipeline->isImageRequired()) && toS.sensorData().imageCompressed().empty()) ||
 	   (_registrationPipeline->isScanRequired() && toS.sensorData().imageCompressed().empty() && toS.sensorData().laserScanCompressed().empty()) ||
 	   (_registrationPipeline->isUserDataRequired() && toS.sensorData().imageCompressed().empty() && toS.sensorData().userDataCompressed().empty()))
 	{
@@ -2125,24 +2174,30 @@ Transform Memory::computeTransform(
 
 	// compute transform fromId -> toId
 	std::vector<int> inliersV;
-	if(_reextractLoopClosureFeatures ||
+	if((_reextractLoopClosureFeatures && _registrationPipeline->isImageRequired()) ||
 		(fromS.getWords().size() && toS.getWords().size()) ||
 		(!guess.isNull() && !_registrationPipeline->isImageRequired()))
 	{
 		Signature tmpFrom = fromS;
 		Signature tmpTo = toS;
 
-		if(_reextractLoopClosureFeatures)
+		if(_reextractLoopClosureFeatures && _registrationPipeline->isImageRequired())
 		{
 			UDEBUG("");
 			tmpFrom.setWords(std::multimap<int, cv::KeyPoint>());
 			tmpFrom.setWords3(std::multimap<int, cv::Point3f>());
 			tmpFrom.setWordsDescriptors(std::multimap<int, cv::Mat>());
-			tmpFrom.sensorData().setFeatures(std::vector<cv::KeyPoint>(), cv::Mat());
+			tmpFrom.sensorData().setFeatures(std::vector<cv::KeyPoint>(), std::vector<cv::Point3f>(), cv::Mat());
 			tmpTo.setWords(std::multimap<int, cv::KeyPoint>());
 			tmpTo.setWords3(std::multimap<int, cv::Point3f>());
 			tmpTo.setWordsDescriptors(std::multimap<int, cv::Mat>());
-			tmpTo.sensorData().setFeatures(std::vector<cv::KeyPoint>(), cv::Mat());
+			tmpTo.sensorData().setFeatures(std::vector<cv::KeyPoint>(), std::vector<cv::Point3f>(), cv::Mat());
+		}
+		else if(useKnownCorrespondencesIfPossible)
+		{
+			// This will make RegistrationVis bypassing the correspondences computation
+			tmpFrom.setWordsDescriptors(std::multimap<int, cv::Mat>());
+			tmpTo.setWordsDescriptors(std::multimap<int, cv::Mat>());
 		}
 
 		if(guess.isNull() && !_registrationPipeline->isImageRequired())
@@ -2153,12 +2208,12 @@ Transform Memory::computeTransform(
 			guess = regVis.computeTransformation(tmpFrom, tmpTo, guess, info);
 			if(!guess.isNull())
 			{
-				transform = _registrationPipeline->computeTransformation(tmpFrom, tmpTo, guess, info);
+				transform = _registrationPipeline->computeTransformationMod(tmpFrom, tmpTo, guess, info);
 			}
 		}
 		else
 		{
-			transform = _registrationPipeline->computeTransformation(tmpFrom, tmpTo, guess, info);
+			transform = _registrationPipeline->computeTransformationMod(tmpFrom, tmpTo, guess, info);
 		}
 
 		if(!transform.isNull())
@@ -2179,6 +2234,14 @@ Transform Memory::computeTransform(
 				{
 					info->rejectedMsg = msg;
 				}
+			}
+			else if(info && !transform.isIdentity())
+			{
+				//normalize variance
+				info->varianceLin *= transform.getNorm();
+				info->varianceAng *= transform.getAngle();
+				info->varianceLin = info->varianceLin>0.0f?info->varianceLin:0.0001f; // epsilon if exact transform
+				info->varianceAng = info->varianceAng>0.0f?info->varianceAng:0.0001f; // epsilon if exact transform
 			}
 		}
 	}
@@ -2227,6 +2290,15 @@ Transform Memory::computeIcpTransform(
 		// compute transform fromId -> toId
 		std::vector<int> inliersV;
 		t = _registrationIcp->computeTransformation(fromS->sensorData(), toS->sensorData(), guess, info);
+
+		if(!t.isNull() && !t.isIdentity() && info)
+		{
+			// normalize variance
+			info->varianceLin *= t.getNorm();
+			info->varianceAng *= t.getAngle();
+			info->varianceLin = info->varianceLin>0.0f?info->varianceLin:0.0001f; // epsilon if exact transform
+			info->varianceAng = info->varianceAng>0.0f?info->varianceAng:0.0001f; // epsilon if exact transform
+		}
 	}
 	else
 	{
@@ -2292,7 +2364,9 @@ Transform Memory::computeIcpTransformMulti(
 				{
 					cv::Mat scan;
 					s->sensorData().uncompressData(0, 0, &scan);
-					pcl::PointCloud<pcl::PointXYZ>::Ptr cloud = util3d::laserScanToPointCloud(scan, toPose.inverse() * iter->second);
+					pcl::PointCloud<pcl::PointXYZ>::Ptr cloud = util3d::laserScanToPointCloud(
+							scan,
+							s->sensorData().laserScanInfo().localTransform() * toPose.inverse() * iter->second);
 					if(scan.cols > maxPoints)
 					{
 						maxPoints = scan.cols;
@@ -2307,7 +2381,12 @@ Transform Memory::computeIcpTransformMulti(
 		}
 		if(assembledToClouds->size())
 		{
-			assembledData.setLaserScanRaw(util3d::laserScanFromPointCloud(*assembledToClouds, Transform()), fromS->sensorData().laserScanMaxPts()?fromS->sensorData().laserScanMaxPts():maxPoints, fromS->sensorData().laserScanMaxRange());
+			assembledData.setLaserScanRaw(
+					util3d::laserScanFromPointCloud(*assembledToClouds),
+					LaserScanInfo(
+							fromS->sensorData().laserScanInfo().maxPoints()?fromS->sensorData().laserScanInfo().maxPoints():maxPoints,
+							fromS->sensorData().laserScanInfo().maxRange(),
+							Transform::getIdentity())); // scans are in base frame
 		}
 
 		Transform guess = poses.at(fromId).inverse() * poses.at(toId);
@@ -2403,54 +2482,63 @@ bool Memory::addLink(const Link & link, bool addInDatabase)
 	return true;
 }
 
-void Memory::updateLink(int fromId, int toId, const Transform & transform, float rotVariance, float transVariance)
+void Memory::updateLink(const Link & link, bool updateInDatabase)
 {
-	Signature * fromS = this->_getSignature(fromId);
-	Signature * toS = this->_getSignature(toId);
+	Signature * fromS = this->_getSignature(link.from());
+	Signature * toS = this->_getSignature(link.to());
 
-	if(fromS->hasLink(toId) && toS->hasLink(fromId))
+	if(fromS && toS)
 	{
-		Link::Type type = fromS->getLinks().at(toId).type();
-		fromS->removeLink(toId);
-		toS->removeLink(fromId);
-
-		fromS->addLink(Link(fromId, toId, type, transform, rotVariance, transVariance));
-		toS->addLink(Link(toId, fromId, type, transform.inverse(), rotVariance, transVariance));
-
-		if(type!=Link::kVirtualClosure)
+		if(fromS->hasLink(link.to()) && toS->hasLink(link.from()))
 		{
-			_linksChanged = true;
+			Link::Type oldType = fromS->getLinks().at(link.to()).type();
+
+			fromS->removeLink(link.to());
+			toS->removeLink(link.from());
+
+			fromS->addLink(link);
+			toS->addLink(link.inverse());
+
+			if(oldType!=Link::kVirtualClosure || link.type()!=Link::kVirtualClosure)
+			{
+				_linksChanged = true;
+			}
 		}
+		else
+		{
+			UERROR("fromId=%d and toId=%d are not linked!", link.from(), link.to());
+		}
+	}
+	else if(!updateInDatabase)
+	{
+		if(!fromS)
+		{
+			UERROR("from=%d, to=%d, Signature %d not found in working/st memories", link.from(), link.to(), link.from());
+		}
+		if(!toS)
+		{
+			UERROR("from=%d, to=%d, Signature %d not found in working/st memories", link.from(), link.to(), link.to());
+		}
+	}
+	else if(fromS)
+	{
+		UDEBUG("Update link between %d and %d (db)", link.from(), link.to());
+		fromS->removeLink(link.to());
+		fromS->addLink(link);
+		_dbDriver->updateLink(link.inverse());
+	}
+	else if(toS)
+	{
+		UDEBUG("Update link between %d (db) and %d", link.from(), link.to());
+		toS->removeLink(link.from());
+		toS->addLink(link.inverse());
+		_dbDriver->updateLink(link);
 	}
 	else
 	{
-		UERROR("fromId=%d and toId=%d are not linked!", fromId, toId);
-	}
-}
-
-void Memory::updateLink(int fromId, int toId, const Transform & transform, const cv::Mat & covariance)
-{
-	Signature * fromS = this->_getSignature(fromId);
-	Signature * toS = this->_getSignature(toId);
-
-	if(fromS->hasLink(toId) && toS->hasLink(fromId))
-	{
-		Link::Type type = fromS->getLinks().at(toId).type();
-		fromS->removeLink(toId);
-		toS->removeLink(fromId);
-
-		cv::Mat infMatrix  = covariance.inv();
-		fromS->addLink(Link(fromId, toId, type, transform, infMatrix));
-		toS->addLink(Link(toId, fromId, type, transform.inverse(), infMatrix));
-
-		if(type!=Link::kVirtualClosure)
-		{
-			_linksChanged = true;
-		}
-	}
-	else
-	{
-		UERROR("fromId=%d and toId=%d are not linked!", fromId, toId);
+		UDEBUG("Update link between %d (db) and %d (db)", link.from(), link.to());
+		_dbDriver->updateLink(link);
+		_dbDriver->updateLink(link.inverse());
 	}
 }
 
@@ -2972,52 +3060,23 @@ void Memory::getNodeCalibration(int nodeId,
 	}
 }
 
-SensorData Memory::getSignatureDataConst(int locationId) const
+SensorData Memory::getSignatureDataConst(int locationId,
+		bool images, bool scan, bool userData, bool occupancyGrid) const
 {
 	UDEBUG("");
 	SensorData r;
 	const Signature * s = this->getSignature(locationId);
-	if(s && !s->sensorData().imageCompressed().empty())
+	if(s && (!s->sensorData().imageCompressed().empty() ||
+			!s->sensorData().laserScanCompressed().empty() ||
+			!s->sensorData().userDataCompressed().empty() ||
+			s->sensorData().gridCellSize() != 0.0f))
 	{
 		r = s->sensorData();
 	}
 	else if(_dbDriver)
 	{
 		// load from database
-		if(s)
-		{
-			std::list<Signature*> signatures;
-			Signature tmp = *s;
-			signatures.push_back(&tmp);
-			_dbDriver->loadNodeData(signatures);
-			r = tmp.sensorData();
-		}
-		else
-		{
-			std::list<int> ids;
-			ids.push_back(locationId);
-			std::list<Signature*> signatures;
-			std::set<int> loadedFromTrash;
-			_dbDriver->loadSignatures(ids, signatures, &loadedFromTrash);
-			if(signatures.size())
-			{
-				Signature * sTmp = signatures.front();
-				if(sTmp->sensorData().imageCompressed().empty())
-				{
-					_dbDriver->loadNodeData(signatures);
-				}
-				r = sTmp->sensorData();
-				if(loadedFromTrash.size())
-				{
-					//put it back to trash
-					_dbDriver->asyncSave(sTmp);
-				}
-				else
-				{
-					delete sTmp;
-				}
-			}
-		}
+		_dbDriver->getNodeData(locationId, r, images, scan, userData, occupancyGrid);
 	}
 
 	return r;
@@ -3121,7 +3180,7 @@ Signature * Memory::createSignature(const SensorData & data, const Transform & p
 						data.depthOrRightRaw().rows,
 						data.depthOrRightRaw().type(),
 						CV_16UC1, CV_32FC1, CV_8UC1).c_str());
-	UASSERT(data.laserScanRaw().empty() || data.laserScanRaw().type() == CV_32FC2 || data.laserScanRaw().type() == CV_32FC3 || data.laserScanRaw().type() == CV_32FC(6));
+	UASSERT(data.laserScanRaw().empty() || data.laserScanRaw().type() == CV_32FC2 || data.laserScanRaw().type() == CV_32FC3 || data.laserScanRaw().type() == CV_32FC(4) || data.laserScanRaw().type() == CV_32FC(6));
 
 	if(!data.depthOrRightRaw().empty() &&
 		data.cameraModels().size() == 0 &&
@@ -3275,14 +3334,19 @@ Signature * Memory::createSignature(const SensorData & data, const Transform & p
 	{
 		UINFO("Use odometry features");
 		keypoints = data.keypoints();
+		keypoints3D = data.keypoints3D();
 		descriptors = data.descriptors().clone();
 
 		UASSERT(descriptors.empty() || descriptors.rows == (int)keypoints.size());
+		UASSERT(keypoints3D.empty() || keypoints3D.size() == keypoints.size());
 
 		if((int)keypoints.size() > _feature2D->getMaxFeatures())
 		{
-			_feature2D->limitKeypoints(keypoints, descriptors, _feature2D->getMaxFeatures());
+			_feature2D->limitKeypoints(keypoints, keypoints3D, descriptors, _feature2D->getMaxFeatures());
 		}
+		t = timer.ticks();
+		if(stats) stats->addStatistic(Statistics::kTimingMemKeypoints_detection(), t*1000.0f);
+		UDEBUG("time keypoints (%d) = %fs", (int)keypoints.size(), t);
 
 		if(descriptors.empty())
 		{
@@ -3297,13 +3361,14 @@ Signature * Memory::createSignature(const SensorData & data, const Transform & p
 			}
 
 			descriptors = _feature2D->generateDescriptors(imageMono, keypoints);
-			t = timer.ticks();
-			if(stats) stats->addStatistic(Statistics::kTimingMemDescriptors_extraction(), t*1000.0f);
-			UDEBUG("time descriptors (%d) = %fs", descriptors.rows, t);
 		}
+		t = timer.ticks();
+		if(stats) stats->addStatistic(Statistics::kTimingMemDescriptors_extraction(), t*1000.0f);
+		UDEBUG("time descriptors (%d) = %fs", descriptors.rows, t);
 
-		if((!data.depthRaw().empty() && data.cameraModels().size() && data.cameraModels()[0].isValidForProjection()) ||
-		   (!data.rightRaw().empty() && data.stereoCameraModel().isValidForProjection()))
+		if(keypoints3D.empty() &&
+			((!data.depthRaw().empty() && data.cameraModels().size() && data.cameraModels()[0].isValidForProjection()) ||
+		   (!data.rightRaw().empty() && data.stereoCameraModel().isValidForProjection())))
 		{
 			keypoints3D = _feature2D->generateKeypoints3D(data, keypoints);
 			if(_feature2D->getMinDepth() > 0.0f || _feature2D->getMaxDepth() > 0.0f)
@@ -3334,10 +3399,10 @@ Signature * Memory::createSignature(const SensorData & data, const Transform & p
 				keypoints3D = validKeypoints3D;
 				descriptors = validDescriptors.rowRange(0, oi).clone();
 			}
-			t = timer.ticks();
-			if(stats) stats->addStatistic(Statistics::kTimingMemKeypoints_3D(), t*1000.0f);
-			UDEBUG("time keypoints 3D (%d) = %fs", (int)keypoints3D.size(), t);
 		}
+		t = timer.ticks();
+		if(stats) stats->addStatistic(Statistics::kTimingMemKeypoints_3D(), t*1000.0f);
+		UDEBUG("time keypoints 3D (%d) = %fs", (int)keypoints3D.size(), t);
 
 		UDEBUG("ratio=%f, meanWordsPerLocation=%d", _badSignRatio, meanWordsPerLocation);
 		if(descriptors.rows && descriptors.rows < _badSignRatio * float(meanWordsPerLocation))
@@ -3414,52 +3479,41 @@ Signature * Memory::createSignature(const SensorData & data, const Transform & p
 	if(!pose.isNull() &&
 		data.cameraModels().size() == 1 &&
 		words.size() &&
-		words3D.size() == 0)
+		words3D.size() == 0 &&
+		_signatures.size() &&
+		_signatures.rbegin()->second->mapId() == _idMapCount) // same map
 	{
-		bool fillWithNaN = true;
-		if(_signatures.size())
+		UDEBUG("Generate 3D words using odometry");
+		Signature * previousS = _signatures.rbegin()->second;
+		if(previousS->getWords().size() > 8 && words.size() > 8 && !previousS->getPose().isNull())
 		{
-			UDEBUG("Generate 3D words using odometry");
-			Signature * previousS = _signatures.rbegin()->second;
-			if(previousS->getWords().size() > 8 && words.size() > 8 && !previousS->getPose().isNull())
-			{
-				Transform cameraTransform = pose.inverse() * previousS->getPose();
-				// compute 3D words by epipolar geometry with the previous signature
-				std::map<int, cv::Point3f> inliers = util3d::generateWords3DMono(
-						uMultimapToMapUnique(words),
-						uMultimapToMapUnique(previousS->getWords()),
-						data.cameraModels()[0],
-						cameraTransform);
+			Transform cameraTransform = pose.inverse() * previousS->getPose();
+			// compute 3D words by epipolar geometry with the previous signature
+			std::map<int, cv::Point3f> inliers = util3d::generateWords3DMono(
+					uMultimapToMapUnique(words),
+					uMultimapToMapUnique(previousS->getWords()),
+					data.cameraModels()[0],
+					cameraTransform);
 
-				// words3D should have the same size than words
-				float bad_point = std::numeric_limits<float>::quiet_NaN ();
-				for(std::multimap<int, cv::KeyPoint>::const_iterator iter=words.begin(); iter!=words.end(); ++iter)
-				{
-					std::map<int, cv::Point3f>::iterator jter=inliers.find(iter->first);
-					if(jter != inliers.end())
-					{
-						words3D.insert(std::make_pair(iter->first, jter->second));
-					}
-					else
-					{
-						words3D.insert(std::make_pair(iter->first, cv::Point3f(bad_point,bad_point,bad_point)));
-					}
-				}
-
-				t = timer.ticks();
-				UASSERT(words3D.size() == words.size());
-				if(stats) stats->addStatistic(Statistics::kTimingMemKeypoints_3D(), t*1000.0f);
-				UDEBUG("time keypoints 3D (%d) = %fs", (int)words3D.size(), t);
-				fillWithNaN = false;
-			}
-		}
-		if(fillWithNaN)
-		{
+			// words3D should have the same size than words
 			float bad_point = std::numeric_limits<float>::quiet_NaN ();
 			for(std::multimap<int, cv::KeyPoint>::const_iterator iter=words.begin(); iter!=words.end(); ++iter)
 			{
-				words3D.insert(std::make_pair(iter->first, cv::Point3f(bad_point,bad_point,bad_point)));
+				std::map<int, cv::Point3f>::iterator jter=inliers.find(iter->first);
+				if(jter != inliers.end())
+				{
+					words3D.insert(std::make_pair(iter->first, jter->second));
+				}
+				else
+				{
+					words3D.insert(std::make_pair(iter->first, cv::Point3f(bad_point,bad_point,bad_point)));
+				}
 			}
+
+			t = timer.ticks();
+			UASSERT(words3D.size() == words.size());
+			if(stats) stats->addStatistic(Statistics::kTimingMemKeypoints_3D(), t*1000.0f);
+			UDEBUG("time keypoints 3D (%d) = %fs", (int)words3D.size(), t);
 		}
 	}
 
@@ -3469,7 +3523,7 @@ Signature * Memory::createSignature(const SensorData & data, const Transform & p
 	StereoCameraModel stereoCameraModel = data.stereoCameraModel();
 
 	// apply decimation?
-	if(_imagePostDecimation > 1)
+	if(_imagePostDecimation > 1 && !isIntermediateNode)
 	{
 		image = util2d::decimate(image, _imagePostDecimation);
 		depthOrRightImage = util2d::decimate(depthOrRightImage, _imagePostDecimation);
@@ -3481,19 +3535,38 @@ Signature * Memory::createSignature(const SensorData & data, const Transform & p
 		{
 			stereoCameraModel.scale(1.0/double(_imagePostDecimation));
 		}
+
+		t = timer.ticks();
+		if(stats) stats->addStatistic(Statistics::kTimingMemPost_decimation(), t*1000.0f);
+		UDEBUG("time post-decimation = %fs", t);
 	}
 
 	// downsampling the laser scan?
 	cv::Mat laserScan = data.laserScanRaw();
-	int maxLaserScanMaxPts = data.laserScanMaxPts();
-	if(!laserScan.empty() && _laserScanDownsampleStepSize > 1)
+	int maxLaserScanMaxPts = data.laserScanInfo().maxPoints();
+	if(!laserScan.empty() && _laserScanDownsampleStepSize > 1 && !isIntermediateNode)
 	{
 		laserScan = util3d::downsample(laserScan, _laserScanDownsampleStepSize);
 		maxLaserScanMaxPts /= _laserScanDownsampleStepSize;
+
+		t = timer.ticks();
+		if(stats) stats->addStatistic(Statistics::kTimingMemScan_downsampling(), t*1000.0f);
+		UDEBUG("time downsampling scan = %fs", t);
+	}
+	if(!laserScan.empty() && _laserScanNormalK > 0 && laserScan.channels() == 3 && !isIntermediateNode)
+	{
+		pcl::PointCloud<pcl::PointXYZ>::Ptr cloud = util3d::laserScanToPointCloud(laserScan);
+		float x,y,z;
+		data.laserScanInfo().localTransform().getTranslation(x,y,z);
+		pcl::PointCloud<pcl::Normal>::Ptr normals = util3d::computeNormals(cloud, _laserScanNormalK, Eigen::Vector3f(x,y,z));
+		laserScan = util3d::laserScanFromPointCloud(*cloud, *normals);
+		t = timer.ticks();
+		if(stats) stats->addStatistic(Statistics::kTimingMemScan_normals(), t*1000.0f);
+		UDEBUG("time normals scan = %fs", t);
 	}
 
 	Signature * s;
-	if(this->isBinDataKept())
+	if(this->isBinDataKept() && !isIntermediateNode)
 	{
 		UDEBUG("Bin data kept: rgb=%d, depth=%d, scan=%d, userData=%d",
 				image.empty()?0:1,
@@ -3514,10 +3587,22 @@ Signature * Memory::createSignature(const SensorData & data, const Transform & p
 		rtabmap::CompressionThread ctDepth(depthOrRightImage, std::string(".png"));
 		rtabmap::CompressionThread ctLaserScan(laserScan);
 		rtabmap::CompressionThread ctUserData(data.userDataRaw());
-		ctImage.start();
-		ctDepth.start();
-		ctLaserScan.start();
-		ctUserData.start();
+		if(!image.empty())
+		{
+			ctImage.start();
+		}
+		if(!depthOrRightImage.empty())
+		{
+			ctDepth.start();
+		}
+		if(!laserScan.empty())
+		{
+			ctLaserScan.start();
+		}
+		if(!data.userDataRaw().empty())
+		{
+			ctUserData.start();
+		}
 		ctImage.join();
 		ctDepth.join();
 		ctLaserScan.join();
@@ -3533,8 +3618,7 @@ Signature * Memory::createSignature(const SensorData & data, const Transform & p
 			stereoCameraModel.isValidForProjection()?
 				SensorData(
 						ctLaserScan.getCompressedData(),
-						maxLaserScanMaxPts,
-						data.laserScanMaxRange(),
+						LaserScanInfo(maxLaserScanMaxPts, data.laserScanInfo().maxRange(), data.laserScanInfo().localTransform()),
 						ctImage.getCompressedData(),
 						ctDepth.getCompressedData(),
 						stereoCameraModel,
@@ -3543,8 +3627,7 @@ Signature * Memory::createSignature(const SensorData & data, const Transform & p
 						ctUserData.getCompressedData()):
 				SensorData(
 						ctLaserScan.getCompressedData(),
-						maxLaserScanMaxPts,
-						data.laserScanMaxRange(),
+						LaserScanInfo(maxLaserScanMaxPts, data.laserScanInfo().maxRange(), data.laserScanInfo().localTransform()),
 						ctImage.getCompressedData(),
 						ctDepth.getCompressedData(),
 						cameraModels,
@@ -3554,13 +3637,23 @@ Signature * Memory::createSignature(const SensorData & data, const Transform & p
 	}
 	else
 	{
-		// just compress laser and user data
-		rtabmap::CompressionThread ctLaserScan(laserScan);
+		UDEBUG("Bin data kept: scan=%d, userData=%d",
+						laserScan.empty()?0:1,
+						data.userDataRaw().empty()?0:1);
+
+		// just compress user data and laser scan (scans can be used for local scan matching)
 		rtabmap::CompressionThread ctUserData(data.userDataRaw());
-		ctLaserScan.start();
-		ctUserData.start();
-		ctLaserScan.join();
+		rtabmap::CompressionThread ctLaserScan(laserScan);
+		if(!data.userDataRaw().empty() && !isIntermediateNode)
+		{
+			ctUserData.start();
+		}
+		if(!laserScan.empty() && !isIntermediateNode)
+		{
+			ctLaserScan.start();
+		}
 		ctUserData.join();
+		ctLaserScan.join();
 
 		s = new Signature(id,
 			_idMapCount,
@@ -3572,8 +3665,7 @@ Signature * Memory::createSignature(const SensorData & data, const Transform & p
 			stereoCameraModel.isValidForProjection()?
 				SensorData(
 						ctLaserScan.getCompressedData(),
-						maxLaserScanMaxPts,
-						data.laserScanMaxRange(),
+						LaserScanInfo(maxLaserScanMaxPts, data.laserScanInfo().maxRange(), data.laserScanInfo().localTransform()),
 						cv::Mat(),
 						cv::Mat(),
 						stereoCameraModel,
@@ -3582,8 +3674,7 @@ Signature * Memory::createSignature(const SensorData & data, const Transform & p
 						ctUserData.getCompressedData()):
 				SensorData(
 						ctLaserScan.getCompressedData(),
-						maxLaserScanMaxPts,
-						data.laserScanMaxRange(),
+						LaserScanInfo(maxLaserScanMaxPts, data.laserScanInfo().maxRange(), data.laserScanInfo().localTransform()),
 						cv::Mat(),
 						cv::Mat(),
 						cameraModels,
@@ -3599,7 +3690,7 @@ Signature * Memory::createSignature(const SensorData & data, const Transform & p
 	// set raw data
 	s->sensorData().setImageRaw(image);
 	s->sensorData().setDepthOrRightRaw(depthOrRightImage);
-	s->sensorData().setLaserScanRaw(laserScan, maxLaserScanMaxPts, data.laserScanMaxRange());
+	s->sensorData().setLaserScanRaw(laserScan, LaserScanInfo(maxLaserScanMaxPts, data.laserScanInfo().maxRange(), data.laserScanInfo().localTransform()));
 	s->sensorData().setUserDataRaw(data.userDataRaw());
 
 	s->sensorData().setGroundTruth(data.groundTruth());
@@ -3611,6 +3702,22 @@ Signature * Memory::createSignature(const SensorData & data, const Transform & p
 	{
 		s->setEnabled(true); // All references are already activated in the dictionary at this point (see _vwd->addNewWords())
 	}
+
+	// Occupancy grid map stuff
+	cv::Mat ground, obstacles;
+	float cellSize = 0.0f;
+	cv::Point3f viewPoint(0,0,0);
+	if(_createOccupancyGrid && !data.depthOrRightRaw().empty() && !isIntermediateNode)
+	{
+		_occupancy->createLocalMap(*s, ground, obstacles, viewPoint);
+		cellSize = _occupancy->getCellSize();
+
+		t = timer.ticks();
+		if(stats) stats->addStatistic(Statistics::kTimingMemOccupancy_grid(), t*1000.0f);
+		UDEBUG("time grid map = %fs", t);
+	}
+	s->sensorData().setOccupancyGrid(ground, obstacles, cellSize, viewPoint);
+
 	return s;
 }
 
@@ -3755,19 +3862,12 @@ void Memory::enableWordsRef(const std::list<int> & signatureIds)
 		{
 			const VisualWord * wordFirst = _vwd->getWord(keys.front()); //get descriptor size
 			UASSERT(wordFirst!=0);
-			//Descriptors used for Memory::computeTransform()
-			cv::Mat descriptors(keys.size(), wordFirst->getDescriptor().cols, wordFirst->getDescriptor().type());
+
 			// Add all references
 			for(unsigned int i=0; i<keys.size(); ++i)
 			{
 				_vwd->addWordRef(keys.at(i), (*j)->id());
-				const VisualWord * word = _vwd->getWord(keys.at(i));
-				UASSERT(word != 0);
-
-				word->getDescriptor().copyTo(descriptors.row(i));
-
 			}
-			(*j)->sensorData().setFeatures(std::vector<cv::KeyPoint>(), descriptors);
 			(*j)->setEnabled(true);
 		}
 	}

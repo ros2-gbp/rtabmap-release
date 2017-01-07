@@ -347,8 +347,11 @@ bool CameraStereoDC1394::available()
 }
 
 CameraStereoDC1394::CameraStereoDC1394(float imageRate, const Transform & localTransform) :
-		Camera(imageRate, localTransform),
+		Camera(imageRate, localTransform)
+#ifdef RTABMAP_DC1394
+        ,
 		device_(0)
+#endif
 {
 #ifdef RTABMAP_DC1394
 	device_ = new DC1394Device();
@@ -401,7 +404,11 @@ bool CameraStereoDC1394::init(const std::string & calibrationFolder, const std::
 
 bool CameraStereoDC1394::isCalibrated() const
 {
+#ifdef RTABMAP_DC1394
 	return stereoModel_.isValidForProjection();
+#else
+	return false;
+#endif
 }
 
 std::string CameraStereoDC1394::getSerial() const
@@ -460,9 +467,12 @@ SensorData CameraStereoDC1394::captureImage(CameraInfo * info)
 // CameraTriclops
 //
 CameraStereoFlyCapture2::CameraStereoFlyCapture2(float imageRate, const Transform & localTransform) :
-		Camera(imageRate, localTransform),
+		Camera(imageRate, localTransform)
+#ifdef RTABMAP_FLYCAPTURE2
+        ,
 		camera_(0),
 		triclopsCtx_(0)
+#endif
 {
 #ifdef RTABMAP_FLYCAPTURE2
 	camera_ = new FlyCapture2::Camera();
@@ -755,19 +765,25 @@ CameraStereoZed::CameraStereoZed(
 		int confidenceThr,
 		bool computeOdometry,
 		float imageRate,
-		const Transform & localTransform) :
-	Camera(imageRate, localTransform),
+		const Transform & localTransform,
+		bool selfCalibration) :
+	Camera(imageRate, localTransform)
+#ifdef RTABMAP_ZED
+    ,
 	zed_(0),
 	src_(CameraVideo::kUsbDevice),
 	usbDevice_(deviceId),
 	svoFilePath_(""),
 	resolution_(resolution),
 	quality_(quality),
+	selfCalibration_(selfCalibration),
 	sensingMode_(sensingMode),
 	confidenceThr_(confidenceThr),
 	computeOdometry_(computeOdometry),
 	lost_(true)
+#endif
 {
+	UDEBUG("");
 #ifdef RTABMAP_ZED
 	UASSERT(resolution_ >= sl::zed::HD2K && resolution_ <sl::zed::LAST_RESOLUTION);
 	UASSERT(quality_ >= sl::zed::NONE && quality_ <sl::zed::LAST_MODE);
@@ -783,19 +799,25 @@ CameraStereoZed::CameraStereoZed(
 		int confidenceThr,
 		bool computeOdometry,
 		float imageRate,
-		const Transform & localTransform) :
-	Camera(imageRate, localTransform),
+		const Transform & localTransform,
+		bool selfCalibration) :
+	Camera(imageRate, localTransform)
+#ifdef RTABMAP_ZED
+    ,
 	zed_(0),
 	src_(CameraVideo::kVideoFile),
 	usbDevice_(0),
 	svoFilePath_(filePath),
 	resolution_(2),
 	quality_(quality),
+	selfCalibration_(selfCalibration),
 	sensingMode_(sensingMode),
 	confidenceThr_(confidenceThr),
 	computeOdometry_(computeOdometry),
 	lost_(true)
+#endif
 {
+	UDEBUG("");
 #ifdef RTABMAP_ZED
 	UASSERT(resolution_ >= sl::zed::HD2K && resolution_ <sl::zed::LAST_RESOLUTION);
 	UASSERT(quality_ >= sl::zed::NONE && quality_ <sl::zed::LAST_MODE);
@@ -816,6 +838,7 @@ CameraStereoZed::~CameraStereoZed()
 
 bool CameraStereoZed::init(const std::string & calibrationFolder, const std::string & cameraName)
 {
+	UDEBUG("");
 #ifdef RTABMAP_ZED
 	if(zed_)
 	{
@@ -826,32 +849,29 @@ bool CameraStereoZed::init(const std::string & calibrationFolder, const std::str
 	lost_ = true;
 	if(src_ == CameraVideo::kVideoFile)
 	{
+		UINFO("svo file = %s", svoFilePath_.c_str());
 		zed_ = new sl::zed::Camera(svoFilePath_); // Use in SVO playback mode
 	}
 	else
 	{
-		if(zed_->isZEDconnected())
-		{
-			zed_ = new sl::zed::Camera((sl::zed::ZEDResolution_mode)resolution_, getImageRate(), usbDevice_); // Use in Live Mode
-		}
-		else
-		{
-			UERROR("ZED camera initialization failed: ZED is not connected!");
-			return false;
-		}
+		UINFO("Resolution=%d imagerate=%f device=%d", resolution_, getImageRate(), usbDevice_);
+		zed_ = new sl::zed::Camera((sl::zed::ZEDResolution_mode)resolution_, getImageRate(), usbDevice_); // Use in Live Mode
 	}
 
-	//init WITH self-calibration
 	sl::zed::InitParams parameters(
 		(sl::zed::MODE)quality_, //MODE
-		sl::zed::METER,  //UNIT
-		sl::zed::IMAGE,  //COORDINATE_SYSTEM
+		(sl::zed::UNIT)sl::zed::METER,  //UNIT
+		(sl::zed::COORDINATE_SYSTEM)sl::zed::IMAGE,  //COORDINATE_SYSTEM
 		false,  // verbose
-		-1,     //device
+		-1,     //device (GPU)
 		-1.,    //minDist
-		false,  //disableSelfCalib
+		!selfCalibration_,  //disableSelfCalib: false = self calibrated
 		false); //vflip
+
+	UINFO("Init ZED: Mode=%d Unit=%d CoordinateSystem=%d Verbose=false device=-1 minDist=-1 self-calibration=%s vflip=false",
+			quality_, sl::zed::METER, sl::zed::IMAGE, selfCalibration_?"true":"false");
 	sl::zed::ERRCODE err = zed_->init(parameters);
+	UDEBUG("");
 
 	// Quit if an error occurred
 	if (err != sl::zed::SUCCESS)
@@ -892,7 +912,11 @@ bool CameraStereoZed::init(const std::string & calibrationFolder, const std::str
 
 bool CameraStereoZed::isCalibrated() const
 {
+#ifdef RTABMAP_ZED
 	return stereoModel_.isValidForProjection();
+#else
+	return false;
+#endif
 }
 
 std::string CameraStereoZed::getSerial() const
@@ -904,6 +928,15 @@ std::string CameraStereoZed::getSerial() const
 	}
 #endif
 	return "";
+}
+
+bool CameraStereoZed::odomProvided() const
+{
+#ifdef RTABMAP_ZED
+	return computeOdometry_;
+#else
+	return false;
+#endif
 }
 
 SensorData CameraStereoZed::captureImage(CameraInfo * info)
@@ -923,7 +956,8 @@ SensorData CameraStereoZed::captureImage(CameraInfo * info)
 		if(!res)
 		{
 			// get left image
-			cv::Mat rgbaLeft = slMat2cvMat(zed_->retrieveImage(static_cast<sl::zed::SIDE> (sl::zed::STEREO_LEFT)));
+			cv::Mat rgbaLeft = sl::zed::slMat2cvMat(zed_->retrieveImage(static_cast<sl::zed::SIDE> (sl::zed::LEFT)));
+
 			cv::Mat left;
 			cv::cvtColor(rgbaLeft, left, cv::COLOR_BGRA2BGR);
 
@@ -938,7 +972,7 @@ SensorData CameraStereoZed::captureImage(CameraInfo * info)
 			else
 			{
 				// get right image
-				cv::Mat rgbaRight = slMat2cvMat(zed_->retrieveImage(static_cast<sl::zed::SIDE> (sl::zed::STEREO_RIGHT)));
+				cv::Mat rgbaRight = sl::zed::slMat2cvMat(zed_->retrieveImage(static_cast<sl::zed::SIDE> (sl::zed::RIGHT)));
 				cv::Mat right;
 				cv::cvtColor(rgbaRight, right, cv::COLOR_BGRA2GRAY);
 			
@@ -1163,7 +1197,7 @@ SensorData CameraStereoImages::captureImage(CameraInfo * info)
 				stereoModel_.setImageSize(leftImage.size());
 			}
 
-			data = SensorData(left.laserScanRaw(), left.laserScanMaxPts(), 0, leftImage, rightImage, stereoModel_, left.id()/(camera2_?1:2), left.stamp());
+			data = SensorData(left.laserScanRaw(), left.laserScanInfo(), leftImage, rightImage, stereoModel_, left.id()/(camera2_?1:2), left.stamp());
 			data.setGroundTruth(left.groundTruth());
 		}
 	}
@@ -1192,12 +1226,26 @@ CameraStereoVideo::CameraStereoVideo(
 }
 
 CameraStereoVideo::CameraStereoVideo(
+		const std::string & pathLeft,
+		const std::string & pathRight,
+		bool rectifyImages,
+		float imageRate,
+		const Transform & localTransform) :
+		Camera(imageRate, localTransform),
+		path_(pathLeft),
+		path2_(pathRight),
+		rectifyImages_(rectifyImages),
+		src_(CameraVideo::kVideoFile),
+		usbDevice_(0)
+{
+}
+
+CameraStereoVideo::CameraStereoVideo(
 	int device,
 	bool rectifyImages,
 	float imageRate,
 	const Transform & localTransform) :
 	Camera(imageRate, localTransform),
-	path_(""),
 	rectifyImages_(rectifyImages),
 	src_(CameraVideo::kUsbDevice),
 	usbDevice_(device)
@@ -1207,6 +1255,7 @@ CameraStereoVideo::CameraStereoVideo(
 CameraStereoVideo::~CameraStereoVideo()
 {
 	capture_.release();
+	capture2_.release();
 }
 
 bool CameraStereoVideo::init(const std::string & calibrationFolder, const std::string & cameraName)
@@ -1216,6 +1265,10 @@ bool CameraStereoVideo::init(const std::string & calibrationFolder, const std::s
 	{
 		capture_.release();
 	}
+	if(capture2_.isOpened())
+	{
+		capture2_.release();
+	}
 
 	if (src_ == CameraVideo::kUsbDevice)
 	{
@@ -1224,55 +1277,63 @@ bool CameraStereoVideo::init(const std::string & calibrationFolder, const std::s
 	}
 	else if (src_ == CameraVideo::kVideoFile)
 	{
-		ULOGGER_DEBUG("CameraStereoVideo: filename=\"%s\"", path_.c_str());
-		capture_.open(path_.c_str());
+		if(path2_.empty())
+		{
+			ULOGGER_DEBUG("CameraStereoVideo: filename=\"%s\"", path_.c_str());
+			capture_.open(path_.c_str());
+		}
+		else
+		{
+			ULOGGER_DEBUG("CameraStereoVideo: filenames=\"%s\" and \"%s\"", path_.c_str(), path2_.c_str());
+			capture_.open(path_.c_str());
+			capture2_.open(path2_.c_str());
+		}
 	}
 	else
 	{
 		ULOGGER_ERROR("CameraStereoVideo: Unknown source...");
 	}
 
-	if(!capture_.isOpened())
+	if(!capture_.isOpened() || (!path2_.empty() && !capture2_.isOpened()))
 	{
 		ULOGGER_ERROR("CameraStereoVideo: Failed to create a capture object!");
 		capture_.release();
+		capture2_.release();
 		return false;
 	}
-	else
+
+	if (cameraName_.empty())
 	{
-		if (cameraName_.empty())
+		unsigned int guid = (unsigned int)capture_.get(CV_CAP_PROP_GUID);
+		if (guid != 0 && guid != 0xffffffff)
 		{
-			unsigned int guid = (unsigned int)capture_.get(CV_CAP_PROP_GUID);
-			if (guid != 0 && guid != 0xffffffff)
-			{
-				cameraName_ = uFormat("%08x", guid);
-			}
+			cameraName_ = uFormat("%08x", guid);
 		}
+	}
 
-		// look for calibration files
-		if(!calibrationFolder.empty() && !cameraName_.empty())
+	// look for calibration files
+	if(!calibrationFolder.empty() && !cameraName_.empty())
+	{
+		if(!stereoModel_.load(calibrationFolder, cameraName_))
 		{
-			if(!stereoModel_.load(calibrationFolder, cameraName_))
-			{
-				UWARN("Missing calibration files for camera \"%s\" in \"%s\" folder, you should calibrate the camera!",
-					cameraName_.c_str(), calibrationFolder.c_str());
-			}
-			else
-			{
-				UINFO("Stereo parameters: fx=%f cx=%f cy=%f baseline=%f",
-						stereoModel_.left().fx(),
-						stereoModel_.left().cx(),
-						stereoModel_.left().cy(),
-						stereoModel_.baseline());
-			}
+			UWARN("Missing calibration files for camera \"%s\" in \"%s\" folder, you should calibrate the camera!",
+				cameraName_.c_str(), calibrationFolder.c_str());
 		}
+		else
+		{
+			UINFO("Stereo parameters: fx=%f cx=%f cy=%f baseline=%f",
+					stereoModel_.left().fx(),
+					stereoModel_.left().cx(),
+					stereoModel_.left().cy(),
+					stereoModel_.baseline());
+		}
+	}
 
-		stereoModel_.setLocalTransform(this->getLocalTransform());
-		if(rectifyImages_ && !stereoModel_.isValidForRectification())
-		{
-			UERROR("Parameter \"rectifyImages\" is set, but no stereo model is loaded or valid.");
-			return false;
-		}
+	stereoModel_.setLocalTransform(this->getLocalTransform());
+	if(rectifyImages_ && !stereoModel_.isValidForRectification())
+	{
+		UERROR("Parameter \"rectifyImages\" is set, but no stereo model is loaded or valid.");
+		return false;
 	}
 	return true;
 }
@@ -1292,43 +1353,61 @@ SensorData CameraStereoVideo::captureImage(CameraInfo * info)
 	SensorData data;
 
 	cv::Mat img;
-	if(capture_.isOpened())
+	if(capture_.isOpened() && (path2_.empty() || capture2_.isOpened()))
 	{
-		if(capture_.read(img))
+		cv::Mat leftImage;
+		cv::Mat rightImage;
+		if(path2_.empty())
 		{
-			// Rectification
-			cv::Mat leftImage(img, cv::Rect( 0, 0, img.size().width/2, img.size().height ));
-			cv::Mat rightImage(img, cv::Rect( img.size().width/2, 0, img.size().width/2, img.size().height ));
-			bool rightCvt = false;
-			if(rightImage.type() != CV_8UC1)
+			if(!capture_.read(img))
 			{
-				cv::Mat tmp;
-				cv::cvtColor(rightImage, tmp, CV_BGR2GRAY);
-				rightImage = tmp;
-				rightCvt = true;
+				return data;
 			}
-
-			if(rectifyImages_ && stereoModel_.left().isValidForRectification() && stereoModel_.right().isValidForRectification())
-			{
-				leftImage = stereoModel_.left().rectifyImage(leftImage);
-				rightImage = stereoModel_.right().rectifyImage(rightImage);
-			}
-			else
-			{
-				leftImage = leftImage.clone();
-				if(!rightCvt)
-				{
-					rightImage = rightImage.clone();
-				}
-			}
-
-			if(stereoModel_.left().imageHeight() == 0 || stereoModel_.left().imageWidth() == 0)
-			{
-				stereoModel_.setImageSize(leftImage.size());
-			}
-
-			data = SensorData(leftImage, rightImage, stereoModel_, this->getNextSeqID(), UTimer::now());
+			// Side by side stream
+			leftImage = cv::Mat(img, cv::Rect( 0, 0, img.size().width/2, img.size().height ));
+			rightImage = cv::Mat(img, cv::Rect( img.size().width/2, 0, img.size().width/2, img.size().height ));
 		}
+		else if(!capture_.read(leftImage) || !capture2_.read(rightImage))
+		{
+			return data;
+		}
+		else if(leftImage.cols != rightImage.cols || leftImage.rows != rightImage.rows)
+		{
+			UERROR("Left and right streams don't have image of the same size: left=%dx%d right=%dx%d",
+					leftImage.cols, leftImage.rows, rightImage.cols, rightImage.rows);
+			return data;
+		}
+
+		// Rectification
+		bool rightCvt = false;
+		if(rightImage.type() != CV_8UC1)
+		{
+			cv::Mat tmp;
+			cv::cvtColor(rightImage, tmp, CV_BGR2GRAY);
+			rightImage = tmp;
+			rightCvt = true;
+		}
+
+		if(rectifyImages_ && stereoModel_.left().isValidForRectification() && stereoModel_.right().isValidForRectification())
+		{
+			leftImage = stereoModel_.left().rectifyImage(leftImage);
+			rightImage = stereoModel_.right().rectifyImage(rightImage);
+		}
+		else
+		{
+			leftImage = leftImage.clone();
+			if(!rightCvt)
+			{
+				rightImage = rightImage.clone();
+			}
+		}
+
+		if(stereoModel_.left().imageHeight() == 0 || stereoModel_.left().imageWidth() == 0)
+		{
+			stereoModel_.setImageSize(leftImage.size());
+		}
+
+		data = SensorData(leftImage, rightImage, stereoModel_, this->getNextSeqID(), UTimer::now());
 	}
 	else
 	{

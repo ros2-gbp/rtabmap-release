@@ -69,6 +69,8 @@ class RTABMAP_EXP Statistics
 	RTABMAP_STATS(Proximity, Time_detections,);
 	RTABMAP_STATS(Proximity, Space_last_detection_id,);
 	RTABMAP_STATS(Proximity, Space_paths,);
+	RTABMAP_STATS(Proximity, Space_visual_paths_checked,);
+	RTABMAP_STATS(Proximity, Space_scan_paths_checked,);
 	RTABMAP_STATS(Proximity, Space_detections_added_visually,);
 	RTABMAP_STATS(Proximity, Space_detections_added_icp_only,);
 
@@ -92,6 +94,8 @@ class RTABMAP_EXP Statistics
 	RTABMAP_STATS(Memory, Rehearsal_merged,);
 	RTABMAP_STATS(Memory, Local_graph_size,);
 	RTABMAP_STATS(Memory, Small_movement,);
+	RTABMAP_STATS(Memory, Odometry_variance_ang,);
+	RTABMAP_STATS(Memory, Odometry_variance_lin,);
 	RTABMAP_STATS(Memory, Distance_travelled, m);
 
 	RTABMAP_STATS(Timing, Memory_update, ms);
@@ -124,14 +128,19 @@ class RTABMAP_EXP Statistics
 	RTABMAP_STATS(TimingMem, Joining_dictionary_update, ms);
 	RTABMAP_STATS(TimingMem, Add_new_words, ms);
 	RTABMAP_STATS(TimingMem, Compressing_data, ms);
+	RTABMAP_STATS(TimingMem, Post_decimation, ms);
+	RTABMAP_STATS(TimingMem, Scan_downsampling, ms);
+	RTABMAP_STATS(TimingMem, Scan_normals, ms);
+	RTABMAP_STATS(TimingMem, Occupancy_grid, ms);
 
 	RTABMAP_STATS(Keypoint, Dictionary_size, words);
 	RTABMAP_STATS(Keypoint, Indexed_words, words);
 	RTABMAP_STATS(Keypoint, Index_memory_usage, KB);
-	RTABMAP_STATS(Keypoint, Response_threshold,);
 
 public:
 	static const std::map<std::string, float> & defaultData();
+	static std::string serializeData(const std::map<std::string, float> & data);
+	static std::map<std::string, float> deserializeData(const std::string & data);
 
 public:
 	Statistics();

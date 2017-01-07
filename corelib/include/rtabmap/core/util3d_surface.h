@@ -38,6 +38,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap/core/Transform.h>
 #include <rtabmap/core/CameraModel.h>
 #include <set>
+#include <list>
 
 namespace rtabmap
 {
@@ -60,6 +61,16 @@ void RTABMAP_EXP createPolygonIndexes(
 		std::vector<std::set<int> > & neighborPolygons,
 		std::vector<std::set<int> > & vertexPolygons);
 
+std::list<std::list<int> > RTABMAP_EXP clusterPolygons(
+		const std::vector<std::set<int> > & neighborPolygons,
+		int minClusterSize = 0);
+
+std::vector<pcl::Vertices> RTABMAP_EXP organizedFastMesh(
+		const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud,
+		double angleTolerance,
+		bool quad,
+		int trianglePixelSize,
+		const Eigen::Vector3f & viewpoint = Eigen::Vector3f(0,0,0));
 std::vector<pcl::Vertices> RTABMAP_EXP organizedFastMesh(
 		const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud,
 		double angleTolerance = M_PI/16,
@@ -85,12 +96,17 @@ void RTABMAP_EXP appendMesh(
 		const std::vector<pcl::Vertices> & polygonsB);
 
 // return map from new to old polygon indices
-std::map<int, int> RTABMAP_EXP filterNotUsedVerticesFromMesh(
+std::vector<int> RTABMAP_EXP filterNotUsedVerticesFromMesh(
 		const pcl::PointCloud<pcl::PointXYZRGBNormal> & cloud,
 		const std::vector<pcl::Vertices> & polygons,
 		pcl::PointCloud<pcl::PointXYZRGBNormal> & outputCloud,
 		std::vector<pcl::Vertices> & outputPolygons);
-std::map<int, int> RTABMAP_EXP filterNotUsedVerticesFromMesh(
+std::vector<int> RTABMAP_EXP filterNotUsedVerticesFromMesh(
+		const pcl::PointCloud<pcl::PointXYZRGB> & cloud,
+		const std::vector<pcl::Vertices> & polygons,
+		pcl::PointCloud<pcl::PointXYZRGB> & outputCloud,
+		std::vector<pcl::Vertices> & outputPolygons);
+std::vector<int> RTABMAP_EXP filterNaNPointsFromMesh(
 		const pcl::PointCloud<pcl::PointXYZRGB> & cloud,
 		const std::vector<pcl::Vertices> & polygons,
 		pcl::PointCloud<pcl::PointXYZRGB> & outputCloud,
@@ -194,33 +210,11 @@ template<typename pointT>
 std::vector<pcl::Vertices> normalizePolygonsSide(
 		const pcl::PointCloud<pointT> & cloud,
 		const std::vector<pcl::Vertices> & polygons,
-		const pcl::PointXYZ & viewPoint = pcl::PointXYZ(0,0,0))
-{
-	std::vector<pcl::Vertices> output(polygons.size());
-	for(unsigned int i=0; i<polygons.size(); ++i)
-	{
-		pcl::Vertices polygon = polygons[i];
-		Eigen::Vector3f v1 = cloud.at(polygon.vertices[1]).getVector3fMap() - cloud.at(polygon.vertices[0]).getVector3fMap();
-		Eigen::Vector3f v2 = cloud.at(polygon.vertices[2]).getVector3fMap() - cloud.at(polygon.vertices[0]).getVector3fMap();
-		Eigen::Vector3f n = (v1.cross(v2)).normalized();
-
-		Eigen::Vector3f p = Eigen::Vector3f(viewPoint.x, viewPoint.y, viewPoint.z) - cloud.at(polygon.vertices[1]).getVector3fMap();
-
-		float result = n.dot(p);
-		if(result < 0)
-		{
-			//reverse vertices order
-			int tmp = polygon.vertices[0];
-			polygon.vertices[0] = polygon.vertices[2];
-			polygon.vertices[2] = tmp;
-		}
-
-		output[i] = polygon;
-	}
-	return output;
-}
+		const pcl::PointXYZ & viewPoint = pcl::PointXYZ(0,0,0));
 
 } // namespace util3d
 } // namespace rtabmap
+
+#include "rtabmap/core/impl/util3d_surface.hpp"
 
 #endif /* UTIL3D_SURFACE_H_ */

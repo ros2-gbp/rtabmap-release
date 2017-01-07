@@ -45,12 +45,15 @@ public:
 
 	const Signature & getRefFrame() const {return refFrame_;}
 
+	virtual Odometry::Type getType() {return Odometry::kTypeF2F;}
+
 private:
 	virtual Transform computeTransform(SensorData & image, const Transform & guess = Transform(), OdometryInfo * info = 0);
 
 private:
 	//Parameters:
 	float keyFrameThr_;
+	int visKeyFrameThr_;
 	float scanKeyFrameThr_;
 
 	Registration * registrationPipeline_;

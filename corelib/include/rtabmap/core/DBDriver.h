@@ -39,6 +39,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/utilite/UThreadNode.h"
 #include "rtabmap/core/Parameters.h"
 #include "rtabmap/core/SensorData.h"
+#include <rtabmap/core/Statistics.h>
 
 #include <rtabmap/core/Transform.h>
 #include <rtabmap/core/Link.h>
@@ -86,15 +87,22 @@ public:
 	void addLink(const Link & link);
 	void removeLink(int from, int to);
 	void updateLink(const Link & link);
+	void updateOccupancyGrid(
+				int nodeId,
+				const cv::Mat & ground,
+				const cv::Mat & obstacles,
+				float cellSize,
+				const cv::Point3f & viewpoint);
 
 public:
-	void addStatisticsAfterRun(int stMemSize, int lastSignAdded, int processMemUsed, int databaseMemUsed, int dictionarySize, const ParametersMap & parameters) const;
+	void addInfoAfterRun(int stMemSize, int lastSignAdded, int processMemUsed, int databaseMemUsed, int dictionarySize, const ParametersMap & parameters) const;
+	void addStatistics(const Statistics & statistics) const;
 
 public:
 	// Mutex-protected methods of abstract versions below
 
 	bool openConnection(const std::string & url, bool overwritten = false);
-	void closeConnection(bool save = true);
+	void closeConnection(bool save = true, const std::string & outputUrl = "");
 	bool isConnected() const;
 	long getMemoryUsed() const; // In bytes
 	std::string getDatabaseVersion() const;
@@ -108,6 +116,7 @@ public:
 	int getTotalNodesSize() const;
 	int getTotalDictionarySize() const;
 	ParametersMap getLastParameters() const;
+	std::map<std::string, float> getStatistics(int nodeId, double & stamp) const;
 
 	void executeNoResult(const std::string & sql) const;
 
@@ -118,8 +127,8 @@ public:
 	void loadWords(const std::set<int> & wordIds, std::list<VisualWord *> & vws);
 
 	// Specific queries...
-	void loadNodeData(std::list<Signature *> & signatures) const;
-	void getNodeData(int signatureId, SensorData & data) const;
+	void loadNodeData(std::list<Signature *> & signatures, bool images = true, bool scan = true, bool userData = true, bool occupancyGrid = true) const;
+	void getNodeData(int signatureId, SensorData & data, bool images = true, bool scan = true, bool userData = true, bool occupancyGrid = true) const;
 	bool getCalibration(int signatureId, std::vector<CameraModel> & models, StereoCameraModel & stereoModel) const;
 	bool getNodeInfo(int signatureId, Transform & pose, int & mapId, int & weight, std::string & label, double & stamp, Transform & groundTruthPose) const;
 	void loadLinks(int signatureId, std::map<int, Link> & links, Link::Type type = Link::kUndef) const;
@@ -137,7 +146,7 @@ protected:
 
 private:
 	virtual bool connectDatabaseQuery(const std::string & url, bool overwritten = false) = 0;
-	virtual void disconnectDatabaseQuery(bool save = true) = 0;
+	virtual void disconnectDatabaseQuery(bool save = true, const std::string & outputUrl = "") = 0;
 	virtual bool isConnectedQuery() const = 0;
 	virtual long getMemoryUsedQuery() const = 0; // In bytes
 	virtual bool getDatabaseVersionQuery(std::string & version) const = 0;
@@ -151,6 +160,7 @@ private:
 	virtual int getTotalNodesSizeQuery() const = 0;
 	virtual int getTotalDictionarySizeQuery() const = 0;
 	virtual ParametersMap getLastParametersQuery() const = 0;
+	virtual std::map<std::string, float> getStatisticsQuery(int nodeId, double & stamp) const = 0;
 
 	virtual void executeNoResultQuery(const std::string & sql) const = 0;
 
@@ -164,6 +174,15 @@ private:
 	virtual void addLinkQuery(const Link & link) const = 0;
 	virtual void updateLinkQuery(const Link & link) const = 0;
 
+	virtual void updateOccupancyGridQuery(
+				int nodeId,
+				const cv::Mat & ground,
+				const cv::Mat & obstacles,
+				float cellSize,
+				const cv::Point3f & viewpoint) const = 0;
+
+	virtual void addStatisticsQuery(const Statistics & statistics) const = 0;
+
 	// Load objects
 	virtual void loadQuery(VWDictionary * dictionary) const = 0;
 	virtual void loadLastNodesQuery(std::list<Signature *> & signatures) const = 0;
@@ -171,7 +190,7 @@ private:
 	virtual void loadWordsQuery(const std::set<int> & wordIds, std::list<VisualWord *> & vws) const = 0;
 	virtual void loadLinksQuery(int signatureId, std::map<int, Link> & links, Link::Type type = Link::kUndef) const = 0;
 
-	virtual void loadNodeDataQuery(std::list<Signature *> & signatures) const = 0;
+	virtual void loadNodeDataQuery(std::list<Signature *> & signatures, bool images=true, bool scan=true, bool userData=true, bool occupancyGrid=true) const = 0;
 	virtual bool getCalibrationQuery(int signatureId, std::vector<CameraModel> & models, StereoCameraModel & stereoModel) const = 0;
 	virtual bool getNodeInfoQuery(int signatureId, Transform & pose, int & mapId, int & weight, std::string & label, double & stamp, Transform & groundTruthPose) const = 0;
 	virtual void getAllNodeIdsQuery(std::set<int> & ids, bool ignoreChildren, bool ignoreBadSignatures) const = 0;

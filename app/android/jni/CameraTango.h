@@ -34,6 +34,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap/utilite/UEventsSender.h>
 #include <rtabmap/utilite/UThread.h>
 #include <rtabmap/utilite/UEvent.h>
+#include <rtabmap/utilite/UTimer.h>
 #include <boost/thread/mutex.hpp>
 
 class TangoPoseData;
@@ -76,7 +77,8 @@ public:
 	void close(); // close Tango connection
 	virtual bool isCalibrated() const;
 	virtual std::string getSerial() const;
-	rtabmap::Transform tangoPoseToTransform(const TangoPoseData * tangoPose, bool inOpenGLFrame) const;
+	const CameraModel & getCameraModel() const {return model_;}
+	rtabmap::Transform tangoPoseToTransform(const TangoPoseData * tangoPose) const;
 	void setDecimation(int value) {decimation_ = value;}
 	void setAutoExposure(bool enabled) {autoExposure_ = enabled;}
 
@@ -89,7 +91,7 @@ protected:
 	virtual SensorData captureImage(CameraInfo * info = 0);
 
 private:
-	rtabmap::Transform getPoseAtTimestamp(double timestamp, bool inOpenGLFrame);
+	rtabmap::Transform getPoseAtTimestamp(double timestamp);
 
 	virtual void mainLoopBegin();
 	virtual void mainLoop();
@@ -97,6 +99,7 @@ private:
 private:
 	void * tango_config_;
 	bool firstFrame_;
+	UTimer cameraStartedTime_;
 	int decimation_;
 	bool autoExposure_;
 	cv::Mat cloud_;
@@ -106,10 +109,8 @@ private:
 	double tangoColorStamp_;
 	boost::mutex dataMutex_;
 	USemaphore dataReady_;
-	rtabmap::Transform imuTDevice_;
-	rtabmap::Transform imuTDepthCamera_;
-	rtabmap::Transform deviceTDepth_;
 	CameraModel model_;
+	Transform deviceTColorCamera_;
 };
 
 } /* namespace rtabmap */

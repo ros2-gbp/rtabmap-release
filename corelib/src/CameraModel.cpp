@@ -30,6 +30,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap/utilite/UDirectory.h>
 #include <rtabmap/utilite/UFile.h>
 #include <rtabmap/utilite/UConversion.h>
+#include <rtabmap/utilite/UMath.h>
 #include <opencv2/imgproc/imgproc.hpp>
 
 namespace rtabmap {
@@ -75,9 +76,19 @@ CameraModel::CameraModel(
 {
 	UASSERT_MSG(fx > 0.0, uFormat("fx=%f", fx).c_str());
 	UASSERT_MSG(fy > 0.0, uFormat("fy=%f", fy).c_str());
-	UASSERT_MSG(cx >= 0.0, uFormat("cx=%f", cx).c_str());
-	UASSERT_MSG(cy >= 0.0, uFormat("cy=%f", cy).c_str());
+	UASSERT_MSG(cx >= 0.0 && imageSize.width>=0, uFormat("cx=%f imageSize.width=%d", cx, imageSize.width).c_str());
+	UASSERT_MSG(cy >= 0.0 && imageSize.height>=0, uFormat("cy=%f imageSize.height=%d", cy, imageSize.height).c_str());
 	UASSERT(!localTransform.isNull());
+
+	if(cx==0.0 && imageSize.width > 0)
+	{
+		cx = double(imageSize.width)/2.0-0.5;
+	}
+	if(cy==0.0 && imageSize.height > 0)
+	{
+		cy = double(imageSize.height)/2.0-0.5;
+	}
+
 	if(Tx != 0.0)
 	{
 		P_ = cv::Mat::eye(3, 4, CV_64FC1),
@@ -110,9 +121,19 @@ CameraModel::CameraModel(
 {
 	UASSERT_MSG(fx > 0.0, uFormat("fx=%f", fx).c_str());
 	UASSERT_MSG(fy > 0.0, uFormat("fy=%f", fy).c_str());
-	UASSERT_MSG(cx >= 0.0, uFormat("cx=%f", cx).c_str());
-	UASSERT_MSG(cy >= 0.0, uFormat("cy=%f", cy).c_str());
+	UASSERT_MSG(cx >= 0.0 && imageSize.width>=0, uFormat("cx=%f imageSize.width=%d", cx, imageSize.width).c_str());
+	UASSERT_MSG(cy >= 0.0 && imageSize.height>=0, uFormat("cy=%f imageSize.height=%d", cy, imageSize.height).c_str());
 	UASSERT(!localTransform.isNull());
+
+	if(cx==0.0 && imageSize.width > 0)
+	{
+		cx = double(imageSize.width)/2.0-0.5;
+	}
+	if(cy==0.0 && imageSize.height > 0)
+	{
+		cy = double(imageSize.height)/2.0-0.5;
+	}
+
 	if(Tx != 0.0)
 	{
 		P_ = cv::Mat::eye(3, 4, CV_64FC1),
@@ -138,6 +159,32 @@ void CameraModel::initRectificationMap()
 	// init rectification map
 	UINFO("Initialize rectify map");
 	cv::initUndistortRectifyMap(K_, D_, R_, P_, imageSize_, CV_32FC1, mapX_, mapY_);
+}
+
+void CameraModel::setImageSize(const cv::Size & size)
+{
+	UASSERT((size.height > 0 && size.width > 0) || (size.height == 0 && size.width == 0));
+	imageSize_ = size;
+	double ncx = cx();
+	double ncy = cy();
+	if(ncx==0.0 && imageSize_.width > 0)
+	{
+		ncx = double(imageSize_.width)/2.0-0.5;
+	}
+	if(ncy==0.0 && imageSize_.height > 0)
+	{
+		ncy = double(imageSize_.height)/2.0-0.5;
+	}
+	if(!P_.empty())
+	{
+		P_.at<double>(0,2) = ncx;
+		P_.at<double>(1,2) = ncy;
+	}
+	if(!K_.empty())
+	{
+		K_.at<double>(0,2) = ncx;
+		K_.at<double>(1,2) = ncy;
+	}
 }
 
 bool CameraModel::load(const std::string & directory, const std::string & cameraName)
@@ -383,6 +430,36 @@ CameraModel CameraModel::scaled(double scale) const
 	return scaledModel;
 }
 
+CameraModel CameraModel::roi(const cv::Rect & roi) const
+{
+	CameraModel roiModel = *this;
+	if(this->isValidForProjection())
+	{
+		// has only effect on cx and cy
+		cv::Mat K;
+		if(!K_.empty())
+		{
+			K = K_.clone();
+			K.at<double>(0,2) -= roi.x;
+			K.at<double>(1,2) -= roi.y;
+		}
+
+		cv::Mat P;
+		if(!P_.empty())
+		{
+			P = P_.clone();
+			P.at<double>(0,2) -= roi.x;
+			P.at<double>(1,2) -= roi.y;
+		}
+		roiModel = CameraModel(name_, roi.size(), K, D_, R_, P, localTransform_);
+	}
+	else
+	{
+		UWARN("Trying to extract roi from a camera model not valid! Ignoring roi...");
+	}
+	return roiModel;
+}
+
 double CameraModel::horizontalFOV() const
 {
 	if(imageWidth() > 0 && fx() > 0.0)
@@ -455,8 +532,8 @@ cv::Mat CameraModel::rectifyDepth(const cv::Mat & raw) const
 
 							//http://stackoverflow.com/questions/13299409/how-to-get-the-image-pixel-at-real-locations-in-opencv
 							rectified.at<unsigned short>(y,x) =
-									(raw.at<unsigned short>(yL, xL) * (1.f - a) + raw.at<unsigned short>(yL, xH) * a) * (1.f - c) +
-									(raw.at<unsigned short>(yH, xL) * (1.f - a) + raw.at<unsigned short>(yH, xH) * a) * c;
+									(pLT * (1.f - a) + pRT * a) * (1.f - c) +
+									(pLB * (1.f - a) + pRB * a) * c;
 						}
 					}
 				}
@@ -469,6 +546,42 @@ cv::Mat CameraModel::rectifyDepth(const cv::Mat & raw) const
 		UERROR("Cannot rectify image because the rectify map is not initialized.");
 		return raw.clone();
 	}
+}
+
+// resulting 3D point is in /camera_link frame
+void CameraModel::project(float u, float v, float depth, float & x, float & y, float & z) const
+{
+	if(depth > 0.0f)
+	{
+		// Fill in XYZ
+		x = (u - cx()) * depth / fx();
+		y = (v - cy()) * depth / fy();
+		z = depth;
+	}
+	else
+	{
+		x = y = z = std::numeric_limits<float>::quiet_NaN();
+	}
+}
+// 3D point is in /camera_link frame
+void CameraModel::reproject(float x, float y, float z, float & u, float & v) const
+{
+	UASSERT(z!=0.0f);
+	float invZ = 1.0f/z;
+	u = (fx()*x)*invZ + cx();
+	v = (fy()*y)*invZ + cy();
+}
+void CameraModel::reproject(float x, float y, float z, int & u, int & v) const
+{
+	UASSERT(z!=0.0f);
+	float invZ = 1.0f/z;
+	u = (fx()*x)*invZ + cx();
+	v = (fy()*y)*invZ + cy();
+}
+
+bool CameraModel::inFrame(int u, int v) const
+{
+	return uIsInBounds(u, 0, imageWidth()) && uIsInBounds(v, 0, imageHeight());
 }
 
 } /* namespace rtabmap */
