@@ -35,7 +35,7 @@ namespace rtabmap {
 class RTABMAP_EXP StereoCameraModel
 {
 public:
-	StereoCameraModel() {}
+	StereoCameraModel() : leftSuffix_("left"), rightSuffix_("right") {}
 	StereoCameraModel(
 			const std::string & name,
 			const cv::Size & imageSize1,
@@ -87,7 +87,7 @@ public:
 
 	void initRectificationMap() {left_.initRectificationMap(); right_.initRectificationMap();}
 
-	void setName(const std::string & name);
+	void setName(const std::string & name, const std::string & leftSuffix = "left", const std::string & rightSuffix = "right");
 	const std::string & name() const {return name_;}
 
 	// backward compatibility
@@ -95,8 +95,9 @@ public:
 
 	bool load(const std::string & directory, const std::string & cameraName, bool ignoreStereoTransform = true);
 	bool save(const std::string & directory, bool ignoreStereoTransform = true) const;
+	bool saveStereoTransform(const std::string & directory) const;
 
-	double baseline() const {return right_.fx()!=0.0?-right_.Tx()/right_.fx():0.0;}
+	double baseline() const {return right_.fx()!=0.0 && left_.fx() != 0.0 ? left_.Tx() / left_.fx() - right_.Tx()/right_.fx():0.0;}
 
 	float computeDepth(float disparity) const;
 	float computeDisparity(float depth) const; // m
@@ -108,6 +109,7 @@ public:
 	const cv::Mat & F() const {return F_;} //extrinsic fundamental matrix
 
 	void scale(double scale);
+	void roi(const cv::Rect & roi);
 
 	void setLocalTransform(const Transform & transform) {left_.setLocalTransform(transform);}
 	const Transform & localTransform() const {return left_.localTransform();}
@@ -116,7 +118,12 @@ public:
 	const CameraModel & left() const {return left_;}
 	const CameraModel & right() const {return right_;}
 
+	const std::string & getLeftSuffix() const {return leftSuffix_;}
+	const std::string & getRightSuffix() const {return rightSuffix_;}
+
 private:
+	std::string leftSuffix_;
+	std::string rightSuffix_;
 	CameraModel left_;
 	CameraModel right_;
 	std::string name_;

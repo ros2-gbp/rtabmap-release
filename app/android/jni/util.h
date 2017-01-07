@@ -32,13 +32,22 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <android/log.h>
 #include <rtabmap/utilite/UEventsHandler.h>
 #include <rtabmap/utilite/ULogger.h>
+#include <rtabmap/core/CameraModel.h>
 #include <tango-gl/util.h>
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
+#include <pcl/Vertices.h>
+#include <pcl/pcl_base.h>
 
 class LogHandler : public UEventsHandler
 {
 public:
 	LogHandler()
 	{
+		ULogger::setLevel(ULogger::kWarning);
+		ULogger::setEventLevel(ULogger::kWarning);
+		ULogger::setPrintThreadId(true);
+
 		registerToEventsManager();
 	}
 protected:
@@ -69,21 +78,26 @@ protected:
 };
 
 static const rtabmap::Transform opengl_world_T_tango_world(
-		1.0f, 0.0f,  0.0f, 0.0f,
-		0.0f, 0.0f, 1.0f, 0.0f,
+		1.0f,  0.0f,  0.0f, 0.0f,
+		0.0f,  0.0f,  1.0f, 0.0f,
 		0.0f, -1.0f,  0.0f, 0.0f);
 
-static const rtabmap::Transform depth_camera_T_opengl_camera(
-		1.0f, 0.0f, 0.0f, 0.0f,
-		0.0f, -1.0f, 0.0f, 0.0f,
-		0.0f, 0.0f, -1.0f, 0.0f);
+static const rtabmap::Transform rtabmap_world_T_tango_world(
+		 0.0f, 1.0f, 0.0f, 0.0f,
+	    -1.0f, 0.0f, 0.0f, 0.0f,
+		 0.0f, 0.0f, 1.0f, 0.0f);
+
+static const rtabmap::Transform tango_device_T_rtabmap_device(
+		 0.0f, -1.0f, 0.0f, 0.0f,
+	     0.0f,  0.0f, 1.0f, 0.0f,
+		-1.0f,  0.0f, 0.0f, 0.0f);
 
 static const rtabmap::Transform opengl_world_T_rtabmap_world(
-		0.0f, -1.0f,  0.0f, 0.0f,
-		0.0f, 0.0f, 1.0f, 0.0f,
-		-1.0f, 0.0f,  0.0f, 0.0f);
+		 0.0f, -1.0f, 0.0f, 0.0f,
+		 0.0f,  0.0f, 1.0f, 0.0f,
+		-1.0f,  0.0f, 0.0f, 0.0f);
 
-static const rtabmap::Transform rtabmap_world_T_opengl_world(
+static const rtabmap::Transform rtabmap_device_T_opengl_device(
 		 0.0f, 0.0f, -1.0f, 0.0f,
 		-1.0f, 0.0f,  0.0f, 0.0f,
 		 0.0f, 1.0f,  0.0f, 0.0f);
@@ -128,5 +142,16 @@ inline rtabmap::Transform glmToTransform(const glm::mat4 & mat)
 
 	return transform;
 }
+
+struct Mesh
+{
+	pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud; // organized cloud
+	pcl::IndicesPtr indices;
+	std::vector<pcl::Vertices> polygons;
+	rtabmap::Transform pose; // in rtabmap coordinates
+	bool visible;
+	rtabmap::CameraModel cameraModel;
+	float gain;
+};
 
 #endif /* UTIL_H_ */

@@ -30,6 +30,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap/core/util3d_filtering.h>
 #include <rtabmap/core/util3d_surface.h>
 #include <rtabmap/core/util2d.h>
+#include <rtabmap/core/util2d.h>
 #include <rtabmap/utilite/ULogger.h>
 #include <rtabmap/utilite/UMath.h>
 #include <rtabmap/utilite/UConversion.h>
@@ -253,47 +254,90 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr cloudFromDepth(
 }
 
 pcl::PointCloud<pcl::PointXYZ>::Ptr cloudFromDepth(
-		const cv::Mat & imageDepth,
+		const cv::Mat & imageDepthIn,
 		const CameraModel & model,
 		int decimation,
 		float maxDepth,
 		float minDepth,
 		std::vector<int> * validIndices)
 {
+	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
+	if(decimation == 0)
+	{
+		decimation = 1;
+	}
 	float rgbToDepthFactorX = 1.0f;
 	float rgbToDepthFactorY = 1.0f;
 
 	UASSERT(model.isValidForProjection());
-	UASSERT(!imageDepth.empty() && (imageDepth.type() == CV_16UC1 || imageDepth.type() == CV_32FC1));
+	UASSERT(!imageDepthIn.empty() && (imageDepthIn.type() == CV_16UC1 || imageDepthIn.type() == CV_32FC1));
 
-	int imageRows = imageDepth.rows;
-	int imageCols = imageDepth.cols;
-
+	cv::Mat imageDepth = imageDepthIn;
 	if(model.imageHeight()>0 && model.imageWidth()>0)
 	{
-		UASSERT(model.imageHeight() % imageDepth.rows == 0 && model.imageWidth() % imageDepth.cols == 0);
-		UASSERT_MSG(model.imageHeight() % decimation == 0, uFormat("model.imageHeight()=%d decimation=%d", model.imageHeight(), decimation).c_str());
-		UASSERT_MSG(model.imageWidth() % decimation == 0, uFormat("model.imageWidth()=%d decimation=%d", model.imageWidth(), decimation).c_str());
+		UASSERT(model.imageHeight() % imageDepthIn.rows == 0 && model.imageWidth() % imageDepthIn.cols == 0);
+
+		if(decimation < 0)
+		{
+			UDEBUG("Decimation from model (%d)", decimation);
+			if(model.imageHeight() % decimation != 0)
+			{
+				UERROR("Decimation is not valid for current image size (model.imageHeight()=%d decimation=%d). The cloud is not created.", model.imageHeight(), decimation);
+				return cloud;
+			}
+			if(model.imageWidth() % decimation != 0)
+			{
+				UERROR("Decimation is not valid for current image size (model.imageWidth()=%d decimation=%d). The cloud is not created.", model.imageWidth(), decimation);
+				return cloud;
+			}
+
+			// decimate from RGB image size, upsample depth if needed
+			decimation = -1*decimation;
+
+			int targetSize = model.imageHeight() / decimation;
+			if(targetSize > imageDepthIn.rows)
+			{
+				UDEBUG("Depth interpolation factor=%d", targetSize/imageDepthIn.rows);
+				imageDepth = util2d::interpolate(imageDepthIn, targetSize/imageDepthIn.rows);
+				decimation = 1;
+			}
+			else if(targetSize == imageDepthIn.rows)
+			{
+				decimation = 1;
+			}
+			else
+			{
+				UASSERT(imageDepthIn.rows % targetSize == 0);
+				decimation = imageDepthIn.rows / targetSize;
+			}
+		}
+		else
+		{
+			if(imageDepthIn.rows % decimation != 0)
+			{
+				UERROR("Decimation is not valid for current image size (imageDepth.rows=%d decimation=%d). The cloud is not created.", imageDepthIn.rows, decimation);
+				return cloud;
+			}
+			if(imageDepthIn.cols % decimation != 0)
+			{
+				UERROR("Decimation is not valid for current image size (imageDepth.cols=%d decimation=%d). The cloud is not created.", imageDepthIn.cols, decimation);
+				return cloud;
+			}
+		}
+
 		rgbToDepthFactorX = 1.0f/float((model.imageWidth() / imageDepth.cols));
 		rgbToDepthFactorY = 1.0f/float((model.imageHeight() / imageDepth.rows));
-		imageRows = model.imageHeight();
-		imageCols = model.imageWidth();
 	}
 	else
 	{
+		decimation = abs(decimation);
 		UASSERT_MSG(imageDepth.rows % decimation == 0, uFormat("rows=%d decimation=%d", imageDepth.rows, decimation).c_str());
 		UASSERT_MSG(imageDepth.cols % decimation == 0, uFormat("cols=%d decimation=%d", imageDepth.cols, decimation).c_str());
 	}
 
-	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
-	if(decimation < 1)
-	{
-		return cloud;
-	}
-
 	//cloud.header = cameraInfo.header;
-	cloud->height = imageRows/decimation;
-	cloud->width  = imageCols/decimation;
+	cloud->height = imageDepth.rows/decimation;
+	cloud->width  = imageDepth.cols/decimation;
 	cloud->is_dense = false;
 	cloud->resize(cloud->height * cloud->width);
 	if(validIndices)
@@ -306,8 +350,7 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr cloudFromDepth(
 	float depthCx = model.cx() * rgbToDepthFactorX;
 	float depthCy = model.cy() * rgbToDepthFactorY;
 
-	UDEBUG("rgb=%dx%d depth=%dx%d fx=%f fy=%f cx=%f cy=%f (depth factors=%f %f) decimation=%d",
-			imageCols, imageRows,
+	UDEBUG("depth=%dx%d fx=%f fy=%f cx=%f cy=%f (depth factors=%f %f) decimation=%d",
 			imageDepth.cols, imageDepth.rows,
 			model.fx(), model.fy(), model.cx(), model.cy(),
 			rgbToDepthFactorX,
@@ -315,13 +358,13 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr cloudFromDepth(
 			decimation);
 
 	int oi = 0;
-	for(int h = 0; h < imageRows && h/decimation < (int)cloud->height; h+=decimation)
+	for(int h = 0; h < imageDepth.rows && h/decimation < (int)cloud->height; h+=decimation)
 	{
-		for(int w = 0; w < imageCols && w/decimation < (int)cloud->width; w+=decimation)
+		for(int w = 0; w < imageDepth.cols && w/decimation < (int)cloud->width; w+=decimation)
 		{
 			pcl::PointXYZ & pt = cloud->at((h/decimation)*cloud->width + (w/decimation));
 
-			pcl::PointXYZ ptXYZ = projectDepthTo3D(imageDepth, w*rgbToDepthFactorX, h*rgbToDepthFactorY, depthCx, depthCy, depthFx, depthFy, false);
+			pcl::PointXYZ ptXYZ = projectDepthTo3D(imageDepth, w, h, depthCx, depthCy, depthFx, depthFy, false);
 			if(pcl::isFinite(ptXYZ) && ptXYZ.z>=minDepth && (maxDepth<=0.0f || ptXYZ.z <= maxDepth))
 			{
 				pt.x = ptXYZ.x;
@@ -363,25 +406,90 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloudFromDepthRGB(
 
 pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloudFromDepthRGB(
 		const cv::Mat & imageRgb,
-		const cv::Mat & imageDepth,
+		const cv::Mat & imageDepthIn,
 		const CameraModel & model,
 		int decimation,
 		float maxDepth,
 		float minDepth,
 		std::vector<int> * validIndices)
 {
+	pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
+	if(decimation == 0)
+	{
+		decimation = 1;
+	}
 	UDEBUG("");
 	UASSERT(model.isValidForProjection());
-	UASSERT((model.imageHeight() == 0 && model.imageWidth() == 0) || (model.imageHeight() == imageRgb.rows && model.imageWidth() == imageRgb.cols));
-	UASSERT(imageRgb.rows % imageDepth.rows == 0 && imageRgb.cols % imageDepth.cols == 0);
-	UASSERT(!imageDepth.empty() && (imageDepth.type() == CV_16UC1 || imageDepth.type() == CV_32FC1));
-	UASSERT_MSG(imageRgb.rows % decimation == 0, uFormat("imageDepth.rows=%d decimation=%d", imageRgb.rows, decimation).c_str());
-	UASSERT_MSG(imageRgb.cols % decimation == 0, uFormat("imageDepth.cols=%d decimation=%d", imageRgb.cols, decimation).c_str());
-
-	pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
-	if(decimation < 1)
+	UASSERT_MSG((model.imageHeight() == 0 && model.imageWidth() == 0) ||
+			    (model.imageHeight() == imageRgb.rows && model.imageWidth() == imageRgb.cols),
+				uFormat("model=%dx%d rgb=%dx%d", model.imageWidth(), model.imageHeight(), imageRgb.cols, imageRgb.rows).c_str());
+	UASSERT_MSG(imageRgb.rows % imageDepthIn.rows == 0 && imageRgb.cols % imageDepthIn.cols == 0,
+			uFormat("rgb=%dx%d depth=%dx%d", imageRgb.cols, imageRgb.rows, imageDepthIn.cols, imageDepthIn.rows).c_str());
+	UASSERT(!imageDepthIn.empty() && (imageDepthIn.type() == CV_16UC1 || imageDepthIn.type() == CV_32FC1));
+	if(decimation < 0)
 	{
-		return cloud;
+		if(imageRgb.rows % decimation != 0 || imageRgb.cols % decimation != 0)
+		{
+			int oldDecimation = decimation;
+			while(decimation <= -1)
+			{
+				if(imageRgb.rows % decimation == 0 && imageRgb.cols % decimation == 0)
+				{
+					break;
+				}
+				++decimation;
+			}
+
+			if(imageRgb.rows % oldDecimation != 0 || imageRgb.cols % oldDecimation != 0)
+			{
+				UWARN("Decimation (%d) is not valid for current image size (rgb=%dx%d). Highest compatible decimation used=%d.", oldDecimation, imageRgb.cols, imageRgb.rows, decimation);
+			}
+		}
+	}
+	else
+	{
+		if(imageDepthIn.rows % decimation != 0 || imageDepthIn.cols % decimation != 0)
+		{
+			int oldDecimation = decimation;
+			while(decimation >= 1)
+			{
+				if(imageDepthIn.rows % decimation == 0 && imageDepthIn.cols % decimation == 0)
+				{
+					break;
+				}
+				--decimation;
+			}
+
+			if(imageDepthIn.rows % oldDecimation != 0 || imageDepthIn.cols % oldDecimation != 0)
+			{
+				UWARN("Decimation (%d) is not valid for current image size (depth=%dx%d). Highest compatible decimation used=%d.", oldDecimation, imageDepthIn.cols, imageDepthIn.rows, decimation);
+			}
+		}
+	}
+
+	cv::Mat imageDepth = imageDepthIn;
+	if(decimation < 0)
+	{
+		UDEBUG("Decimation from RGB image (%d)", decimation);
+		// decimate from RGB image size, upsample depth if needed
+		decimation = -1*decimation;
+
+		int targetSize = imageRgb.rows / decimation;
+		if(targetSize > imageDepthIn.rows)
+		{
+			UDEBUG("Depth interpolation factor=%d", targetSize/imageDepthIn.rows);
+			imageDepth = util2d::interpolate(imageDepthIn, targetSize/imageDepthIn.rows);
+			decimation = 1;
+		}
+		else if(targetSize == imageDepthIn.rows)
+		{
+			decimation = 1;
+		}
+		else
+		{
+			UASSERT(imageDepthIn.rows % targetSize == 0);
+			decimation = imageDepthIn.rows / targetSize;
+		}
 	}
 
 	bool mono;
@@ -399,8 +507,8 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloudFromDepthRGB(
 	}
 
 	//cloud.header = cameraInfo.header;
-	cloud->height = imageRgb.rows/decimation;
-	cloud->width  = imageRgb.cols/decimation;
+	cloud->height = imageDepth.rows/decimation;
+	cloud->width  = imageDepth.cols/decimation;
 	cloud->is_dense = false;
 	cloud->resize(cloud->height * cloud->width);
 	if(validIndices)
@@ -408,12 +516,12 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloudFromDepthRGB(
 		validIndices->resize(cloud->size());
 	}
 
-	float rgbToDepthFactorX = 1.0f/float((imageRgb.cols / imageDepth.cols));
-	float rgbToDepthFactorY = 1.0f/float((imageRgb.rows / imageDepth.rows));
-	float depthFx = model.fx() * rgbToDepthFactorX;
-	float depthFy = model.fy() * rgbToDepthFactorY;
-	float depthCx = model.cx() * rgbToDepthFactorX;
-	float depthCy = model.cy() * rgbToDepthFactorY;
+	float rgbToDepthFactorX = float(imageRgb.cols) / float(imageDepth.cols);
+	float rgbToDepthFactorY = float(imageRgb.rows) / float(imageDepth.rows);
+	float depthFx = model.fx() / rgbToDepthFactorX;
+	float depthFy = model.fy() / rgbToDepthFactorY;
+	float depthCx = model.cx() / rgbToDepthFactorX;
+	float depthCy = model.cy() / rgbToDepthFactorY;
 
 	UDEBUG("rgb=%dx%d depth=%dx%d fx=%f fy=%f cx=%f cy=%f (depth factors=%f %f) decimation=%d",
 			imageRgb.cols, imageRgb.rows,
@@ -424,36 +532,50 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloudFromDepthRGB(
 			decimation);
 
 	int oi = 0;
-	for(int h = 0; h < imageRgb.rows && h/decimation < (int)cloud->height; h+=decimation)
+	for(int h = 0; h < imageDepth.rows && h/decimation < (int)cloud->height; h+=decimation)
 	{
-		for(int w = 0; w < imageRgb.cols && w/decimation < (int)cloud->width; w+=decimation)
+		for(int w = 0; w < imageDepth.cols && w/decimation < (int)cloud->width; w+=decimation)
 		{
 			pcl::PointXYZRGB & pt = cloud->at((h/decimation)*cloud->width + (w/decimation));
+
+			int x = int(w*rgbToDepthFactorX);
+			int y = int(h*rgbToDepthFactorY);
+			UASSERT(x >=0 && x<imageRgb.cols && y >=0 && y<imageRgb.rows);
 			if(!mono)
 			{
-				pt.b = imageRgb.at<cv::Vec3b>(h,w)[0];
-				pt.g = imageRgb.at<cv::Vec3b>(h,w)[1];
-				pt.r = imageRgb.at<cv::Vec3b>(h,w)[2];
+				const unsigned char * bgr = imageRgb.ptr<unsigned char>(y,x);
+				pt.b = bgr[0];
+				pt.g = bgr[1];
+				pt.r = bgr[2];
 			}
 			else
 			{
-				unsigned char v = imageRgb.at<unsigned char>(h,w);
+				unsigned char v = imageRgb.at<unsigned char>(y,x);
 				pt.b = v;
 				pt.g = v;
 				pt.r = v;
 			}
 
-			pcl::PointXYZ ptXYZ = projectDepthTo3D(imageDepth, w*rgbToDepthFactorX, h*rgbToDepthFactorY, depthCx, depthCy, depthFx, depthFy, false);
-			if(pcl::isFinite(ptXYZ) && ptXYZ.z>=minDepth && (maxDepth<=0.0f || ptXYZ.z <= maxDepth))
+			// Ignore pure black pixels, as they are generarly rectification artifacts on the contour. It is okay to 
+			// assume this as normally depth would not be computed on pure black surfaces anyway.
+			if (pt.b > 0 && pt.g > 0 && pt.r > 0)
 			{
-				pt.x = ptXYZ.x;
-				pt.y = ptXYZ.y;
-				pt.z = ptXYZ.z;
-				if(validIndices)
+				pcl::PointXYZ ptXYZ = projectDepthTo3D(imageDepth, w, h, depthCx, depthCy, depthFx, depthFy, false);
+				if (pcl::isFinite(ptXYZ) && ptXYZ.z >= minDepth && (maxDepth <= 0.0f || ptXYZ.z <= maxDepth))
 				{
-					validIndices->at(oi) = (h/decimation)*cloud->width + (w/decimation);
+					pt.x = ptXYZ.x;
+					pt.y = ptXYZ.y;
+					pt.z = ptXYZ.z;
+					if (validIndices)
+					{
+						validIndices->at(oi) = (h / decimation)*cloud->width + (w / decimation);
+					}
+					++oi;
 				}
-				++oi;
+				else
+				{
+					pt.x = pt.y = pt.z = std::numeric_limits<float>::quiet_NaN();
+				}
 			}
 			else
 			{
@@ -699,8 +821,14 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr RTABMAP_EXP cloudFromSensorData(
 		float maxDepth,
 		float minDepth,
 		std::vector<int> * validIndices,
-		const ParametersMap & parameters)
+		const ParametersMap & stereoParameters,
+		const std::vector<float> & roiRatios)
 {
+	if(decimation == 0)
+	{
+		decimation = 1;
+	}
+
 	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
 
 	if(!sensorData.depthRaw().empty() && sensorData.cameraModels().size())
@@ -712,9 +840,56 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr RTABMAP_EXP cloudFromSensorData(
 		{
 			if(sensorData.cameraModels()[i].isValidForProjection())
 			{
+				cv::Mat depth = cv::Mat(sensorData.depthRaw(), cv::Rect(subImageWidth*i, 0, subImageWidth, sensorData.depthRaw().rows));
+				CameraModel model = sensorData.cameraModels()[i];
+				if( roiRatios.size() == 4 &&
+					(roiRatios[0] > 0.0f ||
+					roiRatios[1] > 0.0f ||
+					roiRatios[2] > 0.0f ||
+					roiRatios[3] > 0.0f))
+				{
+					cv::Rect roiDepth = util2d::computeRoi(depth, roiRatios);
+					cv::Rect roiRgb;
+					if(model.imageWidth() && model.imageHeight())
+					{
+						roiRgb = util2d::computeRoi(model.imageSize(), roiRatios);
+					}
+					if(	roiDepth.width%decimation==0 &&
+						roiDepth.height%decimation==0 &&
+						(roiRgb.width != 0 ||
+						   (roiRgb.width%decimation==0 &&
+							roiRgb.height%decimation==0)))
+					{
+						depth = cv::Mat(depth, roiDepth);
+						if(model.imageWidth() != 0 && model.imageHeight() != 0)
+						{
+							model = model.roi(util2d::computeRoi(model.imageSize(), roiRatios));
+						}
+						else
+						{
+							model = model.roi(roiDepth);
+						}
+					}
+					else
+					{
+						UERROR("Cannot apply ROI ratios [%f,%f,%f,%f] because resulting "
+							  "dimension (depth=%dx%d rgb=%dx%d) cannot be divided exactly "
+							  "by decimation parameter (%d). Ignoring ROI ratios...",
+							  roiRatios[0],
+							  roiRatios[1],
+							  roiRatios[2],
+							  roiRatios[3],
+							  roiDepth.width,
+							  roiDepth.height,
+							  roiRgb.width,
+							  roiRgb.height,
+							  decimation);
+					}
+				}
+
 				pcl::PointCloud<pcl::PointXYZ>::Ptr tmp = util3d::cloudFromDepth(
-						cv::Mat(sensorData.depthRaw(), cv::Rect(subImageWidth*i, 0, subImageWidth, sensorData.depthRaw().rows)),
-						sensorData.cameraModels()[i],
+						depth,
+						model,
 						decimation,
 						maxDepth,
 						minDepth,
@@ -722,7 +897,10 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr RTABMAP_EXP cloudFromSensorData(
 
 				if(tmp->size())
 				{
-					tmp = util3d::transformPointCloud(tmp, sensorData.cameraModels()[i].localTransform());
+					if(!model.localTransform().isNull() && !model.localTransform().isIdentity())
+					{
+						tmp = util3d::transformPointCloud(tmp, model.localTransform());
+					}
 
 					if(sensorData.cameraModels().size() > 1)
 					{
@@ -765,8 +943,9 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr RTABMAP_EXP cloudFromSensorData(
 		{
 			leftMono = sensorData.imageRaw();
 		}
+
 		cloud = cloudFromDisparity(
-				util2d::disparityFromStereoImages(leftMono, sensorData.rightRaw(), parameters),
+				util2d::disparityFromStereoImages(leftMono, sensorData.rightRaw(), stereoParameters),
 				sensorData.stereoCameraModel(),
 				decimation,
 				maxDepth,
@@ -775,7 +954,7 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr RTABMAP_EXP cloudFromSensorData(
 
 		if(cloud->size())
 		{
-			if(cloud->size())
+			if(cloud->size() && !sensorData.stereoCameraModel().left().localTransform().isNull() && !sensorData.stereoCameraModel().left().localTransform().isIdentity())
 			{
 				cloud = util3d::transformPointCloud(cloud, sensorData.stereoCameraModel().left().localTransform());
 			}
@@ -790,8 +969,14 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr RTABMAP_EXP cloudRGBFromSensorData(
 		float maxDepth,
 		float minDepth,
 		std::vector<int> * validIndices,
-		const ParametersMap & parameters)
+		const ParametersMap & stereoParameters,
+		const std::vector<float> & roiRatios)
 {
+	if(decimation == 0)
+	{
+		decimation = 1;
+	}
+
 	UASSERT(!sensorData.imageRaw().empty());
 	UASSERT((!sensorData.depthRaw().empty() && sensorData.cameraModels().size()) ||
 			(!sensorData.rightRaw().empty() && sensorData.stereoCameraModel().isValidForProjection()));
@@ -803,29 +988,56 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr RTABMAP_EXP cloudRGBFromSensorData(
 		UDEBUG("");
 		UASSERT(int((sensorData.imageRaw().cols/sensorData.cameraModels().size())*sensorData.cameraModels().size()) == sensorData.imageRaw().cols);
 		UASSERT(int((sensorData.depthRaw().cols/sensorData.cameraModels().size())*sensorData.cameraModels().size()) == sensorData.depthRaw().cols);
-		UASSERT(sensorData.imageRaw().cols % sensorData.depthRaw().cols == 0);
-		UASSERT(sensorData.imageRaw().rows % sensorData.depthRaw().rows == 0);
+		UASSERT_MSG(sensorData.imageRaw().cols % sensorData.depthRaw().cols == 0, uFormat("rgb=%d depth=%d", sensorData.imageRaw().cols, sensorData.depthRaw().cols).c_str());
+		UASSERT_MSG(sensorData.imageRaw().rows % sensorData.depthRaw().rows == 0, uFormat("rgb=%d depth=%d", sensorData.imageRaw().rows, sensorData.depthRaw().rows).c_str());
 		int subRGBWidth = sensorData.imageRaw().cols/sensorData.cameraModels().size();
 		int subDepthWidth = sensorData.depthRaw().cols/sensorData.cameraModels().size();
-
-		if(subRGBWidth % decimation != 0 || subDepthWidth % decimation != 0)
-		{
-			UWARN("Image size (rgb=%d,%d depth=%d,%d) modulus decimation (%d) is not null "
-				  "for the cloud creation! Setting decimation to 1...",
-				  subRGBWidth, sensorData.imageRaw().rows,
-				  subDepthWidth, sensorData.depthRaw().rows,
-				  decimation);
-			decimation = 1;
-		}
 
 		for(unsigned int i=0; i<sensorData.cameraModels().size(); ++i)
 		{
 			if(sensorData.cameraModels()[i].isValidForProjection())
 			{
+				cv::Mat rgb(sensorData.imageRaw(), cv::Rect(subRGBWidth*i, 0, subRGBWidth, sensorData.imageRaw().rows));
+				cv::Mat depth(sensorData.depthRaw(), cv::Rect(subDepthWidth*i, 0, subDepthWidth, sensorData.depthRaw().rows));
+				CameraModel model = sensorData.cameraModels()[i];
+				if( roiRatios.size() == 4 &&
+					(roiRatios[0] > 0.0f ||
+					roiRatios[1] > 0.0f ||
+					roiRatios[2] > 0.0f ||
+					roiRatios[3] > 0.0f))
+				{
+					cv::Rect roiDepth = util2d::computeRoi(depth, roiRatios);
+					cv::Rect roiRgb = util2d::computeRoi(rgb, roiRatios);
+					if(	roiDepth.width%decimation==0 &&
+						roiDepth.height%decimation==0 &&
+						roiRgb.width%decimation==0 &&
+						roiRgb.height%decimation==0)
+					{
+						depth = cv::Mat(depth, roiDepth);
+						rgb = cv::Mat(rgb, roiRgb);
+						model = model.roi(roiRgb);
+					}
+					else
+					{
+						UERROR("Cannot apply ROI ratios [%f,%f,%f,%f] because resulting "
+							  "dimension (depth=%dx%d rgb=%dx%d) cannot be divided exactly "
+							  "by decimation parameter (%d). Ignoring ROI ratios...",
+							  roiRatios[0],
+							  roiRatios[1],
+							  roiRatios[2],
+							  roiRatios[3],
+							  roiDepth.width,
+							  roiDepth.height,
+							  roiRgb.width,
+							  roiRgb.height,
+							  decimation);
+					}
+				}
+
 				pcl::PointCloud<pcl::PointXYZRGB>::Ptr tmp = util3d::cloudFromDepthRGB(
-						cv::Mat(sensorData.imageRaw(), cv::Rect(subRGBWidth*i, 0, subRGBWidth, sensorData.imageRaw().rows)),
-						cv::Mat(sensorData.depthRaw(), cv::Rect(subDepthWidth*i, 0, subDepthWidth, sensorData.depthRaw().rows)),
-						sensorData.cameraModels()[i],
+						rgb,
+						depth,
+						model,
 						decimation,
 						maxDepth,
 						minDepth,
@@ -833,7 +1045,10 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr RTABMAP_EXP cloudRGBFromSensorData(
 
 				if(tmp->size())
 				{
-					tmp = util3d::transformPointCloud(tmp, sensorData.cameraModels()[i].localTransform());
+					if(!model.localTransform().isNull() && !model.localTransform().isIdentity())
+					{
+						tmp = util3d::transformPointCloud(tmp, model.localTransform());
+					}
 
 					if(sensorData.cameraModels().size() > 1)
 					{
@@ -866,16 +1081,17 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr RTABMAP_EXP cloudRGBFromSensorData(
 	{
 		//stereo
 		UDEBUG("");
-		cloud = cloudFromStereoImages(sensorData.imageRaw(),
+		cloud = cloudFromStereoImages(
+				sensorData.imageRaw(),
 				sensorData.rightRaw(),
 				sensorData.stereoCameraModel(),
 				decimation,
 				maxDepth,
 				minDepth,
 				validIndices,
-				parameters);
+				stereoParameters);
 
-		if(cloud->size())
+		if(cloud->size() && !sensorData.stereoCameraModel().left().localTransform().isNull() && !sensorData.stereoCameraModel().left().localTransform().isIdentity())
 		{
 			cloud = util3d::transformPointCloud(cloud, sensorData.stereoCameraModel().left().localTransform());
 		}
@@ -884,14 +1100,14 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr RTABMAP_EXP cloudRGBFromSensorData(
 }
 
 pcl::PointCloud<pcl::PointXYZ> laserScanFromDepthImage(
-					const cv::Mat & depthImage,
-					float fx,
-					float fy,
-					float cx,
-					float cy,
-					float maxDepth,
-					float minDepth,
-					const Transform & localTransform)
+		const cv::Mat & depthImage,
+		float fx,
+		float fy,
+		float cx,
+		float cy,
+		float maxDepth,
+		float minDepth,
+		const Transform & localTransform)
 {
 	UASSERT(depthImage.type() == CV_16UC1 || depthImage.type() == CV_32FC1);
 	UASSERT(!localTransform.isNull());
@@ -919,6 +1135,39 @@ pcl::PointCloud<pcl::PointXYZ> laserScanFromDepthImage(
 	return scan;
 }
 
+pcl::PointCloud<pcl::PointXYZ> laserScanFromDepthImages(
+		const cv::Mat & depthImages,
+		const std::vector<CameraModel> & cameraModels,
+		float maxDepth,
+		float minDepth)
+{
+	pcl::PointCloud<pcl::PointXYZ> scan;
+	UASSERT(int((depthImages.cols/cameraModels.size())*cameraModels.size()) == depthImages.cols);
+	int subImageWidth = depthImages.cols/cameraModels.size();
+	for(unsigned int i=0; i<cameraModels.size(); ++i)
+	{
+		if(cameraModels[i].isValidForProjection())
+		{
+			cv::Mat depth = cv::Mat(depthImages, cv::Rect(subImageWidth*i, 0, subImageWidth, depthImages.rows));
+
+			scan += laserScanFromDepthImage(
+					depth,
+					cameraModels[i].fx(),
+					cameraModels[i].fy(),
+					cameraModels[i].cx(),
+					cameraModels[i].cy(),
+					maxDepth,
+					minDepth,
+					cameraModels[i].localTransform());
+		}
+		else
+		{
+			UERROR("Camera model %d is invalid", i);
+		}
+	}
+	return scan;
+}
+
 cv::Mat laserScanFromPointCloud(const pcl::PointCloud<pcl::PointXYZ> & cloud, const Transform & transform)
 {
 	cv::Mat laserScan(1, (int)cloud.size(), CV_32FC3);
@@ -926,18 +1175,19 @@ cv::Mat laserScanFromPointCloud(const pcl::PointCloud<pcl::PointXYZ> & cloud, co
 	Eigen::Affine3f transform3f = transform.toEigen3f();
 	for(unsigned int i=0; i<cloud.size(); ++i)
 	{
+		float * ptr = laserScan.ptr<float>(0, i);
 		if(!nullTransform)
 		{
 			pcl::PointXYZ pt = pcl::transformPoint(cloud.at(i), transform3f);
-			laserScan.at<cv::Vec3f>(i)[0] = pt.x;
-			laserScan.at<cv::Vec3f>(i)[1] = pt.y;
-			laserScan.at<cv::Vec3f>(i)[2] = pt.z;
+			ptr[0] = pt.x;
+			ptr[1] = pt.y;
+			ptr[2] = pt.z;
 		}
 		else
 		{
-			laserScan.at<cv::Vec3f>(i)[0] = cloud.at(i).x;
-			laserScan.at<cv::Vec3f>(i)[1] = cloud.at(i).y;
-			laserScan.at<cv::Vec3f>(i)[2] = cloud.at(i).z;
+			ptr[0] = cloud.at(i).x;
+			ptr[1] = cloud.at(i).y;
+			ptr[2] = cloud.at(i).z;
 		}
 
 	}
@@ -948,28 +1198,93 @@ cv::Mat laserScanFromPointCloud(const pcl::PointCloud<pcl::PointNormal> & cloud,
 {
 	cv::Mat laserScan(1, (int)cloud.size(), CV_32FC(6));
 	bool nullTransform = transform.isNull() || transform.isIdentity();
-	Eigen::Affine3f transform3f = transform.toEigen3f();
 	for(unsigned int i=0; i<cloud.size(); ++i)
 	{
+		float * ptr = laserScan.ptr<float>(0, i);
 		if(!nullTransform)
 		{
-			pcl::PointNormal pt = pcl::transformPoint(cloud.at(i), transform3f);
-			laserScan.at<cv::Vec6f>(i)[0] = pt.x;
-			laserScan.at<cv::Vec6f>(i)[1] = pt.y;
-			laserScan.at<cv::Vec6f>(i)[2] = pt.z;
-			laserScan.at<cv::Vec6f>(i)[3] = pt.normal_x;
-			laserScan.at<cv::Vec6f>(i)[4] = pt.normal_y;
-			laserScan.at<cv::Vec6f>(i)[5] = pt.normal_z;
+			pcl::PointNormal pt = util3d::transformPoint(cloud.at(i), transform);
+			ptr[0] = pt.x;
+			ptr[1] = pt.y;
+			ptr[2] = pt.z;
+			ptr[3] = pt.normal_x;
+			ptr[4] = pt.normal_y;
+			ptr[5] = pt.normal_z;
 		}
 		else
 		{
-			laserScan.at<cv::Vec6f>(i)[0] = cloud.at(i).x;
-			laserScan.at<cv::Vec6f>(i)[1] = cloud.at(i).y;
-			laserScan.at<cv::Vec6f>(i)[2] = cloud.at(i).z;
-			laserScan.at<cv::Vec6f>(i)[3] = cloud.at(i).normal_x;
-			laserScan.at<cv::Vec6f>(i)[4] = cloud.at(i).normal_y;
-			laserScan.at<cv::Vec6f>(i)[5] = cloud.at(i).normal_z;
+			ptr[0] = cloud.at(i).x;
+			ptr[1] = cloud.at(i).y;
+			ptr[2] = cloud.at(i).z;
+			ptr[3] = cloud.at(i).normal_x;
+			ptr[4] = cloud.at(i).normal_y;
+			ptr[5] = cloud.at(i).normal_z;
 		}
+	}
+	return laserScan;
+}
+
+cv::Mat laserScanFromPointCloud(const pcl::PointCloud<pcl::PointXYZ> & cloud, const pcl::PointCloud<pcl::Normal> & normals, const Transform & transform)
+{
+	UASSERT(cloud.size() == normals.size());
+	cv::Mat laserScan(1, (int)cloud.size(), CV_32FC(6));
+	bool nullTransform = transform.isNull() || transform.isIdentity();
+	for(unsigned int i=0; i<cloud.size(); ++i)
+	{
+		float * ptr = laserScan.ptr<float>(0, i);
+		if(!nullTransform)
+		{
+			pcl::PointNormal pt;
+			pt.x = cloud.at(i).x;
+			pt.y = cloud.at(i).y;
+			pt.z = cloud.at(i).z;
+			pt.normal_x = normals.at(i).normal_x;
+			pt.normal_y = normals.at(i).normal_y;
+			pt.normal_z = normals.at(i).normal_z;
+			pt = util3d::transformPoint(pt, transform);
+			ptr[0] = pt.x;
+			ptr[1] = pt.y;
+			ptr[2] = pt.z;
+			ptr[3] = pt.normal_x;
+			ptr[4] = pt.normal_y;
+			ptr[5] = pt.normal_z;
+		}
+		else
+		{
+			ptr[0] = cloud.at(i).x;
+			ptr[1] = cloud.at(i).y;
+			ptr[2] = cloud.at(i).z;
+			ptr[3] = normals.at(i).normal_x;
+			ptr[4] = normals.at(i).normal_y;
+			ptr[5] = normals.at(i).normal_z;
+		}
+	}
+	return laserScan;
+}
+
+cv::Mat laserScanFromPointCloud(const pcl::PointCloud<pcl::PointXYZRGB> & cloud, const Transform & transform)
+{
+	cv::Mat laserScan(1, (int)cloud.size(), CV_32FC(4));
+	bool nullTransform = transform.isNull() || transform.isIdentity();
+	Eigen::Affine3f transform3f = transform.toEigen3f();
+	for(unsigned int i=0; i<cloud.size(); ++i)
+	{
+		float * ptr = laserScan.ptr<float>(0, i);
+		if(!nullTransform)
+		{
+			pcl::PointXYZRGB pt = pcl::transformPoint(cloud.at(i), transform3f);
+			ptr[0] = pt.x;
+			ptr[1] = pt.y;
+			ptr[2] = pt.z;
+		}
+		else
+		{
+			ptr[0] = cloud.at(i).x;
+			ptr[1] = cloud.at(i).y;
+			ptr[2] = cloud.at(i).z;
+		}
+		int * ptrInt = (int*)ptr;
+		ptrInt[3] = int(cloud.at(i).b) | (int(cloud.at(i).g) << 8) | (int(cloud.at(i).r) << 16);
 	}
 	return laserScan;
 }
@@ -981,16 +1296,17 @@ cv::Mat laserScan2dFromPointCloud(const pcl::PointCloud<pcl::PointXYZ> & cloud, 
 	Eigen::Affine3f transform3f = transform.toEigen3f();
 	for(unsigned int i=0; i<cloud.size(); ++i)
 	{
+		float * ptr = laserScan.ptr<float>(0, i);
 		if(!nullTransform)
 		{
 			pcl::PointXYZ pt = pcl::transformPoint(cloud.at(i), transform3f);
-			laserScan.at<cv::Vec2f>(i)[0] = pt.x;
-			laserScan.at<cv::Vec2f>(i)[1] = pt.y;
+			ptr[0] = pt.x;
+			ptr[1] = pt.y;
 		}
 		else
 		{
-			laserScan.at<cv::Vec2f>(i)[0] = cloud.at(i).x;
-			laserScan.at<cv::Vec2f>(i)[1] = cloud.at(i).y;
+			ptr[0] = cloud.at(i).x;
+			ptr[1] = cloud.at(i).y;
 		}
 
 	}
@@ -999,7 +1315,7 @@ cv::Mat laserScan2dFromPointCloud(const pcl::PointCloud<pcl::PointXYZ> & cloud, 
 
 pcl::PointCloud<pcl::PointXYZ>::Ptr laserScanToPointCloud(const cv::Mat & laserScan, const Transform & transform)
 {
-	UASSERT(laserScan.empty() || laserScan.type() == CV_32FC2 || laserScan.type() == CV_32FC3 || laserScan.type() == CV_32FC(6));
+	UASSERT(laserScan.empty() || laserScan.type() == CV_32FC2 || laserScan.type() == CV_32FC3 || laserScan.type() == CV_32FC(4) || laserScan.type() == CV_32FC(6));
 
 	pcl::PointCloud<pcl::PointXYZ>::Ptr output(new pcl::PointCloud<pcl::PointXYZ>);
 	output->resize(laserScan.cols);
@@ -1007,24 +1323,7 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr laserScanToPointCloud(const cv::Mat & laserS
 	Eigen::Affine3f transform3f = transform.toEigen3f();
 	for(int i=0; i<laserScan.cols; ++i)
 	{
-		if(laserScan.type() == CV_32FC2)
-		{
-			output->at(i).x = laserScan.at<cv::Vec2f>(i)[0];
-			output->at(i).y = laserScan.at<cv::Vec2f>(i)[1];
-		}
-		else if(laserScan.type() == CV_32FC3)
-		{
-			output->at(i).x = laserScan.at<cv::Vec3f>(i)[0];
-			output->at(i).y = laserScan.at<cv::Vec3f>(i)[1];
-			output->at(i).z = laserScan.at<cv::Vec3f>(i)[2];
-		}
-		else
-		{
-			output->at(i).x = laserScan.at<cv::Vec6f>(i)[0];
-			output->at(i).y = laserScan.at<cv::Vec6f>(i)[1];
-			output->at(i).z = laserScan.at<cv::Vec6f>(i)[2];
-		}
-
+		output->at(i) = util3d::laserScanToPoint(laserScan, i);
 		if(!nullTransform)
 		{
 			output->at(i) = pcl::transformPoint(output->at(i), transform3f);
@@ -1035,38 +1334,101 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr laserScanToPointCloud(const cv::Mat & laserS
 
 pcl::PointCloud<pcl::PointNormal>::Ptr laserScanToPointCloudNormal(const cv::Mat & laserScan, const Transform & transform)
 {
-	UASSERT(laserScan.empty() || laserScan.type() == CV_32FC2 || laserScan.type() == CV_32FC3 || laserScan.type() == CV_32FC(6));
+	UASSERT(laserScan.empty() || laserScan.type() == CV_32FC2 || laserScan.type() == CV_32FC3 || laserScan.type() == CV_32FC(4) || laserScan.type() == CV_32FC(6));
 
 	pcl::PointCloud<pcl::PointNormal>::Ptr output(new pcl::PointCloud<pcl::PointNormal>);
 	output->resize(laserScan.cols);
 	bool nullTransform = transform.isNull();
 	for(int i=0; i<laserScan.cols; ++i)
 	{
-		if(laserScan.type() == CV_32FC2)
-		{
-			output->at(i).x = laserScan.at<cv::Vec2f>(i)[0];
-			output->at(i).y = laserScan.at<cv::Vec2f>(i)[1];
-		}
-		else if(laserScan.type() == CV_32FC3)
-		{
-			output->at(i).x = laserScan.at<cv::Vec3f>(i)[0];
-			output->at(i).y = laserScan.at<cv::Vec3f>(i)[1];
-			output->at(i).z = laserScan.at<cv::Vec3f>(i)[2];
-		}
-		else
-		{
-			output->at(i).x = laserScan.at<cv::Vec6f>(i)[0];
-			output->at(i).y = laserScan.at<cv::Vec6f>(i)[1];
-			output->at(i).z = laserScan.at<cv::Vec6f>(i)[2];
-			output->at(i).normal_x = laserScan.at<cv::Vec6f>(i)[3];
-			output->at(i).normal_y = laserScan.at<cv::Vec6f>(i)[4];
-			output->at(i).normal_z = laserScan.at<cv::Vec6f>(i)[5];
-		}
-
+		output->at(i) = laserScanToPointNormal(laserScan, i);
 		if(!nullTransform)
 		{
 			output->at(i) = util3d::transformPoint(output->at(i), transform);
 		}
+	}
+	return output;
+}
+
+pcl::PointCloud<pcl::PointXYZRGB>::Ptr laserScanToPointCloudRGB(const cv::Mat & laserScan, const Transform & transform,  unsigned char r, unsigned char g, unsigned char b)
+{
+	UASSERT(laserScan.empty() || laserScan.type() == CV_32FC2 || laserScan.type() == CV_32FC3 || laserScan.type() == CV_32FC(4) || laserScan.type() == CV_32FC(6));
+
+	pcl::PointCloud<pcl::PointXYZRGB>::Ptr output(new pcl::PointCloud<pcl::PointXYZRGB>);
+	output->resize(laserScan.cols);
+	bool nullTransform = transform.isNull() || transform.isIdentity();
+	Eigen::Affine3f transform3f = transform.toEigen3f();
+	for(int i=0; i<laserScan.cols; ++i)
+	{
+		output->at(i) = util3d::laserScanToPointRGB(laserScan, i, r, g, b);
+		if(!nullTransform)
+		{
+			output->at(i) = pcl::transformPoint(output->at(i), transform3f);
+		}
+	}
+	return output;
+}
+
+pcl::PointXYZ laserScanToPoint(const cv::Mat & laserScan, int index)
+{
+	UASSERT(!laserScan.empty() && index < laserScan.cols);
+	UASSERT(laserScan.type() == CV_32FC2 || laserScan.type() == CV_32FC3 || laserScan.type() == CV_32FC(4) || laserScan.type() == CV_32FC(6));
+	pcl::PointXYZ output;
+	const float * ptr = laserScan.ptr<float>(0, index);
+	output.x = ptr[0];
+	output.y = ptr[1];
+	if(laserScan.channels() >= 3)
+	{
+		output.z = ptr[2];
+	}
+	return output;
+}
+
+pcl::PointNormal laserScanToPointNormal(const cv::Mat & laserScan, int index)
+{
+	UASSERT(!laserScan.empty() && index < laserScan.cols);
+	UASSERT(laserScan.type() == CV_32FC2 || laserScan.type() == CV_32FC3 || laserScan.type() == CV_32FC(4) || laserScan.type() == CV_32FC(6));
+	pcl::PointNormal output;
+	const float * ptr = laserScan.ptr<float>(0, index);
+	output.x = ptr[0];
+	output.y = ptr[1];
+	if(laserScan.channels() >= 3)
+	{
+		output.z = ptr[2];
+	}
+	if(laserScan.channels() == 6)
+	{
+		output.normal_x = ptr[3];
+		output.normal_y = ptr[4];
+		output.normal_z = ptr[5];
+	}
+	return output;
+}
+
+pcl::PointXYZRGB laserScanToPointRGB(const cv::Mat & laserScan, int index, unsigned char r, unsigned char g, unsigned char b)
+{
+	UASSERT(!laserScan.empty() && index < laserScan.cols);
+	UASSERT(laserScan.type() == CV_32FC2 || laserScan.type() == CV_32FC3 || laserScan.type() == CV_32FC(4) || laserScan.type() == CV_32FC(6));
+	pcl::PointXYZRGB output;
+	const float * ptr = laserScan.ptr<float>(0, index);
+	output.x = ptr[0];
+	output.y = ptr[1];
+	if(laserScan.channels() >= 3)
+	{
+		output.z = ptr[2];
+	}
+	if(laserScan.channels() == 4)
+	{
+		int * ptrInt = (int*)ptr;
+		output.b = (unsigned char)(ptrInt[3] & 0xFF);
+		output.g = (unsigned char)((ptrInt[3] >> 8) & 0xFF);
+		output.r = (unsigned char)((ptrInt[3] >> 16) & 0xFF);
+	}
+	else
+	{
+		output.r = r;
+		output.g = g;
+		output.b = b;
 	}
 	return output;
 }
@@ -1113,9 +1475,9 @@ cv::Point3f projectDisparityTo3D(
 // Register point cloud to camera (return registered depth image)
 cv::Mat projectCloudToCamera(
 		const cv::Size & imageSize,
-		const cv::Mat & cameraMatrixK, // /base_link -> /camera_link
+		const cv::Mat & cameraMatrixK,
 		const cv::Mat & laserScan,     // assuming laser scan points are already in /base_link coordinate
-		const rtabmap::Transform & cameraTransform)
+		const rtabmap::Transform & cameraTransform) // /base_link -> /camera_link
 {
 	UASSERT(!cameraTransform.isNull());
 	UASSERT(!laserScan.empty());
@@ -1178,9 +1540,9 @@ cv::Mat projectCloudToCamera(
 
 cv::Mat projectCloudToCamera(
 		const cv::Size & imageSize,
-		const cv::Mat & cameraMatrixK, // /base_link -> /camera_link
+		const cv::Mat & cameraMatrixK,
 		const pcl::PointCloud<pcl::PointXYZ>::Ptr laserScan,  // assuming points are already in /base_link coordinate
-		const rtabmap::Transform & cameraTransform)
+		const rtabmap::Transform & cameraTransform)           // /base_link -> /camera_link
 {
 	UASSERT(!cameraTransform.isNull());
 	UASSERT(!laserScan->empty());
@@ -1203,17 +1565,22 @@ cv::Mat projectCloudToCamera(
 
 		// re-project in camera frame
 		float z = ptScan.z;
-		float invZ = 1.0f/z;
-		int dx = (fx*ptScan.x)*invZ + cx;
-		int dy = (fy*ptScan.y)*invZ + cy;
-
-		if(z > 0.0f && uIsInBounds(dx, 0, registered.cols) && uIsInBounds(dy, 0, registered.rows))
+		if(z > 0.0f)
 		{
-			++count;
-			float &zReg = registered.at<float>(dy, dx);
-			if(zReg == 0 || z < zReg)
+			float invZ = 1.0f/z;
+			int dx = (fx*ptScan.x)*invZ + cx;
+			if(uIsInBounds(dx, 0, registered.cols))
 			{
-				zReg = z;
+				int dy = (fy*ptScan.y)*invZ + cy;
+				if(uIsInBounds(dy, 0, registered.rows))
+				{
+					++count;
+					float &zReg = registered.at<float>(dy, dx);
+					if(zReg == 0 || z < zReg)
+					{
+						zReg = z;
+					}
+				}
 			}
 		}
 	}

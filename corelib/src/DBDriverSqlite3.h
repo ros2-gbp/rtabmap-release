@@ -49,7 +49,7 @@ public:
 
 private:
 	virtual bool connectDatabaseQuery(const std::string & url, bool overwritten = false);
-	virtual void disconnectDatabaseQuery(bool save = true);
+	virtual void disconnectDatabaseQuery(bool save = true, const std::string & outputUrl = "");
 	virtual bool isConnectedQuery() const;
 	virtual long getMemoryUsedQuery() const; // In bytes
 	virtual bool getDatabaseVersionQuery(std::string & version) const;
@@ -63,6 +63,7 @@ private:
 	virtual int getTotalNodesSizeQuery() const;
 	virtual int getTotalDictionarySizeQuery() const;
 	virtual ParametersMap getLastParametersQuery() const;
+	virtual std::map<std::string, float> getStatisticsQuery(int nodeId, double & stamp) const;
 
 	virtual void executeNoResultQuery(const std::string & sql) const;
 
@@ -76,6 +77,15 @@ private:
 	virtual void addLinkQuery(const Link & link) const;
 	virtual void updateLinkQuery(const Link & link) const;
 
+	virtual void updateOccupancyGridQuery(
+			int nodeId,
+			const cv::Mat & ground,
+			const cv::Mat & obstacles,
+			float cellSize,
+			const cv::Point3f & viewpoint) const;
+
+	virtual void addStatisticsQuery(const Statistics & statistics) const;
+
 	// Load objects
 	virtual void loadQuery(VWDictionary * dictionary) const;
 	virtual void loadLastNodesQuery(std::list<Signature *> & signatures) const;
@@ -83,7 +93,7 @@ private:
 	virtual void loadWordsQuery(const std::set<int> & wordIds, std::list<VisualWord *> & vws) const;
 	virtual void loadLinksQuery(int signatureId, std::map<int, Link> & links, Link::Type type = Link::kUndef) const;
 
-	virtual void loadNodeDataQuery(std::list<Signature *> & signatures) const;
+	virtual void loadNodeDataQuery(std::list<Signature *> & signatures, bool images=true, bool scan=true, bool userData=true, bool occupancyGrid=true) const;
 	virtual bool getCalibrationQuery(int signatureId, std::vector<CameraModel> & models, StereoCameraModel & stereoModel) const;
 	virtual bool getNodeInfoQuery(int signatureId, Transform & pose, int & mapId, int & weight, std::string & label, double & stamp, Transform & groundTruthPose) const;
 	virtual void getAllNodeIdsQuery(std::set<int> & ids, bool ignoreChildren, bool ignoreBadSignatures) const;
@@ -102,6 +112,7 @@ private:
 	std::string queryStepLink() const;
 	std::string queryStepWordsChanged() const;
 	std::string queryStepKeypoint() const;
+	std::string queryStepOccupancyGridUpdate() const;
 	void stepNode(sqlite3_stmt * ppStmt, const Signature * s) const;
 	void stepImage(
 			sqlite3_stmt * ppStmt,
@@ -112,6 +123,12 @@ private:
 	void stepLink(sqlite3_stmt * ppStmt, const Link & link) const;
 	void stepWordsChanged(sqlite3_stmt * ppStmt, int signatureId, int oldWordId, int newWordId) const;
 	void stepKeypoint(sqlite3_stmt * ppStmt, int signatureId, int wordId, const cv::KeyPoint & kp, const cv::Point3f & pt, const cv::Mat & descriptor) const;
+	void stepOccupancyGrid(sqlite3_stmt * ppStmt,
+			int nodeId,
+			const cv::Mat & ground,
+			const cv::Mat & obstacles,
+			float cellSize,
+			const cv::Point3f & viewpoint) const;
 
 private:
 	void loadLinksQuery(std::list<Signature *> & signatures) const;

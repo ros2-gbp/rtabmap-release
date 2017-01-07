@@ -64,11 +64,22 @@ SET(SRC_FILES
 	Stereo.cpp
 	StereoDense.cpp
 	StereoCameraModel.cpp
+	
+	OccupancyGrid.cpp
+	
+	GainCompensator.cpp
 		
 	rtflann/ext/lz4.c
 	rtflann/ext/lz4hc.c
+	FlannIndex.cpp
 	
 	sqlite3/sqlite3.c	
+	
+	#clams stuff
+	clams/discrete_depth_distortion_model_helpers.cpp
+	clams/discrete_depth_distortion_model.cpp
+	clams/frame_projector.cpp
+	clams/slam_calibrator.cpp
 )
 
 IF(OpenCV_VERSION_MAJOR EQUAL 2)
@@ -130,6 +141,17 @@ IF(freenect2_FOUND)
 		${freenect2_LIBRARIES}
 	)
 ENDIF(freenect2_FOUND)
+
+IF(RealSense_FOUND)
+	SET(INCLUDE_DIRS
+		${INCLUDE_DIRS}
+		${RealSense_INCLUDE_DIRS}
+	)
+	SET(LIBRARIES
+		${LIBRARIES}
+		${RealSense_LIBRARIES}
+	)
+ENDIF(RealSense_FOUND)
 
 IF(DC1394_FOUND)
 	SET(INCLUDE_DIRS
