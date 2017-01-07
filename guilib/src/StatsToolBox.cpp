@@ -44,23 +44,29 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 namespace rtabmap {
 
-StatItem::StatItem(const QString & name, const std::vector<float> & x, const std::vector<float> & y, const QString & unit, const QMenu * menu, QGridLayout * grid, QWidget * parent) :
+StatItem::StatItem(const QString & name, bool cacheOn, const std::vector<float> & x, const std::vector<float> & y, const QString & unit, const QMenu * menu, QGridLayout * grid, QWidget * parent) :
 	QWidget(parent),
 	_button(0),
 	_name(0),
 	_value(0),
 	_unit(0),
-	_menu(0)
+	_menu(0),
+	_cacheOn(cacheOn)
 {
 	this->setupUi(grid);
 	_name->setText(name);
-	if(y.size() == 1)
+	if(y.size() == 1 || (y.size() > 1 && _cacheOn))
 	{
-		_value->setNum(y[0]);
+		_value->setNum(y[y.size()-1]);
 	}
 	else if(y.size() > 1)
 	{
 		_value->setText("*");
+	}
+	if(cacheOn)
+	{
+		_x = x;
+		_y = y;
 	}
 	_unit->setText(unit);
 	this->updateMenu(menu);
@@ -71,21 +77,66 @@ StatItem::~StatItem()
 
 }
 
+void StatItem::clearCache()
+{
+	_x.clear();
+	_y.clear();
+}
+
 void StatItem::addValue(float y)
 {
+	if(_cacheOn)
+	{
+		if(_y.size() % 100)
+		{
+			_y.reserve(_y.size()+100);
+		}
+		_y.push_back(y);
+	}
 	_value->setText(QString::number(y, 'g', 3));
 	emit valueAdded(y);
 }
 
 void StatItem::addValue(float x, float y)
 {
+	if(_cacheOn)
+	{
+		if (_x.size() && x <_x.back())
+		{
+			clearCache();
+		}
+
+		if(_y.size() % 100)
+		{
+			_y.reserve(_y.size()+100);
+		}
+		_y.push_back(y);
+		if(_x.size() % 100)
+		{
+			_x.reserve(_x.size()+100);
+		}
+		_x.push_back(x);
+	}
+
 	_value->setText(QString::number(y, 'g', 3));
 	emit valueAdded(x,y);
 }
 
 void StatItem::setValues(const std::vector<float> & x, const std::vector<float> & y)
 {
-	_value->setText("*");
+	if(_cacheOn)
+	{
+		_x = x;
+		_y = y;
+		if(y.size())
+		{
+			_value->setNum(y[y.size()-1]);
+		}
+	}
+	else
+	{
+		_value->setText("*");
+	}
 	emit valuesChanged(x,y);
 }
 
@@ -132,6 +183,16 @@ void StatItem::setupUi(QGridLayout * grid)
 	}
 }
 
+void StatItem::setCacheOn(bool on)
+{
+	_cacheOn = on;
+	if(!on)
+	{
+		_x.clear();
+		_y.clear();
+	}
+}
+
 void StatItem::updateMenu(const QMenu * menu)
 {
 	_menu->clear();
@@ -174,6 +235,7 @@ StatsToolBox::StatsToolBox(QWidget * parent) :
 	_plotMenu = new QMenu(this);
 	_plotMenu->addAction(tr("<New figure>"));
 	_workingDirectory = QDir::homePath();
+	_newFigureMaxItems = 0;
 }
 
 StatsToolBox::~StatsToolBox()
@@ -190,22 +252,37 @@ void StatsToolBox::closeFigures()
 	}
 }
 
-void StatsToolBox::updateStat(const QString & statFullName, float y)
+void StatsToolBox::setCacheOn(bool on)
+{
+	QList<StatItem *> items = _statBox->findChildren<StatItem *>();
+	for(int i=0; i<items.size(); ++i)
+	{
+		items[i]->setCacheOn(on);
+	}
+}
+
+void StatsToolBox::updateStat(const QString & statFullName, bool cacheOn)
+{
+	std::vector<float> vx,vy;
+	updateStat(statFullName, vx, vy, cacheOn);
+}
+
+void StatsToolBox::updateStat(const QString & statFullName, float y, bool cacheOn)
 {
 	std::vector<float> vx,vy(1);
 	vy[0] = y;
-	updateStat(statFullName, vx, vy);
+	updateStat(statFullName, vx, vy, cacheOn);
 }
 
-void StatsToolBox::updateStat(const QString & statFullName, float x, float y)
+void StatsToolBox::updateStat(const QString & statFullName, float x, float y, bool cacheOn)
 {
 	std::vector<float> vx(1),vy(1);
 	vx[0] = x;
 	vy[0] = y;
-	updateStat(statFullName, vx, vy);
+	updateStat(statFullName, vx, vy, cacheOn);
 }
 
-void StatsToolBox::updateStat(const QString & statFullName, const std::vector<float> & x, const std::vector<float> & y)
+void StatsToolBox::updateStat(const QString & statFullName, const std::vector<float> & x, const std::vector<float> & y, bool cacheOn)
 {
 	// round float to max 2 numbers after the dot
 	//x = (float(int(100*x)))/100;
@@ -214,6 +291,7 @@ void StatsToolBox::updateStat(const QString & statFullName, const std::vector<fl
 	StatItem * item = _statBox->findChild<StatItem *>(statFullName);
 	if(item)
 	{
+		item->setCacheOn(cacheOn);
 		if(y.size() == 1 && x.size() == 1)
 		{
 			item->addValue(x[0], y[0]);
@@ -296,7 +374,7 @@ void StatsToolBox::updateStat(const QString & statFullName, const std::vector<fl
 			return;
 		}
 
-		item = new StatItem(name, x, y, unit, _plotMenu, grid, _statBox->widget(index));
+		item = new StatItem(name, cacheOn, x, y, unit, _plotMenu, grid, _statBox->widget(index));
 		item->setObjectName(statFullName);
 
 		//layout->insertWidget(layout->count()-1, item);
@@ -326,6 +404,17 @@ void StatsToolBox::plot(const StatItem * stat, const QString & plotName)
 			if(stat->value().compare("*") == 0)
 			{
 				plot->setMaxVisibleItems(0);
+			}
+			if(!stat->yValues().empty())
+			{
+				if(stat->xValues().size() == stat->yValues().size())
+				{
+					curve->setData(stat->xValues(),stat->yValues());
+				}
+				else
+				{
+					curve->setData(stat->yValues());
+				}
 			}
 			if(!plot->addCurve(curve))
 			{
@@ -360,7 +449,7 @@ void StatsToolBox::plot(const StatItem * stat, const QString & plotName)
 		//Plot
 		UPlot * newPlot = new UPlot(figure);
 		newPlot->setWorkingDirectory(_workingDirectory);
-		newPlot->setMaxVisibleItems(50);
+		newPlot->setMaxVisibleItems(_newFigureMaxItems);
 		newPlot->setObjectName(newPlotName);
 		hLayout->addWidget(newPlot);
 		_plotMenu->addAction(newPlotName);
@@ -376,6 +465,19 @@ void StatsToolBox::plot(const StatItem * stat, const QString & plotName)
 		{
 			newPlot->setMaxVisibleItems(0);
 		}
+
+		if(!stat->yValues().empty())
+		{
+			if(stat->xValues().size() == stat->yValues().size())
+			{
+				curve->setData(stat->xValues(),stat->yValues());
+			}
+			else
+			{
+				curve->setData(stat->yValues());
+			}
+		}
+
 		if(!newPlot->addCurve(curve))
 		{
 			ULOGGER_ERROR("Not supposed to be here !?!");
@@ -420,6 +522,28 @@ void StatsToolBox::figureDeleted(QObject * obj)
 	}
 }
 
+void StatsToolBox::clear()
+{
+	for (QMap<QString, QWidget*>::iterator i = _figures.begin(); i != _figures.end(); ++i)
+	{
+		QList<UPlot *> plots = i.value()->findChildren<UPlot *>();
+		if (plots.size() == 1)
+		{
+			QStringList names = plots[0]->curveNames();
+			plots[0]->clearData();
+		}
+		else
+		{
+			UERROR("");
+		}
+	}
+	QList<StatItem*> items = _statBox->currentWidget()->findChildren<StatItem*>();
+	for (int i = 0; i<items.size(); ++i)
+	{
+		items[i]->clearCache();
+	}
+}
+
 void StatsToolBox::contextMenuEvent(QContextMenuEvent * event)
 {
 	QMenu topMenu(this);
@@ -433,19 +557,7 @@ void StatsToolBox::contextMenuEvent(QContextMenuEvent * event)
 	{
 		if(action == aClearFigures)
 		{
-			for(QMap<QString, QWidget*>::iterator i=_figures.begin(); i!=_figures.end(); ++i)
-			{
-				QList<UPlot *> plots = i.value()->findChildren<UPlot *>();
-				if(plots.size() == 1)
-				{
-					QStringList names = plots[0]->curveNames();
-					plots[0]->clearData();
-				}
-				else
-				{
-					UERROR("");
-				}
-			}
+			this->clear();
 		}
 		else
 		{
@@ -493,12 +605,12 @@ void StatsToolBox::getFiguresSetup(QList<int> & curvesPerFigure, QStringList & c
 		}
 	}
 }
-void StatsToolBox::addCurve(const QString & name, bool newFigure)
+void StatsToolBox::addCurve(const QString & name, bool newFigure, bool cacheOn)
 {
 	StatItem * item = _statBox->findChild<StatItem *>(name);
 	if(!item)
 	{
-		this->updateStat(name, 0, 0);
+		this->updateStat(name, cacheOn);
 		item = _statBox->findChild<StatItem *>(name);
 	}
 

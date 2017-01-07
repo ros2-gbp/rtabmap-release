@@ -34,6 +34,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/core/CameraModel.h"
 #include "rtabmap/core/Camera.h"
 #include "rtabmap/core/CameraRGB.h"
+#include "rtabmap/core/Version.h"
 
 #include <pcl/pcl_config.h>
 
@@ -62,6 +63,12 @@ class Freenect2Device;
 class SyncMultiFrameListener;
 class Registration;
 class PacketPipeline;
+}
+
+namespace rs
+{
+	class context;
+	class device;
 }
 
 typedef struct _freenect_context freenect_context;
@@ -149,9 +156,11 @@ class RTABMAP_EXP CameraOpenNI2 :
 public:
 	static bool available();
 	static bool exposureGainAvailable();
+	enum Type {kTypeColorDepth, kTypeIRDepth, kTypeIR};
 
 public:
 	CameraOpenNI2(const std::string & deviceId = "",
+					Type type = kTypeColorDepth,
 					float imageRate = 0,
 					const Transform & localTransform = Transform::getIdentity());
 	virtual ~CameraOpenNI2();
@@ -165,12 +174,14 @@ public:
 	bool setExposure(int value);
 	bool setGain(int value);
 	bool setMirroring(bool enabled);
-	void setOpenNI2StampsAndIDsUsed(bool used) {_openNI2StampsAndIDsUsed = used;}
+	void setOpenNI2StampsAndIDsUsed(bool used);
 
 protected:
 	virtual SensorData captureImage(CameraInfo * info = 0);
 
 private:
+#ifdef RTABMAP_OPENNI2
+	Type _type;
 	openni::Device * _device;
 	openni::VideoStream * _color;
 	openni::VideoStream * _depth;
@@ -178,6 +189,8 @@ private:
 	float _depthFy;
 	std::string _deviceId;
 	bool _openNI2StampsAndIDsUsed;
+	StereoCameraModel _stereoModel;
+#endif
 };
 
 
@@ -191,10 +204,12 @@ class RTABMAP_EXP CameraFreenect :
 {
 public:
 	static bool available();
+	enum Type {kTypeColorDepth, kTypeIRDepth};
 
 public:
 	// default local transform z in, x right, y down));
 	CameraFreenect(int deviceId= 0,
+					Type type = kTypeColorDepth,
 					float imageRate=0.0f,
 					const Transform & localTransform = Transform::getIdentity());
 	virtual ~CameraFreenect();
@@ -207,9 +222,13 @@ protected:
 	virtual SensorData captureImage(CameraInfo * info = 0);
 
 private:
+#ifdef RTABMAP_FREENECT
 	int deviceId_;
+	Type type_;
 	freenect_context * ctx_;
 	FreenectDevice * freenectDevice_;
+	StereoCameraModel stereoModel_;
+#endif
 };
 
 /////////////////////////
@@ -252,6 +271,7 @@ protected:
 	virtual SensorData captureImage(CameraInfo * info = 0);
 
 private:
+#ifdef RTABMAP_FREENECT2
 	int deviceId_;
 	Type type_;
 	StereoCameraModel stereoModel_;
@@ -264,6 +284,43 @@ private:
 	bool bilateralFiltering_;
 	bool edgeAwareFiltering_;
 	bool noiseFiltering_;
+#endif
+};
+
+/////////////////////////
+// CameraRealSense
+/////////////////////////
+class RTABMAP_EXP CameraRealSense :
+	public Camera
+{
+public:
+	static bool available();
+
+public:
+	// default local transform z in, x right, y down));
+	CameraRealSense(
+		int deviceId = 0,
+		int presetRGB = 0, // 0=best quality, 1=largest image, 2=highest framerate
+		int presetDepth = 0, // 0=best quality, 1=largest image, 2=highest framerate
+		float imageRate = 0,
+		const Transform & localTransform = Transform::getIdentity());
+	virtual ~CameraRealSense();
+
+	virtual bool init(const std::string & calibrationFolder = ".", const std::string & cameraName = "");
+	virtual bool isCalibrated() const;
+	virtual std::string getSerial() const;
+
+protected:
+	virtual SensorData captureImage(CameraInfo * info = 0);
+
+private:
+#ifdef RTABMAP_REALSENSE
+	rs::context * ctx_;
+	rs::device * dev_;
+	int deviceId_;
+	int presetRGB_;
+	int presetDepth_;
+#endif
 };
 
 
