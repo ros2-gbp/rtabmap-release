@@ -61,6 +61,7 @@ public:
 
 	void exportClouds(
 			const std::map<int, Transform> & poses,
+			const std::multimap<int, Link> & links,
 			const std::map<int, int> & mapIds,
 			const QMap<int, Signature> & cachedSignatures,
 			const std::map<int, std::pair<pcl::PointCloud<pcl::PointXYZRGB>::Ptr, pcl::IndicesPtr> > & cachedClouds,
@@ -69,11 +70,14 @@ public:
 
 	void viewClouds(
 			const std::map<int, Transform> & poses,
+			const std::multimap<int, Link> & links,
 			const std::map<int, int> & mapIds,
 			const QMap<int, Signature> & cachedSignatures,
 			const std::map<int, std::pair<pcl::PointCloud<pcl::PointXYZRGB>::Ptr, pcl::IndicesPtr> > & cachedClouds,
 			const QString & workingDirectory,
 			const ParametersMap & parameters);
+
+	static bool removeDirRecursively(const QString & dirName);
 
 signals:
 	void configChanged();
@@ -83,7 +87,10 @@ public slots:
 
 private slots:
 	void updateReconstructionFlavor();
+	void selectDistortionModel();
 	void updateMLSGrpVisibility();
+	void updateTexturingAvailability();
+	void cancel();
 
 private:
 	std::map<int, std::pair<pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr, pcl::IndicesPtr> > getClouds(
@@ -93,6 +100,7 @@ private:
 			const ParametersMap & parameters) const;
 	bool getExportedClouds(
 				const std::map<int, Transform> & poses,
+				const std::multimap<int, Link> & links,
 				const std::map<int, int> & mapIds,
 				const QMap<int, Signature> & cachedSignatures,
 				const std::map<int, std::pair<pcl::PointCloud<pcl::PointXYZRGB>::Ptr, pcl::IndicesPtr> > & cachedClouds,
@@ -108,10 +116,13 @@ private:
 	void setSaveButton();
 	void setOkButton();
 	void enableRegeneration(bool enabled);
+	void updateTexturingAvailability(bool isExporting);
 
 private:
 	Ui_ExportCloudsDialog * _ui;
 	ProgressDialog * _progressDialog;
+	QString _workingDirectory;
+	bool _canceled;
 };
 
 }

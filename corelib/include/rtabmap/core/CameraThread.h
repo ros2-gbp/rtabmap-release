@@ -33,6 +33,11 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap/utilite/UThread.h>
 #include <rtabmap/utilite/UEventsSender.h>
 
+namespace clams
+{
+class DiscreteDepthDistortionModel;
+}
+
 namespace rtabmap
 {
 
@@ -56,6 +61,10 @@ public:
 	void setColorOnly(bool colorOnly) {_colorOnly = colorOnly;}
 	void setImageDecimation(int decimation) {_imageDecimation = decimation;}
 	void setStereoToDepth(bool enabled) {_stereoToDepth = enabled;}
+	void setImageRate(float imageRate);
+	void setDistortionModel(const std::string & path);
+	void enableBilateralFiltering(float sigmaS, float sigmaR);
+	void disableBilateralFiltering() {_bilateralFiltering = false;}
 
 	void setScanFromDepth(
 			bool enabled,
@@ -74,11 +83,11 @@ public:
 	//getters
 	bool isPaused() const {return !this->isRunning();}
 	bool isCapturing() const {return this->isRunning();}
-	void setImageRate(float imageRate);
 
 	Camera * camera() {return _camera;} // return null if not set, valid until CameraThread is deleted
 
 private:
+	virtual void mainLoopBegin();
 	virtual void mainLoop();
 	virtual void mainLoopKill();
 
@@ -95,6 +104,10 @@ private:
 	float _scanVoxelSize;
 	int _scanNormalsK;
 	StereoDense * _stereoDense;
+	clams::DiscreteDepthDistortionModel * _distortionModel;
+	bool _bilateralFiltering;
+	float _bilateralSigmaS;
+	float _bilateralSigmaR;
 };
 
 } // namespace rtabmap

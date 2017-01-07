@@ -45,14 +45,23 @@ class PointCloudDrawable {
 		  GLuint cloudShaderProgram,
 		  GLuint textureShaderProgram,
   		  const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud,
-  		  const std::vector<pcl::Vertices> & polygons = std::vector<pcl::Vertices>(),
-		  const cv::Mat & image = cv::Mat());
+		  const pcl::IndicesPtr & indices,
+		  float gain);
+  PointCloudDrawable(
+  		  GLuint cloudShaderProgram,
+  		  GLuint textureShaderProgram,
+    	  const Mesh & mesh,
+		  const cv::Mat & texture);
   virtual ~PointCloudDrawable();
 
+  void updatePolygons(const std::vector<pcl::Vertices> & polygons);
+  void updateCloud(const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud, const pcl::IndicesPtr & indices, float gain);
+  void updateMesh(const Mesh & mesh, const cv::Mat & texture);
   void setPose(const rtabmap::Transform & pose);
   void setVisible(bool visible) {visible_=visible;}
   rtabmap::Transform getPose() const {return glmToTransform(pose_);}
   bool isVisible() const {return visible_;}
+  bool hasTexture() const {return textures_ != 0;}
 
   // Update current point cloud data.
   //
@@ -60,7 +69,7 @@ class PointCloudDrawable {
   // @param view_mat: view matrix from current render camera.
   // @param model_mat: model matrix for this point cloud frame.
   // @param vertices: all vertices in this point cloud frame.
-  void Render(const glm::mat4 & projectionMatrix, const glm::mat4 & viewMatrix, bool meshRendering = true, float pointSize = 3.0f);
+  void Render(const glm::mat4 & projectionMatrix, const glm::mat4 & viewMatrix, bool meshRendering = true, float pointSize = 3.0f, bool textureRendering = false);
 
  private:
   // Vertex buffer of the point cloud geometry.
@@ -70,9 +79,12 @@ class PointCloudDrawable {
   int nPoints_;
   glm::mat4 pose_;
   bool visible_;
+  std::vector<int> organizedToDenseIndices_;
 
   GLuint cloud_shader_program_;
   GLuint texture_shader_program_;
+
+  float gain_;
 };
 
 #endif  // TANGO_POINT_CLOUD_POINT_CLOUD_DRAWABLE_H_

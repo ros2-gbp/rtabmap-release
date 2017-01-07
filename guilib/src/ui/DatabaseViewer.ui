@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>1285</width>
-    <height>857</height>
+    <height>965</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -52,8 +52,8 @@
           <rect>
            <x>0</x>
            <y>0</y>
-           <width>198</width>
-           <height>196</height>
+           <width>253</width>
+           <height>208</height>
           </rect>
          </property>
          <layout class="QGridLayout" name="gridLayout" columnstretch="0,1">
@@ -210,8 +210,8 @@
           <rect>
            <x>0</x>
            <y>0</y>
-           <width>197</width>
-           <height>196</height>
+           <width>253</width>
+           <height>208</height>
           </rect>
          </property>
          <layout class="QGridLayout" name="gridLayout_2" columnstretch="0,1">
@@ -484,7 +484,7 @@
      <x>0</x>
      <y>0</y>
      <width>1285</width>
-     <height>25</height>
+     <height>22</height>
     </rect>
    </property>
    <widget class="QMenu" name="menuFile">
@@ -512,10 +512,11 @@
     <addaction name="actionGenerate_g2o_graph_g2o"/>
     <addaction name="separator"/>
     <addaction name="actionDetect_more_loop_closures"/>
-    <addaction name="actionVisual_Refine_all_neighbor_links"/>
     <addaction name="actionRefine_all_neighbor_links"/>
-    <addaction name="actionVisual_Refine_all_loop_closure_links"/>
     <addaction name="actionRefine_all_loop_closure_links"/>
+    <addaction name="separator"/>
+    <addaction name="actionRegenerate_local_grid_maps"/>
+    <addaction name="actionRegenerate_local_grid_maps_selected"/>
     <addaction name="separator"/>
     <addaction name="actionReset_all_changes"/>
     <addaction name="separator"/>
@@ -573,6 +574,16 @@
          </property>
          <property name="checked">
           <bool>true</bool>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QCheckBox" name="checkBox_odomFrame">
+         <property name="text">
+          <string>Odom Frame</string>
+         </property>
+         <property name="checked">
+          <bool>false</bool>
          </property>
         </widget>
        </item>
@@ -706,16 +717,12 @@
      <item>
       <layout class="QHBoxLayout" name="horizontalLayout_5">
        <item>
-        <widget class="QPushButton" name="pushButton_refineVisually">
-         <property name="text">
-          <string>Refine (Visual)</string>
-         </property>
-        </widget>
-       </item>
-       <item>
         <widget class="QPushButton" name="pushButton_refine">
+         <property name="toolTip">
+          <string>Refine with the registration strategy set in &quot;Core Parameters&quot;-&gt;&quot;Reg&quot;</string>
+         </property>
          <property name="text">
-          <string>Refine (ICP)</string>
+          <string>Refine</string>
          </property>
         </widget>
        </item>
@@ -980,15 +987,15 @@
      <item>
       <widget class="QToolBox" name="toolBox">
        <property name="currentIndex">
-        <number>1</number>
+        <number>3</number>
        </property>
        <widget class="QWidget" name="page_3">
         <property name="geometry">
          <rect>
           <x>0</x>
           <y>0</y>
-          <width>333</width>
-          <height>186</height>
+          <width>324</width>
+          <height>188</height>
          </rect>
         </property>
         <attribute name="label">
@@ -1122,9 +1129,9 @@
         <property name="geometry">
          <rect>
           <x>0</x>
-          <y>-245</y>
-          <width>284</width>
-          <height>611</height>
+          <y>0</y>
+          <width>280</width>
+          <height>584</height>
          </rect>
         </property>
         <attribute name="label">
@@ -1133,32 +1140,6 @@
         <layout class="QVBoxLayout" name="verticalLayout_16">
          <item>
           <layout class="QGridLayout" name="gridLayout_9" columnstretch="0,1">
-           <item row="0" column="0">
-            <widget class="QDoubleSpinBox" name="doubleSpinBox_gridCellSize">
-             <property name="suffix">
-              <string> m</string>
-             </property>
-             <property name="minimum">
-              <double>0.010000000000000</double>
-             </property>
-             <property name="maximum">
-              <double>5.000000000000000</double>
-             </property>
-             <property name="singleStep">
-              <double>0.010000000000000</double>
-             </property>
-             <property name="value">
-              <double>0.050000000000000</double>
-             </property>
-            </widget>
-           </item>
-           <item row="0" column="1">
-            <widget class="QLabel" name="label_36">
-             <property name="text">
-              <string>Grid cell size</string>
-             </property>
-            </widget>
-           </item>
            <item row="1" column="1">
             <widget class="QLabel" name="label_44">
              <property name="text">
@@ -1173,163 +1154,59 @@
              </property>
             </widget>
            </item>
-           <item row="2" column="1">
-            <widget class="QLabel" name="label_64">
+           <item row="0" column="1">
+            <widget class="QLabel" name="label_46">
              <property name="text">
-              <string>Fill unknown space</string>
+              <string>Grid cell size</string>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="0">
+            <widget class="QDoubleSpinBox" name="doubleSpinBox_gridCellSize">
+             <property name="decimals">
+              <number>3</number>
+             </property>
+             <property name="minimum">
+              <double>0.010000000000000</double>
+             </property>
+             <property name="singleStep">
+              <double>0.010000000000000</double>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="1">
+            <widget class="QLabel" name="label_51">
+             <property name="text">
+              <string>Gain compensation radius (Constraints view)</string>
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
              </property>
             </widget>
            </item>
            <item row="2" column="0">
-            <widget class="QCheckBox" name="checkBox_gridFillUnkownSpace">
-             <property name="text">
-              <string/>
+            <widget class="QDoubleSpinBox" name="doubleSpinBox_gainCompensationRadius">
+             <property name="suffix">
+              <string> m</string>
+             </property>
+             <property name="decimals">
+              <number>2</number>
+             </property>
+             <property name="minimum">
+              <double>0.000000000000000</double>
+             </property>
+             <property name="maximum">
+              <double>10.000000000000000</double>
+             </property>
+             <property name="singleStep">
+              <double>0.010000000000000</double>
+             </property>
+             <property name="value">
+              <double>0.000000000000000</double>
              </property>
             </widget>
            </item>
           </layout>
-         </item>
-         <item>
-          <widget class="QGroupBox" name="groupBox_gridFromProjection">
-           <property name="title">
-            <string>Grid from 3D projection</string>
-           </property>
-           <property name="checkable">
-            <bool>true</bool>
-           </property>
-           <property name="checked">
-            <bool>true</bool>
-           </property>
-           <layout class="QGridLayout" name="gridLayout_8" columnstretch="0,1">
-            <item row="0" column="0">
-             <widget class="QSpinBox" name="spinBox_projDecimation">
-              <property name="minimum">
-               <number>1</number>
-              </property>
-              <property name="maximum">
-               <number>8</number>
-              </property>
-              <property name="value">
-               <number>4</number>
-              </property>
-             </widget>
-            </item>
-            <item row="0" column="1">
-             <widget class="QLabel" name="label_37">
-              <property name="text">
-               <string>Cloud decimation</string>
-              </property>
-             </widget>
-            </item>
-            <item row="1" column="0">
-             <widget class="QDoubleSpinBox" name="doubleSpinBox_projMaxDepth">
-              <property name="suffix">
-               <string> m</string>
-              </property>
-              <property name="decimals">
-               <number>1</number>
-              </property>
-              <property name="minimum">
-               <double>0.400000000000000</double>
-              </property>
-              <property name="maximum">
-               <double>999.000000000000000</double>
-              </property>
-              <property name="singleStep">
-               <double>1.000000000000000</double>
-              </property>
-              <property name="value">
-               <double>4.000000000000000</double>
-              </property>
-             </widget>
-            </item>
-            <item row="1" column="1">
-             <widget class="QLabel" name="label_38">
-              <property name="text">
-               <string>Cloud max depth</string>
-              </property>
-             </widget>
-            </item>
-            <item row="3" column="1">
-             <widget class="QLabel" name="label_66">
-              <property name="text">
-               <string>Cluster size</string>
-              </property>
-             </widget>
-            </item>
-            <item row="4" column="1">
-             <widget class="QLabel" name="label_67">
-              <property name="text">
-               <string>Max ground angle</string>
-              </property>
-             </widget>
-            </item>
-            <item row="4" column="0">
-             <widget class="QDoubleSpinBox" name="doubleSpinBox_projMaxAngle">
-              <property name="suffix">
-               <string> rad</string>
-              </property>
-              <property name="decimals">
-               <number>2</number>
-              </property>
-              <property name="minimum">
-               <double>0.000000000000000</double>
-              </property>
-              <property name="maximum">
-               <double>3.140000000000000</double>
-              </property>
-              <property name="singleStep">
-               <double>0.100000000000000</double>
-              </property>
-              <property name="value">
-               <double>0.790000000000000</double>
-              </property>
-             </widget>
-            </item>
-            <item row="3" column="0">
-             <widget class="QSpinBox" name="spinBox_projClusterSize">
-              <property name="minimum">
-               <number>1</number>
-              </property>
-              <property name="maximum">
-               <number>10000</number>
-              </property>
-              <property name="value">
-               <number>20</number>
-              </property>
-             </widget>
-            </item>
-            <item row="2" column="1">
-             <widget class="QLabel" name="label_40">
-              <property name="text">
-               <string>Cloud min depth</string>
-              </property>
-             </widget>
-            </item>
-            <item row="2" column="0">
-             <widget class="QDoubleSpinBox" name="doubleSpinBox_projMinDepth">
-              <property name="suffix">
-               <string> m</string>
-              </property>
-              <property name="decimals">
-               <number>1</number>
-              </property>
-              <property name="minimum">
-               <double>0.000000000000000</double>
-              </property>
-              <property name="maximum">
-               <double>999.000000000000000</double>
-              </property>
-              <property name="singleStep">
-               <double>1.000000000000000</double>
-              </property>
-              <property name="value">
-               <double>0.000000000000000</double>
-              </property>
-             </widget>
-            </item>
-           </layout>
-          </widget>
          </item>
          <item>
           <widget class="QGroupBox" name="groupBox_posefiltering">
@@ -1408,7 +1285,7 @@
             <string>Organized Fast Mesh</string>
            </property>
            <layout class="QGridLayout" name="gridLayout_13">
-            <item row="2" column="1">
+            <item row="3" column="1">
              <widget class="QLabel" name="label_14">
               <property name="text">
                <string>Triangle size</string>
@@ -1419,39 +1296,6 @@
              <widget class="QLabel" name="label_12">
               <property name="text">
                <string>Angle tolerance</string>
-              </property>
-             </widget>
-            </item>
-            <item row="1" column="0">
-             <widget class="QCheckBox" name="checkBox_mesh_quad">
-              <property name="text">
-               <string/>
-              </property>
-              <property name="checked">
-               <bool>true</bool>
-              </property>
-             </widget>
-            </item>
-            <item row="3" column="1">
-             <widget class="QLabel" name="label_15">
-              <property name="text">
-               <string>Fill depth holes: size</string>
-              </property>
-             </widget>
-            </item>
-            <item row="3" column="0">
-             <widget class="QSpinBox" name="spinBox_mesh_fillDepthHoles">
-              <property name="suffix">
-               <string> pix</string>
-              </property>
-              <property name="minimum">
-               <number>0</number>
-              </property>
-              <property name="maximum">
-               <number>99</number>
-              </property>
-              <property name="value">
-               <number>0</number>
               </property>
              </widget>
             </item>
@@ -1471,7 +1315,7 @@
               </property>
              </widget>
             </item>
-            <item row="2" column="0">
+            <item row="3" column="0">
              <widget class="QSpinBox" name="spinBox_mesh_triangleSize">
               <property name="suffix">
                <string> pix</string>
@@ -1484,21 +1328,21 @@
               </property>
              </widget>
             </item>
-            <item row="1" column="1">
+            <item row="2" column="1">
              <widget class="QLabel" name="label_13">
               <property name="text">
                <string>Quad</string>
               </property>
              </widget>
             </item>
-            <item row="4" column="1">
+            <item row="5" column="1">
              <widget class="QLabel" name="label_17">
               <property name="text">
                <string>Fill depth holes: error</string>
               </property>
              </widget>
             </item>
-            <item row="4" column="0">
+            <item row="5" column="0">
              <widget class="QSpinBox" name="spinBox_mesh_depthError">
               <property name="suffix">
                <string> %</string>
@@ -1511,8 +1355,77 @@
               </property>
              </widget>
             </item>
+            <item row="2" column="0">
+             <widget class="QCheckBox" name="checkBox_mesh_quad">
+              <property name="text">
+               <string/>
+              </property>
+              <property name="checked">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item row="4" column="1">
+             <widget class="QLabel" name="label_15">
+              <property name="text">
+               <string>Fill depth holes: size</string>
+              </property>
+             </widget>
+            </item>
+            <item row="4" column="0">
+             <widget class="QSpinBox" name="spinBox_mesh_fillDepthHoles">
+              <property name="suffix">
+               <string> pix</string>
+              </property>
+              <property name="minimum">
+               <number>0</number>
+              </property>
+              <property name="maximum">
+               <number>99</number>
+              </property>
+              <property name="value">
+               <number>0</number>
+              </property>
+             </widget>
+            </item>
+            <item row="1" column="1">
+             <widget class="QLabel" name="label_20">
+              <property name="text">
+               <string>Min cluster size</string>
+              </property>
+             </widget>
+            </item>
+            <item row="1" column="0">
+             <widget class="QSpinBox" name="spinBox_mesh_minClusterSize">
+              <property name="suffix">
+               <string/>
+              </property>
+              <property name="minimum">
+               <number>0</number>
+              </property>
+              <property name="maximum">
+               <number>999</number>
+              </property>
+              <property name="value">
+               <number>0</number>
+              </property>
+             </widget>
+            </item>
            </layout>
           </widget>
+         </item>
+         <item>
+          <spacer name="verticalSpacer_6">
+           <property name="orientation">
+            <enum>Qt::Vertical</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>20</width>
+             <height>40</height>
+            </size>
+           </property>
+          </spacer>
          </item>
          <item>
           <spacer name="verticalSpacer_2">
@@ -1535,7 +1448,7 @@
           <x>0</x>
           <y>0</y>
           <width>201</width>
-          <height>117</height>
+          <height>126</height>
          </rect>
         </property>
         <attribute name="label">
@@ -1634,25 +1547,28 @@
          <rect>
           <x>0</x>
           <y>0</y>
-          <width>175</width>
-          <height>191</height>
+          <width>333</width>
+          <height>256</height>
          </rect>
         </property>
         <attribute name="label">
-         <string>ICP</string>
+         <string>Refine</string>
         </attribute>
         <layout class="QGridLayout" name="gridLayout_3" columnstretch="0,0,1">
          <item row="1" column="0">
           <widget class="QSpinBox" name="spinBox_icp_decimation">
            <property name="minimum">
-            <number>1</number>
+            <number>-32</number>
+           </property>
+           <property name="maximum">
+            <number>32</number>
            </property>
           </widget>
          </item>
          <item row="1" column="2">
           <widget class="QLabel" name="label_9">
            <property name="text">
-            <string>Decimation</string>
+            <string>Decimation. Negative decimation is done from RGB size instead of depth size (if depth is smaller than RGB, it may be interpolated depending of the decimation value).</string>
            </property>
            <property name="wordWrap">
             <bool>true</bool>
@@ -1673,7 +1589,7 @@
           </widget>
          </item>
          <item row="0" column="0">
-          <widget class="QCheckBox" name="checkBox_icp_laserScan">
+          <widget class="QCheckBox" name="checkBox_icp_from_depth">
            <property name="text">
             <string/>
            </property>
@@ -1682,7 +1598,7 @@
          <item row="0" column="2">
           <widget class="QLabel" name="label_7">
            <property name="text">
-            <string>Generate laser scans from RGB-D images</string>
+            <string>Generate laser scans from RGB-D images using the following parameters.</string>
            </property>
            <property name="wordWrap">
             <bool>true</bool>
@@ -1858,14 +1774,81 @@
       </layout>
      </item>
      <item>
-      <widget class="QCheckBox" name="checkBox_showMesh">
-       <property name="text">
-        <string>Mesh</string>
-       </property>
-       <property name="checked">
-        <bool>false</bool>
-       </property>
-      </widget>
+      <layout class="QHBoxLayout" name="horizontalLayout_3">
+       <item>
+        <widget class="QCheckBox" name="checkBox_showCloud">
+         <property name="text">
+          <string>Cloud</string>
+         </property>
+         <property name="checked">
+          <bool>true</bool>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QCheckBox" name="checkBox_showMesh">
+         <property name="text">
+          <string>Mesh</string>
+         </property>
+         <property name="checked">
+          <bool>false</bool>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QCheckBox" name="checkBox_showScan">
+         <property name="text">
+          <string>Scan</string>
+         </property>
+         <property name="checked">
+          <bool>true</bool>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QCheckBox" name="checkBox_showMap">
+         <property name="text">
+          <string>Map</string>
+         </property>
+         <property name="checked">
+          <bool>true</bool>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QCheckBox" name="checkBox_showGrid">
+         <property name="text">
+          <string>Grid</string>
+         </property>
+         <property name="checked">
+          <bool>false</bool>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QCheckBox" name="checkBox_odomFrame_3dview">
+         <property name="text">
+          <string>Odom Frame</string>
+         </property>
+         <property name="checked">
+          <bool>false</bool>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <spacer name="horizontalSpacer_4">
+         <property name="orientation">
+          <enum>Qt::Horizontal</enum>
+         </property>
+         <property name="sizeHint" stdset="0">
+          <size>
+           <width>40</width>
+           <height>20</height>
+          </size>
+         </property>
+        </spacer>
+       </item>
+      </layout>
      </item>
     </layout>
    </widget>
@@ -1906,6 +1889,24 @@
      </property>
      <item>
       <widget class="rtabmap::ParametersToolBox" name="parameters_toolbox" native="true"/>
+     </item>
+    </layout>
+   </widget>
+  </widget>
+  <widget class="QDockWidget" name="dockWidget_statistics">
+   <property name="windowTitle">
+    <string>Statistics</string>
+   </property>
+   <attribute name="dockWidgetArea">
+    <number>1</number>
+   </attribute>
+   <widget class="QWidget" name="dockWidgetContents_5">
+    <layout class="QVBoxLayout" name="verticalLayout_7">
+     <property name="margin">
+      <number>0</number>
+     </property>
+     <item>
+      <widget class="rtabmap::StatsToolBox" name="toolBox_statistics" native="true"/>
      </item>
     </layout>
    </widget>
@@ -1977,27 +1978,23 @@
   </action>
   <action name="actionRefine_all_neighbor_links">
    <property name="text">
-    <string>ICP: Refine all neighbor links...</string>
+    <string>Refine all neighbor links...</string>
+   </property>
+   <property name="toolTip">
+    <string>Refine all neighbor links with the registration strategy set in &quot;Core Parameters&quot;-&gt;&quot;Reg&quot;</string>
    </property>
   </action>
   <action name="actionRefine_all_loop_closure_links">
    <property name="text">
-    <string>ICP: Refine all loop closure links...</string>
+    <string>Refine all loop closure links...</string>
+   </property>
+   <property name="toolTip">
+    <string>Refine all loop closure links with the registration strategy set in &quot;Core Parameters&quot;-&gt;&quot;Reg&quot;</string>
    </property>
   </action>
   <action name="actionDetect_more_loop_closures">
    <property name="text">
     <string>Detect more loop closures...</string>
-   </property>
-  </action>
-  <action name="actionVisual_Refine_all_neighbor_links">
-   <property name="text">
-    <string>Visual: Refine all neighbor links...</string>
-   </property>
-  </action>
-  <action name="actionVisual_Refine_all_loop_closure_links">
-   <property name="text">
-    <string>Visual: Refine all loop closure links...</string>
    </property>
   </action>
   <action name="actionSave_config">
@@ -2017,12 +2014,22 @@
   </action>
   <action name="actionView_3D_laser_scans">
    <property name="text">
-    <string>View 3D laser scans...</string>
+    <string>View 2D-3D laser scans...</string>
    </property>
   </action>
   <action name="actionExport_3D_laser_scans_ply_pcd">
    <property name="text">
-    <string>Export 3D laser scans (*.ply *.pcd) ...</string>
+    <string>Export 2D-3D laser scans (*.ply *.pcd) ...</string>
+   </property>
+  </action>
+  <action name="actionRegenerate_local_grid_maps">
+   <property name="text">
+    <string>Regenerate local grid maps...</string>
+   </property>
+  </action>
+  <action name="actionRegenerate_local_grid_maps_selected">
+   <property name="text">
+    <string>Regenerate local grid maps (selected)...</string>
    </property>
   </action>
  </widget>
@@ -2041,6 +2048,12 @@
    <class>rtabmap::ParametersToolBox</class>
    <extends>QWidget</extends>
    <header>ParametersToolBox.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>rtabmap::StatsToolBox</class>
+   <extends>QWidget</extends>
+   <header>rtabmap/gui/StatsToolBox.h</header>
    <container>1</container>
   </customwidget>
  </customwidgets>
