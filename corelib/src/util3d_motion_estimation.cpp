@@ -35,8 +35,6 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/core/util3d_correspondences.h"
 #include "rtabmap/core/util3d.h"
 
-#include "rtabmap/core/OptimizerG2O.h"
-
 #if CV_MAJOR_VERSION < 3
 #include "opencv/solvepnp.h"
 #endif
@@ -153,7 +151,7 @@ Transform estimateMotion3DTo2D(
 						cv::Point3f newPt = util3d::transformPoint(iter->second, transform);
 						errorSqrdDists[oi] = uNormSquared(objPt.x-newPt.x, objPt.y-newPt.y, objPt.z-newPt.z);
 						//ignore very very far features (stereo)
-						if(errorSqrdDists[oi] < 100.0f)
+						if(errorSqrdDists[oi] < iter->second.x/100.0f)
 						{
 							++oi;
 						}

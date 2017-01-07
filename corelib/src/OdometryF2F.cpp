@@ -39,12 +39,15 @@ namespace rtabmap {
 OdometryF2F::OdometryF2F(const ParametersMap & parameters) :
 	Odometry(parameters),
 	keyFrameThr_(Parameters::defaultOdomKeyFrameThr()),
+	visKeyFrameThr_(Parameters::defaultOdomVisKeyFrameThr()),
 	scanKeyFrameThr_(Parameters::defaultOdomScanKeyFrameThr())
 {
 	registrationPipeline_ = Registration::create(parameters);
 	Parameters::parse(parameters, Parameters::kOdomKeyFrameThr(), keyFrameThr_);
+	Parameters::parse(parameters, Parameters::kOdomVisKeyFrameThr(), visKeyFrameThr_);
 	Parameters::parse(parameters, Parameters::kOdomScanKeyFrameThr(), scanKeyFrameThr_);
 	UASSERT(keyFrameThr_>=0.0f && keyFrameThr_<=1.0f);
+	UASSERT(visKeyFrameThr_>=0);
 	UASSERT(scanKeyFrameThr_>=0.0f && scanKeyFrameThr_<=1.0f);
 }
 
@@ -96,8 +99,33 @@ Transform OdometryF2F::computeTransform(
 		output = registrationPipeline_->computeTransformationMod(
 				tmpRefFrame,
 				newFrame,
-				!guess.isNull()?motionSinceLastKeyFrame*guess:Transform(),
+				// special case for ICP-only odom, set guess to identity if we just started
+				!guess.isNull()?motionSinceLastKeyFrame*guess:!registrationPipeline_->isImageRequired()&&this->getPose().isIdentity()?Transform::getIdentity():Transform(),
 				&regInfo);
+
+		if(output.isNull() && !guess.isNull() && registrationPipeline_->isImageRequired())
+		{
+			tmpRefFrame = refFrame_;
+			// reset matches, but keep already extracted features in newFrame.sensorData()
+			newFrame.setWords(std::multimap<int, cv::KeyPoint>());
+			newFrame.setWords3(std::multimap<int, cv::Point3f>());
+			newFrame.setWordsDescriptors(std::multimap<int, cv::Mat>());
+			UWARN("Failed to find a transformation with the provided guess (%s), trying again without a guess.", guess.prettyPrint().c_str());
+			output = registrationPipeline_->computeTransformationMod(
+				tmpRefFrame,
+				newFrame,
+				Transform(), // null guess
+				&regInfo);
+
+			if(output.isNull())
+			{
+				UWARN("Trial with no guess still fail.");
+			}
+			else
+			{
+				UWARN("Trial with no guess succeeded.");
+			}
+		}
 
 		if(info && this->isInfoDataFilled())
 		{
@@ -128,7 +156,11 @@ Transform OdometryF2F::computeTransform(
 			{
 				info->localMap.insert(std::make_pair(iter->first, util3d::transformPoint(iter->second, t)));
 			}
+			info->localMapSize = tmpRefFrame.getWords3().size();
 			info->words = newFrame.getWords();
+
+			info->localScanMapSize = tmpRefFrame.sensorData().laserScanRaw().cols;
+			info->localScanMap = util3d::transformLaserScan(tmpRefFrame.sensorData().laserScanRaw(), t*tmpRefFrame.sensorData().laserScanInfo().localTransform());
 		}
 	}
 	else
@@ -136,7 +168,8 @@ Transform OdometryF2F::computeTransform(
 		//return Identity
 		output = Transform::getIdentity();
 		// a very high variance tells that the new pose is not linked with the previous one
-		regInfo.variance = 9999;
+		regInfo.varianceLin = 9999;
+		regInfo.varianceAng = 9999;
 	}
 
 	if(!output.isNull())
@@ -144,8 +177,12 @@ Transform OdometryF2F::computeTransform(
 		output = motionSinceLastKeyFrame.inverse() * output;
 
 		// new key-frame?
-		if( (registrationPipeline_->isImageRequired() && (keyFrameThr_ == 0 || float(regInfo.inliers) <= keyFrameThr_*float(refFrame_.sensorData().keypoints().size()))) ||
-			(registrationPipeline_->isScanRequired() && (scanKeyFrameThr_ == 0 || regInfo.icpInliersRatio <= scanKeyFrameThr_)))
+		if( (registrationPipeline_->isImageRequired() &&
+				(keyFrameThr_ == 0.0f ||
+				 visKeyFrameThr_ == 0 ||
+				 float(regInfo.inliers) <= keyFrameThr_*float(refFrame_.sensorData().keypoints().size()) ||
+				 regInfo.inliers <= visKeyFrameThr_)) ||
+			(registrationPipeline_->isScanRequired() && (scanKeyFrameThr_ == 0.0f || regInfo.icpInliersRatio <= scanKeyFrameThr_)))
 		{
 			UDEBUG("Update key frame");
 			int features = newFrame.getWordsDescriptors().size();
@@ -163,7 +200,7 @@ Transform OdometryF2F::computeTransform(
 			if((features >= registrationPipeline_->getMinVisualCorrespondences()) &&
 			   (registrationPipeline_->getMinGeometryCorrespondencesRatio()==0.0f ||
 					   (newFrame.sensorData().laserScanRaw().cols &&
-					   (newFrame.sensorData().laserScanMaxPts() == 0 || float(newFrame.sensorData().laserScanRaw().cols)/float(newFrame.sensorData().laserScanMaxPts())>=registrationPipeline_->getMinGeometryCorrespondencesRatio()))))
+					   (newFrame.sensorData().laserScanInfo().maxPoints() == 0 || float(newFrame.sensorData().laserScanRaw().cols)/float(newFrame.sensorData().laserScanInfo().maxPoints())>=registrationPipeline_->getMinGeometryCorrespondencesRatio()))))
 			{
 				refFrame_ = newFrame;
 
@@ -191,9 +228,9 @@ Transform OdometryF2F::computeTransform(
 				{
 					UWARN("Too low scan points (%d), keeping last key frame...", newFrame.sensorData().laserScanRaw().cols);
 				}
-				else if(registrationPipeline_->getMinGeometryCorrespondencesRatio()>0.0f && newFrame.sensorData().laserScanMaxPts() != 0 && float(newFrame.sensorData().laserScanRaw().cols)/float(newFrame.sensorData().laserScanMaxPts())<registrationPipeline_->getMinGeometryCorrespondencesRatio())
+				else if(registrationPipeline_->getMinGeometryCorrespondencesRatio()>0.0f && newFrame.sensorData().laserScanInfo().maxPoints() != 0 && float(newFrame.sensorData().laserScanRaw().cols)/float(newFrame.sensorData().laserScanInfo().maxPoints())<registrationPipeline_->getMinGeometryCorrespondencesRatio())
 				{
-					UWARN("Too low scan points ratio (%d < %d), keeping last key frame...", float(newFrame.sensorData().laserScanRaw().cols)/float(newFrame.sensorData().laserScanMaxPts()), registrationPipeline_->getMinGeometryCorrespondencesRatio());
+					UWARN("Too low scan points ratio (%d < %d), keeping last key frame...", float(newFrame.sensorData().laserScanRaw().cols)/float(newFrame.sensorData().laserScanInfo().maxPoints()), registrationPipeline_->getMinGeometryCorrespondencesRatio());
 				}
 			}
 		}
@@ -203,12 +240,13 @@ Transform OdometryF2F::computeTransform(
 		UWARN("Registration failed: \"%s\"", regInfo.rejectedMsg.c_str());
 	}
 
-	data.setFeatures(newFrame.sensorData().keypoints(), newFrame.sensorData().descriptors());
+	data.setFeatures(newFrame.sensorData().keypoints(), newFrame.sensorData().keypoints3D(), newFrame.sensorData().descriptors());
 
 	if(info)
 	{
 		info->type = 1;
-		info->variance = regInfo.variance;
+		info->varianceLin = regInfo.varianceLin;
+		info->varianceAng = regInfo.varianceAng;
 		info->inliers = regInfo.inliers;
 		info->icpInliersRatio = regInfo.icpInliersRatio;
 		info->matches = regInfo.matches;

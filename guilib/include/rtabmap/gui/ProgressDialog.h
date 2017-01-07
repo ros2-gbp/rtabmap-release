@@ -53,6 +53,10 @@ public:
 	int maximumSteps() const;
 	void setMaximumSteps(int steps);
 	void setAutoClose(bool on, int delayedClosingTimeMsec = -1);
+	void setCancelButtonVisible(bool visible);
+
+signals:
+	void canceled();
 
 protected:
 	virtual void closeEvent(QCloseEvent * event);
@@ -71,6 +75,7 @@ private:
 	QTextEdit * _detailedText;
 	QProgressBar * _progressBar;
 	QPushButton * _closeButton;
+	QPushButton * _cancelButton;
 	QCheckBox * _closeWhenDoneCheckBox;
 	QString _endMessage;
 	int _delayedClosingTime; // sec

@@ -113,10 +113,12 @@ Transform RegistrationIcp::computeTransformationImpl(
 	if(!guess.isNull() && !dataFrom.laserScanRaw().empty() && !dataTo.laserScanRaw().empty())
 	{
 		// ICP with guess transform
-		int maxLaserScansTo = dataTo.laserScanMaxPts();
-		int maxLaserScansFrom = dataFrom.laserScanMaxPts();
+		int maxLaserScansTo = dataTo.laserScanInfo().maxPoints();
+		int maxLaserScansFrom = dataFrom.laserScanInfo().maxPoints();
 		cv::Mat fromScan = dataFrom.laserScanRaw();
 		cv::Mat toScan = dataTo.laserScanRaw();
+		Transform fromLocalTransform = dataFrom.laserScanInfo().localTransform();
+		Transform toLocalTransform = dataTo.laserScanInfo().localTransform();
 		if(_downsamplingStep>1)
 		{
 			fromScan = util3d::downsample(fromScan, _downsamplingStep);
@@ -140,8 +142,8 @@ Transform RegistrationIcp::computeTransformationImpl(
 				toScan.channels() == 6)
 			{
 				//special case if we have already normals computed and there is no filtering
-				pcl::PointCloud<pcl::PointNormal>::Ptr fromCloudNormals = util3d::laserScanToPointCloudNormal(fromScan, Transform());
-				pcl::PointCloud<pcl::PointNormal>::Ptr toCloudNormals = util3d::laserScanToPointCloudNormal(toScan, guess);
+				pcl::PointCloud<pcl::PointNormal>::Ptr fromCloudNormals = util3d::laserScanToPointCloudNormal(fromScan, fromLocalTransform);
+				pcl::PointCloud<pcl::PointNormal>::Ptr toCloudNormals = util3d::laserScanToPointCloudNormal(toScan, guess * toLocalTransform);
 
 				UDEBUG("Conversion time = %f s", timer.ticks());
 				pcl::PointCloud<pcl::PointNormal>::Ptr fromCloudNormalsRegistered(new pcl::PointCloud<pcl::PointNormal>());
@@ -180,8 +182,8 @@ Transform RegistrationIcp::computeTransformationImpl(
 			}
 			else
 			{
-				pcl::PointCloud<pcl::PointXYZ>::Ptr fromCloud = util3d::laserScanToPointCloud(fromScan, Transform());
-				pcl::PointCloud<pcl::PointXYZ>::Ptr toCloud = util3d::laserScanToPointCloud(toScan, guess);
+				pcl::PointCloud<pcl::PointXYZ>::Ptr fromCloud = util3d::laserScanToPointCloud(fromScan, fromLocalTransform);
+				pcl::PointCloud<pcl::PointXYZ>::Ptr toCloud = util3d::laserScanToPointCloud(toScan, guess * toLocalTransform);
 				UDEBUG("Conversion time = %f s", timer.ticks());
 
 				pcl::PointCloud<pcl::PointXYZ>::Ptr fromCloudFiltered = fromCloud;
@@ -223,8 +225,8 @@ Transform RegistrationIcp::computeTransformationImpl(
 					fromCloudNormals = util3d::removeNaNNormalsFromPointCloud(fromCloudNormals);
 
 					// update output scans
-					fromSignature.sensorData().setLaserScanRaw(util3d::laserScanFromPointCloud(*fromCloudNormals), maxLaserScansFrom, fromSignature.sensorData().laserScanMaxRange());
-					toSignature.sensorData().setLaserScanRaw(util3d::laserScanFromPointCloud(*toCloudNormals, guess.inverse()), maxLaserScansTo, toSignature.sensorData().laserScanMaxRange());
+					fromSignature.sensorData().setLaserScanRaw(util3d::laserScanFromPointCloud(*fromCloudNormals, fromLocalTransform.inverse()), LaserScanInfo(maxLaserScansFrom, fromSignature.sensorData().laserScanInfo().maxRange(), fromLocalTransform));
+					toSignature.sensorData().setLaserScanRaw(util3d::laserScanFromPointCloud(*toCloudNormals, (guess*toLocalTransform).inverse()), LaserScanInfo(maxLaserScansTo, toSignature.sensorData().laserScanInfo().maxRange(), toLocalTransform));
 
 					UDEBUG("Compute normals time = %f s", timer.ticks());
 
@@ -259,8 +261,8 @@ Transform RegistrationIcp::computeTransformationImpl(
 					if(_voxelSize > 0.0f)
 					{
 						// update output scans
-						fromSignature.sensorData().setLaserScanRaw(util3d::laserScanFromPointCloud(*fromCloudFiltered), maxLaserScansFrom, fromSignature.sensorData().laserScanMaxRange());
-						toSignature.sensorData().setLaserScanRaw(util3d::laserScanFromPointCloud(*toCloudFiltered, guess.inverse()), maxLaserScansTo, toSignature.sensorData().laserScanMaxRange());
+						fromSignature.sensorData().setLaserScanRaw(util3d::laserScanFromPointCloud(*fromCloudFiltered, fromLocalTransform.inverse()), LaserScanInfo(maxLaserScansFrom, fromSignature.sensorData().laserScanInfo().maxRange(), fromLocalTransform));
+						toSignature.sensorData().setLaserScanRaw(util3d::laserScanFromPointCloud(*toCloudFiltered, (guess*toLocalTransform).inverse()), LaserScanInfo(maxLaserScansTo, toSignature.sensorData().laserScanInfo().maxRange(), toLocalTransform));
 					}
 
 					icpT = util3d::icp(
@@ -348,15 +350,18 @@ Transform RegistrationIcp::computeTransformationImpl(
 						correspondencesRatio = float(correspondences)/float(toScan.cols>fromScan.cols?toScan.cols:fromScan.cols);
 					}
 
-					UDEBUG("%d->%d hasConverged=%s, variance=%f, correspondences=%d/%d (%f%%)",
+					UDEBUG("%d->%d hasConverged=%s, variance=%f, correspondences=%d/%d (%f%%), from guess: trans=%f rot=%f",
 							dataTo.id(), dataFrom.id(),
 							hasConverged?"true":"false",
 							variance,
 							correspondences,
 							maxLaserScans>0?maxLaserScans:(int)(toScan.cols>fromScan.cols?toScan.cols:fromScan.cols),
-							correspondencesRatio*100.0f);
+							correspondencesRatio*100.0f,
+							info.icpTranslation,
+							info.icpRotation);
 
-					info.variance = variance>0.0f?variance:0.0001; // epsilon if exact transform
+					info.varianceLin = variance>0.0f?variance:0.0001; // epsilon if exact transform
+					info.varianceAng = variance>0.0f?variance:0.0001; // epsilon if exact transform
 					info.icpInliersRatio = correspondencesRatio;
 
 					if(correspondencesRatio < _correspondenceRatio)

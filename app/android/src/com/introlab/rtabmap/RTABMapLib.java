@@ -25,6 +25,7 @@ public class RTABMapLib
     // The activity object is used for checking if the API version is outdated.
     public static native void onCreate(RTABMapActivity activity);
     
+    public static native void openEmptyDatabase();
     public static native void openDatabase(String databasePath);
     
     /*
@@ -58,21 +59,26 @@ public class RTABMapLib
     public static native void setPausedMapping(boolean paused);
     public static native void setMapCloudShown(boolean shown);
     public static native void setOdomCloudShown(boolean shown);
-    public static native void setMeshRendering(boolean enabled);
+    public static native void setMeshRendering(boolean enabled, boolean withTexture);
     public static native void setLocalizationMode(boolean enabled);
     public static native void setTrajectoryMode(boolean enabled);
     public static native void setGraphOptimization(boolean enabled);
     public static native void setNodesFiltering(boolean enabled);
+    public static native void setDriftCorrection(boolean enabled);
     public static native void setGraphVisible(boolean visible);
+    public static native void setGridVisible(boolean visible);
     public static native void setAutoExposure(boolean enabled);
     public static native void setFullResolution(boolean enabled);
+    public static native void setAppendMode(boolean enabled);
+    public static native void setDataRecorderMode(boolean enabled);
     public static native void setMaxCloudDepth(float value);
+    public static native void setMeshDecimation(int value);
     public static native void setMeshAngleTolerance(float value);
     public static native void setMeshTriangleSize(int value);
     public static native int setMappingParameter(String key, String value);
 
     public static native void resetMapping();
-    public static native void save();
+    public static native void save(String outputDatabasePath);
     public static native boolean exportMesh(String filePath);
     public static native int postProcessing(int approach);
     
