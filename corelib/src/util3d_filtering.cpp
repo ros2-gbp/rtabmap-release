@@ -142,6 +142,7 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr voxelize(
 		float voxelSize)
 {
 	UASSERT(voxelSize > 0.0f);
+	UASSERT((cloud->is_dense && cloud->size()) || (!cloud->is_dense && indices->size()));
 	pcl::PointCloud<pcl::PointXYZ>::Ptr output(new pcl::PointCloud<pcl::PointXYZ>);
 	pcl::VoxelGrid<pcl::PointXYZ> filter;
 	filter.setLeafSize(voxelSize, voxelSize, voxelSize);
@@ -159,6 +160,7 @@ pcl::PointCloud<pcl::PointNormal>::Ptr voxelize(
 		float voxelSize)
 {
 	UASSERT(voxelSize > 0.0f);
+	UASSERT((cloud->is_dense && cloud->size()) || (!cloud->is_dense && indices->size()));
 	pcl::PointCloud<pcl::PointNormal>::Ptr output(new pcl::PointCloud<pcl::PointNormal>);
 	pcl::VoxelGrid<pcl::PointNormal> filter;
 	filter.setLeafSize(voxelSize, voxelSize, voxelSize);
@@ -176,6 +178,7 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr voxelize(
 		float voxelSize)
 {
 	UASSERT(voxelSize > 0.0f);
+	UASSERT((cloud->is_dense && cloud->size()) || (!cloud->is_dense && indices->size()));
 	pcl::PointCloud<pcl::PointXYZRGB>::Ptr output(new pcl::PointCloud<pcl::PointXYZRGB>);
 	pcl::VoxelGrid<pcl::PointXYZRGB> filter;
 	filter.setLeafSize(voxelSize, voxelSize, voxelSize);
@@ -193,6 +196,7 @@ pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr voxelize(
 		float voxelSize)
 {
 	UASSERT(voxelSize > 0.0f);
+	UASSERT((cloud->is_dense && cloud->size()) || (!cloud->is_dense && indices->size()));
 	pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr output(new pcl::PointCloud<pcl::PointXYZRGBNormal>);
 	pcl::VoxelGrid<pcl::PointXYZRGBNormal> filter;
 	filter.setLeafSize(voxelSize, voxelSize, voxelSize);
@@ -333,6 +337,26 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr passThrough(
 
 	pcl::PointCloud<pcl::PointXYZRGB>::Ptr output(new pcl::PointCloud<pcl::PointXYZRGB>);
 	pcl::PassThrough<pcl::PointXYZRGB> filter;
+	filter.setNegative(negative);
+	filter.setFilterFieldName(axis);
+	filter.setFilterLimits(min, max);
+	filter.setInputCloud(cloud);
+	filter.filter(*output);
+	return output;
+}
+
+pcl::PointCloud<pcl::PointNormal>::Ptr passThrough(
+		const pcl::PointCloud<pcl::PointNormal>::Ptr & cloud,
+		const std::string & axis,
+		float min,
+		float max,
+		bool negative)
+{
+	UASSERT(max > min);
+	UASSERT(axis.compare("x") == 0 || axis.compare("y") == 0 || axis.compare("z") == 0);
+
+	pcl::PointCloud<pcl::PointNormal>::Ptr output(new pcl::PointCloud<pcl::PointNormal>);
+	pcl::PassThrough<pcl::PointNormal> filter;
 	filter.setNegative(negative);
 	filter.setFilterFieldName(axis);
 	filter.setFilterLimits(min, max);
