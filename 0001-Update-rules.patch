@@ -1,0 +1,25 @@
+From 5b1152650509c86b90e85a39ba5b0c8fbbd74be4 Mon Sep 17 00:00:00 2001
+From: matlabbe <matlabbe@gmail.com>
+Date: Thu, 3 Aug 2017 21:05:55 -0400
+Subject: [PATCH] Update rules
+
+---
+ debian/rules | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/debian/rules b/debian/rules
+index 764eee6..aa7d4ce 100755
+--- a/debian/rules
++++ b/debian/rules
+@@ -52,7 +52,7 @@ override_dh_shlibdeps:
+ 	# in the install tree that was dropped by catkin, and source it.  It will
+ 	# set things like CMAKE_PREFIX_PATH, PKG_CONFIG_PATH, and PYTHONPATH.
+ 	if [ -f "/opt/ros/lunar/setup.sh" ]; then . "/opt/ros/lunar/setup.sh"; fi && \
+-	dh_shlibdeps -l$(CURDIR)/debian/ros-lunar-rtabmap//opt/ros/lunar/lib/
++	dh_shlibdeps -l$(CURDIR)/debian/ros-lunar-rtabmap//opt/ros/lunar/lib/:$(CURDIR)/debian/ros-lunar-rtabmap//opt/ros/lunar/lib/x86_64-linux-gnu/:$(CURDIR)/debian/ros-lunar-rtabmap//opt/ros/lunar/lib/i386-linux-gnu/:$(CURDIR)/debian/ros-lunar-rtabmap//opt/ros/lunar/lib/arm-linux-gnueabihf/
+ 
+ override_dh_auto_install:
+ 	# In case we're installing to a non-standard location, look for a setup.sh
+-- 
+1.9.1
+
