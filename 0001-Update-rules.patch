@@ -1,7 +1,7 @@
-From 78b0bb6151afb05e176217f6e35833211e2a39f7 Mon Sep 17 00:00:00 2001
+From 4fe5edfc472fff8d71ad0bab28fbef8c6a108ee1 Mon Sep 17 00:00:00 2001
 From: matlabbe <matlabbe@gmail.com>
 Date: Thu, 3 Aug 2017 21:05:00 -0400
-Subject: [PATCH] Update rules
+Subject: [PATCH 1/2] Update rules
 
 ---
  debian/rules | 2 +-
@@ -21,5 +21,5 @@ index 764eee6..aa7d4ce 100755
  override_dh_auto_install:
  	# In case we're installing to a non-standard location, look for a setup.sh
 -- 
-1.9.1
+2.7.4
 
