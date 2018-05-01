@@ -70,6 +70,8 @@ CameraImages::CameraImages() :
 		_scanDownsampleStep(1),
 		_scanVoxelSize(0.0f),
 		_scanNormalsK(0),
+		_scanNormalsRadius(0),
+		_scanForceGroundNormalsUp(false),
 		_depthFromScan(false),
 		_depthFromScanFillHoles(1),
 		_depthFromScanFillHolesFromBorder(false),
@@ -77,6 +79,7 @@ CameraImages::CameraImages() :
 		_syncImageRateWithStamps(true),
 		_odometryFormat(0),
 		_groundTruthFormat(0),
+		_maxPoseTimeDiff(0.02),
 		_captureDelay(0.0)
 	{}
 CameraImages::CameraImages(const std::string & path,
@@ -99,6 +102,8 @@ CameraImages::CameraImages(const std::string & path,
 	_scanDownsampleStep(1),
 	_scanVoxelSize(0.0f),
 	_scanNormalsK(0),
+	_scanNormalsRadius(0),
+	_scanForceGroundNormalsUp(false),
 	_depthFromScan(false),
 	_depthFromScanFillHoles(1),
 	_depthFromScanFillHolesFromBorder(false),
@@ -106,6 +111,7 @@ CameraImages::CameraImages(const std::string & path,
 	_syncImageRateWithStamps(true),
 	_odometryFormat(0),
 	_groundTruthFormat(0),
+	_maxPoseTimeDiff(0.02),
 	_captureDelay(0.0)
 {
 
@@ -238,15 +244,43 @@ bool CameraImages::init(const std::string & calibrationFolder, const std::string
 			const std::list<std::string> & filenames = _dir->getFileNames();
 			for(std::list<std::string>::const_iterator iter=filenames.begin(); iter!=filenames.end(); ++iter)
 			{
-				// format is text_12234456.12334_text.png
+				// format is text_1223445645.12334_text.png or text_122344564512334_text.png
+				// If no decimals, 10 first number are the seconds
 				std::list<std::string> list = uSplit(*iter, '.');
-				if(list.size() == 3)
+				if(list.size() == 3 || list.size() == 2)
 				{
 					list.pop_back(); // remove extension
-					std::string decimals = uSplitNumChar(list.back()).front();
-					list.pop_back();
-					std::string sec = uSplitNumChar(list.back()).back();
-					double stamp = uStr2Double(sec + "." + decimals);
+					double stamp = 0.0;
+					if(list.size() == 1)
+					{
+						std::list<std::string> numberList = uSplitNumChar(list.front());
+						for(std::list<std::string>::iterator iter=numberList.begin(); iter!=numberList.end(); ++iter)
+						{
+							if(uIsNumber(*iter))
+							{
+								std::string decimals;
+								std::string sec;
+								if(iter->length()>10)
+								{
+									decimals = iter->substr(10, iter->size()-10);
+									sec = iter->substr(0, 10);
+								}
+								else
+								{
+									sec = *iter;
+								}
+								stamp = uStr2Double(sec + "." + decimals);
+								break;
+							}
+						}
+					}
+					else
+					{
+						std::string decimals = uSplitNumChar(list.back()).front();
+						list.pop_back();
+						std::string sec = uSplitNumChar(list.back()).back();
+						stamp = uStr2Double(sec + "." + decimals);
+					}
 					if(stamp > 0.0)
 					{
 						_stamps.push_back(stamp);
@@ -310,12 +344,12 @@ bool CameraImages::init(const std::string & calibrationFolder, const std::string
 
 		if(success && _odometryPath.size())
 		{
-			success = readPoses(odometry_, _stamps, _odometryPath, _odometryFormat);
+			success = readPoses(odometry_, _stamps, _odometryPath, _odometryFormat, _maxPoseTimeDiff);
 		}
 
 		if(success && _groundTruthPath.size())
 		{
-			success = readPoses(groundTruth_, _stamps, _groundTruthPath, _groundTruthFormat);
+			success = readPoses(groundTruth_, _stamps, _groundTruthPath, _groundTruthFormat, _maxPoseTimeDiff);
 		}
 	}
 
@@ -324,7 +358,7 @@ bool CameraImages::init(const std::string & calibrationFolder, const std::string
 	return success;
 }
 
-bool CameraImages::readPoses(std::list<Transform> & outputPoses, std::list<double> & inOutStamps, const std::string & filePath, int format) const
+bool CameraImages::readPoses(std::list<Transform> & outputPoses, std::list<double> & inOutStamps, const std::string & filePath, int format, double maxTimeDiff) const
 {
 	outputPoses.clear();
 	std::map<int, Transform> poses;
@@ -334,19 +368,19 @@ bool CameraImages::readPoses(std::list<Transform> & outputPoses, std::list<doubl
 		UERROR("Cannot read pose file \"%s\".", filePath.c_str());
 		return false;
 	}
-	else if((format != 1 && format != 5 && format != 6 && format != 7) && poses.size() != this->imagesCount())
+	else if((format != 1 && format != 5 && format != 6 && format != 7 && format != 9) && poses.size() != this->imagesCount())
 	{
 		UERROR("The pose count is not the same as the images (%d vs %d)! Please remove "
 				"the pose file path if you don't want to use it (current file path=%s).",
 				(int)poses.size(), this->imagesCount(), filePath.c_str());
 		return false;
 	}
-	else if((format == 1 || format == 5 || format == 6 || format == 7) && inOutStamps.size() == 0)
+	else if((format == 1 || format == 5 || format == 6 || format == 7 || format == 9) && inOutStamps.size() == 0)
 	{
-		UERROR("When using RGBD-SLAM, GPS, MALAGA and ST LUCIA formats, images must have timestamps!");
+		UERROR("When using RGBD-SLAM, GPS, MALAGA, ST LUCIA and EuRoC MAV formats, images must have timestamps!");
 		return false;
 	}
-	else if(format == 1 || format == 5 || format == 6 || format == 7)
+	else if(format == 1 || format == 5 || format == 6 || format == 7 || format == 9)
 	{
 		UDEBUG("");
 		//Match ground truth values with images
@@ -378,16 +412,21 @@ bool CameraImages::readPoses(std::list<Transform> & outputPoses, std::list<doubl
 					double stampBeg = beginIter->first;
 					double stampEnd = endIter->first;
 					UASSERT(stampEnd > stampBeg && *ster>stampBeg && *ster < stampEnd);
-					if(stampEnd - stampBeg > 10.0)
+					if(fabs(*ster-stampEnd) > maxTimeDiff || fabs(*ster-stampBeg) > maxTimeDiff)
 					{
-						warned = true;
-						UDEBUG("Cannot interpolate pose for stamp %f between %f and %f (>10 sec)",
-							*ster,
-							stampBeg,
-							stampEnd);
+						if(!warned)
+						{
+							UWARN("Cannot interpolate pose for stamp %f between %f and %f (> maximum time diff of %f sec)",
+								*ster,
+								stampBeg,
+								stampEnd,
+								maxTimeDiff);
+						}
+						warned=true;
 					}
 					else
 					{
+						warned=false;
 						float t = (*ster - stampBeg) / (stampEnd-stampBeg);
 						Transform & ta = poses.at(beginIter->second);
 						Transform & tb = poses.at(endIter->second);
@@ -490,7 +529,7 @@ SensorData CameraImages::captureImage(CameraInfo * info)
 	_captureDelay = 0.0;
 
 	cv::Mat img;
-	cv::Mat scan;
+	LaserScan scan(cv::Mat(), _scanMaxPts, 0, LaserScan::kUnknown, _scanLocalTransform);
 	double stamp = UTimer::now();
 	Transform odometryPose;
 	Transform groundTruthPose;
@@ -531,6 +570,26 @@ SensorData CameraImages::captureImage(CameraInfo * info)
 					}
 				}
 			}
+
+			if(_stamps.size())
+			{
+				stamp = _stamps.front();
+				_stamps.pop_front();
+				if(_stamps.size())
+				{
+					_captureDelay = _stamps.front() - stamp;
+				}
+				if(odometry_.size())
+				{
+					odometryPose = odometry_.front();
+					odometry_.pop_front();
+				}
+				if(groundTruth_.size())
+				{
+					groundTruthPose = groundTruth_.front();
+					groundTruth_.pop_front();
+				}
+			}
 		}
 		else
 		{
@@ -539,9 +598,48 @@ SensorData CameraImages::captureImage(CameraInfo * info)
 			if(!fileName.empty())
 			{
 				imageFilePath = _path + fileName;
+				if(_stamps.size())
+				{
+					stamp = _stamps.front();
+					_stamps.pop_front();
+					if(_stamps.size())
+					{
+						_captureDelay = _stamps.front() - stamp;
+					}
+					if(odometry_.size())
+					{
+						odometryPose = odometry_.front();
+						odometry_.pop_front();
+					}
+					if(groundTruth_.size())
+					{
+						groundTruthPose = groundTruth_.front();
+						groundTruth_.pop_front();
+					}
+				}
+
 				while(_count++ < _startAt && (fileName = _dir->getNextFileName()).size())
 				{
 					imageFilePath = _path + fileName;
+					if(_stamps.size())
+					{
+						stamp = _stamps.front();
+						_stamps.pop_front();
+						if(_stamps.size())
+						{
+							_captureDelay = _stamps.front() - stamp;
+						}
+						if(odometry_.size())
+						{
+							odometryPose = odometry_.front();
+							odometry_.pop_front();
+						}
+						if(groundTruth_.size())
+						{
+							groundTruthPose = groundTruth_.front();
+							groundTruth_.pop_front();
+						}
+					}
 				}
 			}
 			if(_scanDir)
@@ -555,26 +653,6 @@ SensorData CameraImages::captureImage(CameraInfo * info)
 						scanFilePath = _scanPath + fileName;
 					}
 				}
-			}
-		}
-
-		if(_stamps.size())
-		{
-			stamp = _stamps.front();
-			_stamps.pop_front();
-			if(_stamps.size())
-			{
-				_captureDelay = _stamps.front() - stamp;
-			}
-			if(odometry_.size())
-			{
-				odometryPose = odometry_.front();
-				odometry_.pop_front();
-			}
-			if(groundTruth_.size())
-			{
-				groundTruthPose = groundTruth_.front();
-				groundTruth_.pop_front();
 			}
 		}
 
@@ -594,9 +672,9 @@ SensorData CameraImages::captureImage(CameraInfo * info)
 			{
 				if(img.type() != CV_16UC1 && img.type() != CV_32FC1)
 				{
-					UERROR("Depth is on and the loaded image has not a format supported (file = \"%s\"). "
-							"Formats supported are 16 bits 1 channel and 32 bits 1 channel.",
-							imageFilePath.c_str());
+					UERROR("Depth is on and the loaded image has not a format supported (file = \"%s\", type=%d). "
+							"Formats supported are 16 bits 1 channel (mm) and 32 bits 1 channel (m).",
+							imageFilePath.c_str(), img.type());
 					img = cv::Mat();
 				}
 
@@ -650,8 +728,9 @@ SensorData CameraImages::captureImage(CameraInfo * info)
 		if(!scanFilePath.empty())
 		{
 			// load without filtering
-			pcl::PointCloud<pcl::PointXYZ>::Ptr cloud = util3d::loadCloud(scanFilePath, _scanLocalTransform);
-			UDEBUG("Loaded scan=%d points", (int)cloud->size());
+			scan = util3d::loadScan(scanFilePath);
+			scan = LaserScan(scan.data(), _scanMaxPts, 0.0f, scan.format(), _scanLocalTransform);
+			UDEBUG("Loaded scan=%d points", (int)scan.size());
 			if(_depthFromScan && !img.empty())
 			{
 				UDEBUG("Computing depth from scan...");
@@ -665,6 +744,7 @@ SensorData CameraImages::captureImage(CameraInfo * info)
 				}
 				else
 				{
+					pcl::PointCloud<pcl::PointXYZ>::Ptr cloud = util3d::laserScanToPointCloud(scan, scan.localTransform());
 					depthFromScan = util3d::projectCloudToCamera(img.size(), _model.K(), cloud, _model.localTransform());
 					if(_depthFromScanFillHoles!=0)
 					{
@@ -673,29 +753,7 @@ SensorData CameraImages::captureImage(CameraInfo * info)
 				}
 			}
 			// filter the scan after registration
-			int previousSize = (int)cloud->size();
-			if(_scanDownsampleStep > 1 && cloud->size())
-			{
-				cloud = util3d::downsample(cloud, _scanDownsampleStep);
-				UDEBUG("Downsampling scan (step=%d): %d -> %d", _scanDownsampleStep, previousSize, (int)cloud->size());
-			}
-			previousSize = (int)cloud->size();
-			if(_scanVoxelSize > 0.0f && cloud->size())
-			{
-				cloud = util3d::voxelize(cloud, _scanVoxelSize);
-				UDEBUG("Voxel filtering scan (voxel=%f m): %d -> %d", _scanVoxelSize, previousSize, (int)cloud->size());
-			}
-			if(_scanNormalsK > 0 && cloud->size())
-			{
-				pcl::PointCloud<pcl::Normal>::Ptr normals = util3d::computeNormals(cloud, _scanNormalsK);
-				pcl::PointCloud<pcl::PointNormal>::Ptr cloudNormals(new pcl::PointCloud<pcl::PointNormal>);
-				pcl::concatenateFields(*cloud, *normals, *cloudNormals);
-				scan = util3d::laserScanFromPointCloud(*cloudNormals, _scanLocalTransform.inverse());
-			}
-			else
-			{
-				scan = util3d::laserScanFromPointCloud(*cloud, _scanLocalTransform.inverse());
-			}
+			scan = util3d::commonFiltering(scan, _scanDownsampleStep, 0, 0, _scanVoxelSize, _scanNormalsK, _scanNormalsRadius, _scanForceGroundNormalsUp);
 		}
 	}
 	else
@@ -708,7 +766,7 @@ SensorData CameraImages::captureImage(CameraInfo * info)
 		_model.setImageSize(img.size());
 	}
 
-	SensorData data(scan, LaserScanInfo(scan.empty()?0:_scanMaxPts, 0, _scanLocalTransform), _isDepth?cv::Mat():img, _isDepth?img:depthFromScan, _model, this->getNextSeqID(), stamp);
+	SensorData data(scan, _isDepth?cv::Mat():img, _isDepth?img:depthFromScan, _model, this->getNextSeqID(), stamp);
 	data.setGroundTruth(groundTruthPose);
 
 	if(info && !odometryPose.isNull())

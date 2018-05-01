@@ -37,11 +37,16 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <pcl/pcl_base.h>
 #include <rtabmap/core/Transform.h>
 #include <rtabmap/core/CameraModel.h>
+#include <rtabmap/core/ProgressState.h>
+#include <rtabmap/core/LaserScan.h>
 #include <set>
 #include <list>
 
 namespace rtabmap
 {
+
+class Memory;
+class DBDriver;
 
 namespace util3d
 {
@@ -136,40 +141,197 @@ pcl::TextureMesh::Ptr RTABMAP_EXP createTextureMesh(
 		const pcl::PolygonMesh::Ptr & mesh,
 		const std::map<int, Transform> & poses,
 		const std::map<int, CameraModel> & cameraModels,
-		const std::map<int, cv::Mat> & images,
-		const std::string & tmpDirectory = ".",
-		int kNormalSearch = 20); // if mesh doesn't have normals, compute them with k neighbors
+		const std::map<int, cv::Mat> & cameraDepths,
+		float maxDistance = 0.0f, // max camera distance to polygon to apply texture
+		float maxDepthError = 0.0f, // maximum depth error between reprojected mesh and depth image to texture a face (-1=disabled, 0=edge length is used)
+		float maxAngle = 0.0f, // maximum angle between camera and face (0=disabled)
+		int minClusterSize = 50, // minimum size of polygons clusters textured
+		const std::vector<float> & roiRatios = std::vector<float>(), // [left, right, top, bottom] region of interest (in ratios) of the image projected.
+		const ProgressState * state = 0,
+		std::vector<std::map<int, pcl::PointXY> > * vertexToPixels = 0);
+pcl::TextureMesh::Ptr RTABMAP_EXP createTextureMesh(
+		const pcl::PolygonMesh::Ptr & mesh,
+		const std::map<int, Transform> & poses,
+		const std::map<int, std::vector<CameraModel> > & cameraModels,
+		const std::map<int, cv::Mat> & cameraDepths,
+		float maxDistance = 0.0f, // max camera distance to polygon to apply texture
+		float maxDepthError = 0.0f, // maximum depth error between reprojected mesh and depth image to texture a face (-1=disabled, 0=edge length is used)
+		float maxAngle = 0.0f, // maximum angle between camera and face (0=disabled)
+		int minClusterSize = 50, // minimum size of polygons clusters textured
+		const std::vector<float> & roiRatios = std::vector<float>(), // [left, right, top, bottom] region of interest (in ratios) of the image projected.
+		const ProgressState * state = 0,
+		std::vector<std::map<int, pcl::PointXY> > * vertexToPixels = 0);
 
+/**
+ * Remove not textured polygon clusters. If minClusterSize<0, only the largest cluster is kept.
+ */
+void RTABMAP_EXP cleanTextureMesh(
+		pcl::TextureMesh & textureMesh,
+		int minClusterSize);
+
+pcl::TextureMesh::Ptr RTABMAP_EXP concatenateTextureMeshes(
+		const std::list<pcl::TextureMesh::Ptr> & meshes);
+
+void RTABMAP_EXP concatenateTextureMaterials(
+		pcl::TextureMesh & mesh, const cv::Size & imageSize, int textureSize, int maxTextures, float & scale, std::vector<bool> * materialsKept=0);
+
+std::vector<std::vector<unsigned int> > RTABMAP_EXP convertPolygonsFromPCL(
+		const std::vector<pcl::Vertices> & polygons);
+std::vector<std::vector<std::vector<unsigned int> > > RTABMAP_EXP convertPolygonsFromPCL(
+		const std::vector<std::vector<pcl::Vertices> > & polygons);
+std::vector<pcl::Vertices> RTABMAP_EXP convertPolygonsToPCL(
+		const std::vector<std::vector<unsigned int> > & polygons);
+std::vector<std::vector<pcl::Vertices> > RTABMAP_EXP convertPolygonsToPCL(
+		const std::vector<std::vector<std::vector<unsigned int> > > & tex_polygons);
+
+pcl::TextureMesh::Ptr RTABMAP_EXP assembleTextureMesh(
+		const cv::Mat & cloudMat,
+		const std::vector<std::vector<std::vector<unsigned int> > > & polygons,
+#if PCL_VERSION_COMPARE(>=, 1, 8, 0)
+		const std::vector<std::vector<Eigen::Vector2f, Eigen::aligned_allocator<Eigen::Vector2f> > > & texCoords,
+#else
+		const std::vector<std::vector<Eigen::Vector2f> > & texCoords,
+#endif
+		cv::Mat & textures,
+		bool mergeTextures = false);
+
+pcl::PolygonMesh::Ptr RTABMAP_EXP assemblePolygonMesh(
+		const cv::Mat & cloudMat,
+		const std::vector<std::vector<unsigned int> > & polygons);
+
+/**
+ * Merge all textures in the mesh into "textureCount" textures of size "textureSize".
+ * @return merged textures corresponding to new materials set in TextureMesh (height=textureSize, width=textureSize*materials)
+ */
+cv::Mat RTABMAP_EXP mergeTextures(
+		pcl::TextureMesh & mesh,
+		const std::map<int, cv::Mat> & images, // raw or compressed, can be empty if memory or dbDriver should be used
+		const std::map<int, CameraModel> & calibrations, // Should match images
+		const Memory * memory = 0,             // Should be set if images are not set
+		const DBDriver * dbDriver = 0,         // Should be set if images and memory are not set
+		int textureSize = 4096,
+		int textureCount = 1,
+		const std::vector<std::map<int, pcl::PointXY> > & vertexToPixels = std::vector<std::map<int, pcl::PointXY> >(), // needed for parameters below
+		bool gainCompensation = true,
+		float gainBeta = 10.0f,
+		bool gainRGB = true,                 //Do gain compensation on each channel
+		bool blending = true,
+		int blendingDecimation = 0,          //0=auto depending on projected polygon size and texture size
+		int brightnessContrastRatioLow = 0,  //0=disabled, values between 0 and 100
+		int brightnessContrastRatioHigh = 0, //0=disabled, values between 0 and 100
+		bool exposureFusion = false,         //Exposure fusion can be used only with OpenCV3
+		const ProgressState * state = 0);
+cv::Mat RTABMAP_EXP mergeTextures(
+		pcl::TextureMesh & mesh,
+		const std::map<int, cv::Mat> & images, // raw or compressed, can be empty if memory or dbDriver should be used
+		const std::map<int, std::vector<CameraModel> > & calibrations, // Should match images
+		const Memory * memory = 0,             // Should be set if images are not set
+		const DBDriver * dbDriver = 0,         // Should be set if images and memory are not set
+		int textureSize = 4096,
+		int textureCount = 1,
+		const std::vector<std::map<int, pcl::PointXY> > & vertexToPixels = std::vector<std::map<int, pcl::PointXY> >(), // needed for parameters below
+		bool gainCompensation = true,
+		float gainBeta = 10.0f,
+		bool gainRGB = true,                 //Do gain compensation on each channel
+		bool blending = true,
+		int blendingDecimation = 0,          //0=auto depending on projected polygon size and texture size
+		int brightnessContrastRatioLow = 0,  //0=disabled, values between 0 and 100
+		int brightnessContrastRatioHigh = 0, //0=disabled, values between 0 and 100
+		bool exposureFusion = false,         //Exposure fusion can be used only with OpenCV3
+		const ProgressState * state = 0);
+
+void RTABMAP_EXP fixTextureMeshForVisualization(pcl::TextureMesh & textureMesh);
+
+cv::Mat RTABMAP_EXP computeNormals(
+		const cv::Mat & laserScan,
+		int searchK,
+		float searchRadius);
 pcl::PointCloud<pcl::Normal>::Ptr RTABMAP_EXP computeNormals(
 		const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud,
-		int normalKSearch = 20,
+		int searchK = 20,
+		float searchRadius = 0.0f,
 		const Eigen::Vector3f & viewPoint = Eigen::Vector3f(0,0,0));
 pcl::PointCloud<pcl::Normal>::Ptr RTABMAP_EXP computeNormals(
 		const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud,
-		int normalKSearch = 20,
+		int searchK = 20,
+		float searchRadius = 0.0f,
+		const Eigen::Vector3f & viewPoint = Eigen::Vector3f(0,0,0));
+pcl::PointCloud<pcl::Normal>::Ptr RTABMAP_EXP computeNormals(
+		const pcl::PointCloud<pcl::PointXYZI>::Ptr & cloud,
+		int searchK = 20,
+		float searchRadius = 0.0f,
 		const Eigen::Vector3f & viewPoint = Eigen::Vector3f(0,0,0));
 pcl::PointCloud<pcl::Normal>::Ptr RTABMAP_EXP computeNormals(
 		const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud,
 		const pcl::IndicesPtr & indices,
-		int normalKSearch = 20,
+		int searchK = 20,
+		float searchRadius = 0.0f,
 		const Eigen::Vector3f & viewPoint = Eigen::Vector3f(0,0,0));
 pcl::PointCloud<pcl::Normal>::Ptr RTABMAP_EXP computeNormals(
 		const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud,
 		const pcl::IndicesPtr & indices,
-		int normalKSearch = 20,
+		int searchK = 20,
+		float searchRadius = 0.0f,
+		const Eigen::Vector3f & viewPoint = Eigen::Vector3f(0,0,0));
+pcl::PointCloud<pcl::Normal>::Ptr RTABMAP_EXP computeNormals(
+		const pcl::PointCloud<pcl::PointXYZI>::Ptr & cloud,
+		const pcl::IndicesPtr & indices,
+		int searchK = 20,
+		float searchRadius = 0.0f,
 		const Eigen::Vector3f & viewPoint = Eigen::Vector3f(0,0,0));
 
-pcl::PointCloud<pcl::Normal>::Ptr computeFastOrganizedNormals(
+pcl::PointCloud<pcl::Normal>::Ptr RTABMAP_EXP computeNormals2D(
+		const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud,
+		int searchK = 5,
+		float searchRadius = 0.0f,
+		const Eigen::Vector3f & viewPoint = Eigen::Vector3f(0,0,0));
+pcl::PointCloud<pcl::Normal>::Ptr RTABMAP_EXP computeNormals2D(
+		const pcl::PointCloud<pcl::PointXYZI>::Ptr & cloud,
+		int searchK = 5,
+		float searchRadius = 0.0f,
+		const Eigen::Vector3f & viewPoint = Eigen::Vector3f(0,0,0));
+pcl::PointCloud<pcl::Normal>::Ptr RTABMAP_EXP computeFastOrganizedNormals2D(
+		const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud,
+		int searchK = 5,
+		float searchRadius = 0.0f,
+		const Eigen::Vector3f & viewPoint = Eigen::Vector3f(0,0,0));
+pcl::PointCloud<pcl::Normal>::Ptr RTABMAP_EXP computeFastOrganizedNormals2D(
+		const pcl::PointCloud<pcl::PointXYZI>::Ptr & cloud,
+		int searchK = 5,
+		float searchRadius = 0.0f,
+		const Eigen::Vector3f & viewPoint = Eigen::Vector3f(0,0,0));
+
+pcl::PointCloud<pcl::Normal>::Ptr RTABMAP_EXP computeFastOrganizedNormals(
 		const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud,
 		float maxDepthChangeFactor = 0.02f,
 		float normalSmoothingSize = 10.0f,
 		const Eigen::Vector3f & viewPoint = Eigen::Vector3f(0,0,0));
-pcl::PointCloud<pcl::Normal>::Ptr computeFastOrganizedNormals(
+pcl::PointCloud<pcl::Normal>::Ptr RTABMAP_EXP computeFastOrganizedNormals(
 		const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud,
 		const pcl::IndicesPtr & indices,
 		float maxDepthChangeFactor = 0.02f,
 		float normalSmoothingSize = 10.0f,
 		const Eigen::Vector3f & viewPoint = Eigen::Vector3f(0,0,0));
+
+float RTABMAP_EXP computeNormalsComplexity(
+		const LaserScan & scan,
+		cv::Mat * pcaEigenVectors = 0,
+		cv::Mat * pcaEigenValues = 0);
+float RTABMAP_EXP computeNormalsComplexity(
+		const pcl::PointCloud<pcl::Normal> & normals,
+		bool is2d = false,
+		cv::Mat * pcaEigenVectors = 0,
+		cv::Mat * pcaEigenValues = 0);
+float RTABMAP_EXP computeNormalsComplexity(
+		const pcl::PointCloud<pcl::PointNormal> & cloud,
+		bool is2d = false,
+		cv::Mat * pcaEigenVectors = 0,
+		cv::Mat * pcaEigenValues = 0);
+float RTABMAP_EXP computeNormalsComplexity(
+		const pcl::PointCloud<pcl::PointXYZRGBNormal> & cloud,
+		bool is2d = false,
+		cv::Mat * pcaEigenVectors = 0,
+		cv::Mat * pcaEigenValues = 0);
 
 pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr RTABMAP_EXP mls(
 		const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud,
@@ -193,6 +355,18 @@ pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr RTABMAP_EXP mls(
 		float dilationVoxelSize = 1.0f,  // VOXEL_GRID_DILATION
 		int dilationIterations = 0);     // VOXEL_GRID_DILATION
 
+LaserScan RTABMAP_EXP adjustNormalsToViewPoint(
+		const LaserScan & scan,
+		const Eigen::Vector3f & viewpoint,
+		bool forceGroundNormalsUp);
+void RTABMAP_EXP adjustNormalsToViewPoint(
+		pcl::PointCloud<pcl::PointNormal>::Ptr & cloud,
+		const Eigen::Vector3f & viewpoint = Eigen::Vector3f(0,0,0),
+		bool forceGroundNormalsUp = false);
+void RTABMAP_EXP adjustNormalsToViewPoint(
+		pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr & cloud,
+		const Eigen::Vector3f & viewpoint = Eigen::Vector3f(0,0,0),
+		bool forceGroundNormalsUp = false);
 void RTABMAP_EXP adjustNormalsToViewPoints(
 		const std::map<int, Transform> & poses,
 		const pcl::PointCloud<pcl::PointXYZ>::Ptr & rawCloud,
@@ -211,6 +385,18 @@ std::vector<pcl::Vertices> normalizePolygonsSide(
 		const pcl::PointCloud<pointT> & cloud,
 		const std::vector<pcl::Vertices> & polygons,
 		const pcl::PointXYZ & viewPoint = pcl::PointXYZ(0,0,0));
+
+template<typename pointRGBT>
+void denseMeshPostProcessing(
+		pcl::PolygonMeshPtr & mesh,
+		float meshDecimationFactor = 0.0f, // value between 0 and 1, 0=disabled
+		int maximumPolygons = 0,           // 0=disabled
+		const typename pcl::PointCloud<pointRGBT>::Ptr & cloud = pcl::PointCloud<pointRGBT>::Ptr(), // A RGB point cloud used to transfer colors back to mesh (needed for parameters below)
+		float transferColorRadius = 0.05f, // <0=disabled, 0=nearest color
+		bool coloredOutput = true,         // Not used anymore, output is colored if transferColorRadius>=0
+		bool cleanMesh = true,             // Remove polygons not colored (if coloredOutput is disabled, transferColorRadius is still used to clean the mesh)
+		int minClusterSize = 50,           // Remove small polygon clusters after the mesh has been cleaned (0=disabled)
+		ProgressState * progressState = 0);
 
 } // namespace util3d
 } // namespace rtabmap

@@ -111,7 +111,14 @@ private:
 			{
 				_placeHolder = new QGraphicsRectItem (this);
 				_placeHolder->setVisible(false);
-				_placeHolder->setBrush(QBrush(QColor ( 0, 0, 0, 170 ))); // Black transparent background
+				if(qGray(pen().color().rgb() > 255/2))
+				{
+					_placeHolder->setBrush(QBrush(QColor ( 0,0,0, 170 )));
+				}
+				else
+				{
+					_placeHolder->setBrush(QBrush(QColor ( 255, 255, 255, 170 )));
+				}
 				QGraphicsTextItem * text = new QGraphicsTextItem(_placeHolder);
 				text->setDefaultTextColor(this->pen().color().rgb());
 				text->setPlainText(_text);
@@ -148,6 +155,8 @@ ImageView::ImageView(QWidget * parent) :
 		QWidget(parent),
 		_savedFileName((QDir::homePath()+ "/") + "picture" + ".png"),
 		_alpha(50),
+		_featuresSize(0.0f),
+		_defaultBgColor(Qt::black),
 		_imageItem(0),
 		_imageDepthItem(0)
 {
@@ -170,6 +179,7 @@ ImageView::ImageView(QWidget * parent) :
 	_showFeatures = _menu->addAction(tr("Show features"));
 	_showFeatures->setCheckable(true);
 	_showFeatures->setChecked(true);
+	_setFeaturesSize = _menu->addAction(tr("Set features size..."));
 	_showLines = _menu->addAction(tr("Show lines"));
 	_showLines->setCheckable(true);
 	_showLines->setChecked(true);
@@ -200,8 +210,10 @@ void ImageView::saveSettings(QSettings & settings, const QString & group) const
 	settings.setValue("image_shown", this->isImageShown());
 	settings.setValue("depth_shown", this->isImageDepthShown());
 	settings.setValue("features_shown", this->isFeaturesShown());
+	settings.setValue("features_size", this->getFeaturesSize());
 	settings.setValue("lines_shown", this->isLinesShown());
 	settings.setValue("alpha", this->getAlpha());
+	settings.setValue("bg_color", this->getDefaultBackgroundColor());
 	settings.setValue("graphics_view", this->isGraphicsViewMode());
 	settings.setValue("graphics_view_scale", this->isGraphicsViewScaled());
 	if(!group.isEmpty())
@@ -219,8 +231,10 @@ void ImageView::loadSettings(QSettings & settings, const QString & group)
 	this->setImageShown(settings.value("image_shown", this->isImageShown()).toBool());
 	this->setImageDepthShown(settings.value("depth_shown", this->isImageDepthShown()).toBool());
 	this->setFeaturesShown(settings.value("features_shown", this->isFeaturesShown()).toBool());
+	this->setFeaturesSize(settings.value("features_size", this->getFeaturesSize()).toInt());
 	this->setLinesShown(settings.value("lines_shown", this->isLinesShown()).toBool());
 	this->setAlpha(settings.value("alpha", this->getAlpha()).toInt());
+	this->setDefaultBackgroundColor(settings.value("bg_color", this->getDefaultBackgroundColor()).value<QColor>());
 	this->setGraphicsViewMode(settings.value("graphics_view", this->isGraphicsViewMode()).toBool());
 	this->setGraphicsViewScaled(settings.value("graphics_view_scale", this->isGraphicsViewScaled()).toBool());
 	if(!group.isEmpty())
@@ -257,6 +271,11 @@ bool ImageView::isGraphicsViewMode() const
 bool ImageView::isGraphicsViewScaled() const
 {
 	return _graphicsViewScaled->isChecked();
+}
+
+const QColor & ImageView::getDefaultBackgroundColor() const
+{
+	return _defaultBgColor;
 }
 
 const QColor & ImageView::getBackgroundColor() const
@@ -414,6 +433,12 @@ void ImageView::setGraphicsViewScaled(bool scaled)
 	{
 		this->update();
 	}
+}
+
+void ImageView::setDefaultBackgroundColor(const QColor & color)
+{
+	_defaultBgColor = color;
+	setBackgroundColor(color);
 }
 
 void ImageView::setBackgroundColor(const QColor & color)
@@ -620,6 +645,16 @@ void ImageView::contextMenuEvent(QContextMenuEvent * e)
 			emit configChanged();
 		}
 	}
+	else if(action == _setFeaturesSize)
+	{
+		bool ok = false;
+		int value = QInputDialog::getInt(this, tr("Set features size"), tr("Size (0 means actual keypoint size)"), _featuresSize, 0, 999, 1, &ok);
+		if(ok)
+		{
+			this->setFeaturesSize(value);
+			emit configChanged();
+		}
+	}
 
 	if(action == _showImage || action ==_showImageDepth)
 	{
@@ -717,6 +752,10 @@ void ImageView::addFeature(int id, const cv::KeyPoint & kpt, float depth, QColor
 {
 	color.setAlpha(this->getAlpha());
 	rtabmap::KeypointItem * item = new rtabmap::KeypointItem(id, kpt, depth, color);
+	if(_featuresSize>0.0f)
+	{
+		item->setRect(kpt.pt.x-_featuresSize/2.0f, kpt.pt.y-_featuresSize/2.0f, _featuresSize, _featuresSize);
+	}
 	_features.insert(id, item);
 	item->setVisible(isFeaturesShown());
 	item->setZValue(1);
@@ -861,6 +900,26 @@ void ImageView::setAlpha(int alpha)
 		QColor c = (*iter)->pen().color();
 		c.setAlpha(_alpha);
 		(*iter)->setPen(QPen(c));
+	}
+
+	if(!_graphicsView->isVisible())
+	{
+		this->update();
+	}
+}
+
+void ImageView::setFeaturesSize(int size)
+{
+	_featuresSize = size;
+	for(QMultiMap<int, KeypointItem*>::iterator iter=_features.begin(); iter!=_features.end(); ++iter)
+	{
+		const cv::KeyPoint & kpt = iter.value()->keypoint();
+		if(size <= 0.0f)
+		{
+			size = kpt.size==0?3:kpt.size;
+		}
+		float sizef = size;
+		iter.value()->setRect(kpt.pt.x-sizef/2.0f, kpt.pt.y-sizef/2.0f, sizef, sizef);
 	}
 
 	if(!_graphicsView->isVisible())
