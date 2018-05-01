@@ -45,6 +45,9 @@ public:
 		timeMirroring(0.0f),
 		timeImageDecimation(0.0f),
 		timeScanFromDepth(0.0f),
+		timeUndistortDepth(0.0f),
+		timeBilateralFiltering(0.0f),
+		timeTotal(0.0f),
 		odomCovariance(cv::Mat::eye(6,6,CV_64FC1))
 	{
 	}
@@ -56,10 +59,15 @@ public:
 	float timeCapture;
 	float timeDisparity;
 	float timeMirroring;
+	float timeStereoExposureCompensation;
 	float timeImageDecimation;
 	float timeScanFromDepth;
+	float timeUndistortDepth;
+	float timeBilateralFiltering;
+	float timeTotal;
 	Transform odomPose;
 	cv::Mat odomCovariance;
+	std::vector<float> odomVelocity;
 };
 
 } // namespace rtabmap
