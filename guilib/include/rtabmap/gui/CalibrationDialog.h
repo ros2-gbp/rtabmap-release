@@ -25,8 +25,8 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifndef CALIBRATIONDIALOG_H_
-#define CALIBRATIONDIALOG_H_
+#ifndef RTABMAP_CALIBRATIONDIALOG_H_
+#define RTABMAP_CALIBRATIONDIALOG_H_
 
 #include "rtabmap/gui/RtabmapGuiExp.h" // DLL export/import defines
 
@@ -86,7 +86,7 @@ private slots:
 
 protected:
 	virtual void closeEvent(QCloseEvent* event);
-	virtual void handleEvent(UEvent * event);
+	virtual bool handleEvent(UEvent * event);
 
 private:
 	float getArea(const std::vector<cv::Point2f> & corners, const cv::Size & boardSize);

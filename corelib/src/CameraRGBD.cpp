@@ -14,7 +14,6 @@ modification, are permitted provided that the following conditions are met:
       derived from this software without specific prior written permission.
 
 THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
 WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
 DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY
 DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
@@ -64,8 +63,17 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <libfreenect2/config.h>
 #endif
 
+#ifdef RTABMAP_K4W2
+#include <Kinect.h>
+#endif
+
 #ifdef RTABMAP_REALSENSE
 #include <librealsense/rs.hpp>
+#ifdef RTABMAP_REALSENSE_SLAM
+#include <rs_core.h>
+#include <rs_utils.h>
+#include <librealsense/slam/slam.h>
+#endif
 #endif
 
 #ifdef RTABMAP_OPENNI2
@@ -392,7 +400,9 @@ CameraOpenNI2::CameraOpenNI2(
 	_depthFx(0.0f),
 	_depthFy(0.0f),
 	_deviceId(deviceId),
-	_openNI2StampsAndIDsUsed(false)
+	_openNI2StampsAndIDsUsed(false),
+	_depthHShift(0),
+	_depthVShift(0)
 #endif
 {
 }
@@ -489,6 +499,16 @@ void CameraOpenNI2::setOpenNI2StampsAndIDsUsed(bool used)
 {
 #ifdef RTABMAP_OPENNI2
 	_openNI2StampsAndIDsUsed = used;
+#endif
+}
+
+void CameraOpenNI2::setIRDepthShift(int horizontal, int vertical)
+{
+#ifdef RTABMAP_OPENNI2
+	UASSERT(horizontal >= 0);
+	UASSERT(vertical >= 0);
+	_depthHShift = horizontal;
+	_depthVShift = vertical;
 #endif
 }
 
@@ -844,6 +864,12 @@ SensorData CameraOpenNI2::captureImage(CameraInfo * info)
 
 						if(_stereoModel.left().isValidForRectification() && !_stereoModel.stereoTransform().isNull())
 						{
+							if (_depthHShift > 0 || _depthVShift > 0)
+							{
+								cv::Mat out = cv::Mat::zeros(depth.size(), depth.type());
+								depth(cv::Rect(_depthHShift, _depthVShift, depth.cols - _depthHShift, depth.rows - _depthVShift)).copyTo(out(cv::Rect(0, 0, depth.cols - _depthHShift, depth.rows - _depthVShift)));
+								depth = out;
+							}
 							depth = _stereoModel.left().rectifyImage(depth, 0);
 							depth = util2d::registerDepth(depth, _stereoModel.left().K(), rgb.size(), _stereoModel.right().K(), _stereoModel.stereoTransform());
 						}
@@ -1339,7 +1365,8 @@ CameraFreenect2::CameraFreenect2(
 	float maxDepth,
 	bool bilateralFiltering,
 	bool edgeAwareFiltering,
-	bool noiseFiltering) :
+	bool noiseFiltering,
+	const std::string & pipelineName) :
 		Camera(imageRate, localTransform)
 #ifdef RTABMAP_FREENECT2
         ,
@@ -1353,7 +1380,8 @@ CameraFreenect2::CameraFreenect2(
 		maxKinect2Depth_(maxDepth),
 		bilateralFiltering_(bilateralFiltering),
 		edgeAwareFiltering_(edgeAwareFiltering),
-		noiseFiltering_(noiseFiltering)
+		noiseFiltering_(noiseFiltering),
+		pipelineName_(pipelineName)
 #endif
 {
 #ifdef RTABMAP_FREENECT2
@@ -1406,6 +1434,74 @@ CameraFreenect2::~CameraFreenect2()
 #endif
 }
 
+#ifdef RTABMAP_FREENECT2
+libfreenect2::PacketPipeline *createPacketPipelineByName(const std::string & name)
+{
+	std::string availablePipelines;
+#if defined(LIBFREENECT2_WITH_OPENGL_SUPPORT)
+	availablePipelines += "gl ";
+	if (name == "gl")
+	{
+		UINFO("Using 'gl' pipeline.");
+		return new libfreenect2::OpenGLPacketPipeline();
+	}
+#endif
+#if defined(LIBFREENECT2_WITH_CUDA_SUPPORT)
+	availablePipelines += "cuda cudakde ";
+	if (name == "cuda")
+	{
+		UINFO("Using 'cuda' pipeline.");
+		return new libfreenect2::CudaPacketPipeline();
+	}
+	if (name == "cudakde")
+	{
+		UINFO("Using 'cudakde' pipeline.");
+		return new libfreenect2::CudaKdePacketPipeline();
+	}
+#endif
+#if defined(LIBFREENECT2_WITH_OPENCL_SUPPORT)
+	availablePipelines += "cl clkde ";
+	if (name == "cl")
+	{
+		UINFO("Using 'cl' pipeline.");
+		return new libfreenect2::OpenCLPacketPipeline();
+	}
+	if (name == "clkde")
+	{
+		UINFO("Using 'clkde' pipeline.");
+		return new libfreenect2::OpenCLKdePacketPipeline();
+	}
+#endif
+	availablePipelines += "cpu";
+	if (name == "cpu")
+	{
+		UINFO("Using 'cpu' pipeline.");
+		return new libfreenect2::CpuPacketPipeline();
+	}
+
+	if (!name.empty())
+	{
+		UERROR("'%s' pipeline is not available. Available pipelines are: \"%s\". Default one is used instead (first one in the list).", 
+			name.c_str(), availablePipelines.c_str());
+	}
+
+	// create default pipeline
+#if defined(LIBFREENECT2_WITH_OPENGL_SUPPORT)
+	UINFO("Using 'gl' pipeline.");
+	return new libfreenect2::OpenGLPacketPipeline();
+#elif defined(LIBFREENECT2_WITH_CUDA_SUPPORT)
+	UINFO("Using 'cuda' pipeline.");
+	return new libfreenect2::CudaPacketPipeline();
+#elif defined(LIBFREENECT2_WITH_OPENCL_SUPPORT)
+	UINFO("Using 'cl' pipeline.");
+	return new libfreenect2::OpenCLPacketPipeline();
+#else
+	UINFO("Using 'cpu' pipeline.");
+	return new libfreenect2::CpuPacketPipeline();
+#endif
+}
+#endif
+
 bool CameraFreenect2::init(const std::string & calibrationFolder, const std::string & cameraName)
 {
 #ifdef RTABMAP_FREENECT2
@@ -1422,20 +1518,7 @@ bool CameraFreenect2::init(const std::string & calibrationFolder, const std::str
 		reg_ = 0;
 	}
 
-	libfreenect2::PacketPipeline * pipeline;
-#ifdef LIBFREENECT2_WITH_CUDA_SUPPORT
-	pipeline = new libfreenect2::CudaPacketPipeline();
-#else
-#ifdef LIBFREENECT2_WITH_OPENGL_SUPPORT
-	pipeline = new libfreenect2::OpenGLPacketPipeline();
-#else
-#ifdef LIBFREENECT2_WITH_OPENCL_SUPPORT
-	pipeline = new libfreenect2::OpenCLPacketPipeline();
-#else
-	pipeline = new libfreenect2::CpuPacketPipeline();
-#endif
-#endif
-#endif
+	libfreenect2::PacketPipeline * pipeline = createPacketPipelineByName(pipelineName_);
 
 	if(deviceId_ <= 0)
 	{
@@ -1640,7 +1723,7 @@ SensorData CameraFreenect2::captureImage(CameraInfo * info)
 				{
 					//rectify
 					rgb = stereoModel_.left().rectifyImage(rgb);
-					depth = stereoModel_.left().rectifyImage(depth);
+					depth = stereoModel_.left().rectifyDepth(depth);
 					fx = stereoModel_.left().fx();
 					fy = stereoModel_.left().fy();
 					cx = stereoModel_.left().cx();
@@ -1962,6 +2045,550 @@ SensorData CameraFreenect2::captureImage(CameraInfo * info)
 	return data;
 }
 
+//
+// CameraK4W2
+//
+
+#ifdef RTABMAP_K4W2
+// Safe release for interfaces
+template<class Interface>
+inline void SafeRelease(Interface *& pInterfaceToRelease)
+{
+	if (pInterfaceToRelease != NULL)
+	{
+		pInterfaceToRelease->Release();
+		pInterfaceToRelease = NULL;
+	}
+}
+#endif
+
+bool CameraK4W2::available()
+{
+#ifdef RTABMAP_K4W2
+	return true;
+#else
+	return false;
+#endif
+}
+
+CameraK4W2::CameraK4W2(
+	int deviceId,
+	Type type,
+	float imageRate,
+	const Transform & localTransform) :
+	Camera(imageRate, localTransform)
+#ifdef RTABMAP_K4W2
+	,
+	type_(type),
+	pKinectSensor_(NULL),
+	pCoordinateMapper_(NULL),
+	pDepthCoordinates_(new DepthSpacePoint[cColorWidth * cColorHeight]),
+	pColorCoordinates_(new ColorSpacePoint[cDepthWidth * cDepthHeight]),
+	pMultiSourceFrameReader_(NULL),
+	pColorRGBX_(new RGBQUAD[cColorWidth * cColorHeight]),
+	hMSEvent(NULL)
+#endif
+{
+}
+
+CameraK4W2::~CameraK4W2()
+{
+#ifdef RTABMAP_K4W2
+	if (pDepthCoordinates_)
+	{
+		delete[] pDepthCoordinates_;
+		pDepthCoordinates_ = NULL;
+	}
+
+	if (pColorCoordinates_)
+	{
+		delete[] pColorCoordinates_;
+		pColorCoordinates_ = NULL;
+	}
+
+	if (pColorRGBX_)
+	{
+		delete[] pColorRGBX_;
+		pColorRGBX_ = NULL;
+	}
+
+	close();
+#endif
+}
+
+void CameraK4W2::close()
+{
+#ifdef RTABMAP_K4W2
+	if (pMultiSourceFrameReader_)
+	{
+		pMultiSourceFrameReader_->UnsubscribeMultiSourceFrameArrived(hMSEvent);
+		CloseHandle((HANDLE)hMSEvent);
+		hMSEvent = NULL;
+	}
+
+	// done with frame reader
+	SafeRelease(pMultiSourceFrameReader_);
+
+	// done with coordinate mapper
+	SafeRelease(pCoordinateMapper_);
+
+	// close the Kinect Sensor
+	if (pKinectSensor_)
+	{
+		pKinectSensor_->Close();
+	}
+
+	SafeRelease(pKinectSensor_);
+
+	colorCameraModel_ = CameraModel();
+#endif
+}
+
+bool CameraK4W2::init(const std::string & calibrationFolder, const std::string & cameraName)
+{
+#ifdef RTABMAP_K4W2
+	HRESULT hr;
+
+	close();
+
+	hr = GetDefaultKinectSensor(&pKinectSensor_);
+	if (FAILED(hr))
+	{
+		return false;
+	}
+
+	if (pKinectSensor_)
+	{
+		// Initialize the Kinect and get coordinate mapper and the frame reader
+
+		hr = pKinectSensor_->Open();
+
+		if (SUCCEEDED(hr))
+		{
+			hr = pKinectSensor_->get_CoordinateMapper(&pCoordinateMapper_);
+
+			if (SUCCEEDED(hr))
+			{
+				hr = pKinectSensor_->OpenMultiSourceFrameReader(
+					FrameSourceTypes::FrameSourceTypes_Depth | FrameSourceTypes::FrameSourceTypes_Color,
+					&pMultiSourceFrameReader_);
+
+				if (SUCCEEDED(hr))
+				{
+					hr = pMultiSourceFrameReader_->SubscribeMultiSourceFrameArrived(&hMSEvent);
+				}
+			}
+		}
+	}
+
+	if (!pKinectSensor_ || FAILED(hr))
+	{
+		UERROR("No ready Kinect found!");
+		close();
+		return false;
+	}
+
+	// to query camera parameters, we should wait a little
+	uSleep(3000);
+
+	// initialize color calibration if not set yet
+	CameraIntrinsics intrinsics;
+	hr = pCoordinateMapper_->GetDepthCameraIntrinsics(&intrinsics);
+	if (SUCCEEDED(hr) && intrinsics.FocalLengthX > 0.0f)
+	{
+		// guess color intrinsics by comparing two reprojections
+		CameraModel depthModel(
+			intrinsics.FocalLengthX,
+			intrinsics.FocalLengthY,
+			intrinsics.PrincipalPointX,
+			intrinsics.PrincipalPointY);
+
+		cv::Mat fakeDepth = cv::Mat::ones(cDepthHeight, cDepthWidth, CV_16UC1) * 1000;
+		hr = pCoordinateMapper_->MapDepthFrameToColorSpace(cDepthWidth * cDepthHeight, (UINT16*)fakeDepth.data, cDepthWidth * cDepthHeight, pColorCoordinates_);
+		if (SUCCEEDED(hr))
+		{
+			int firstIndex = -1;
+			int lastIndex = -1;
+			for (int depthIndex = 0; depthIndex < (cDepthWidth*cDepthHeight); ++depthIndex)
+			{
+				ColorSpacePoint p = pColorCoordinates_[depthIndex];
+				// Values that are negative infinity means it is an invalid color to depth mapping so we
+				// skip processing for this pixel
+				if (p.X != -std::numeric_limits<float>::infinity() && p.Y != -std::numeric_limits<float>::infinity())
+				{
+					if (firstIndex == -1)
+					{
+						firstIndex = depthIndex;
+					}
+					lastIndex = depthIndex;
+				}
+			}
+
+			UASSERT(firstIndex >= 0 && lastIndex >= 0);
+			float fx, fy, cx, cy;
+			float x1, y1, z1, x2, y2, z2;
+			depthModel.project(firstIndex - (firstIndex / cDepthWidth)*cDepthWidth, firstIndex / cDepthWidth, 1.0f, x1, y1, z1);
+			depthModel.project(lastIndex - (lastIndex / cDepthWidth)*cDepthWidth, lastIndex / cDepthWidth, 1.0f, x2, y2, z2);
+			ColorSpacePoint uv1 = pColorCoordinates_[firstIndex];
+			ColorSpacePoint uv2 = pColorCoordinates_[lastIndex];
+			fx = ((uv1.X - uv2.X)*z1*z2) / (x1*z2 - x2*z1);
+			cx = uv1.X - (x1 / z1) * fx;
+			fy = ((uv1.Y - uv2.Y)*z1*z2) / (y1*z2 - y2*z1);
+			cy = uv1.Y - (y1 / z1) * fy;
+
+			colorCameraModel_ = CameraModel(
+				fx,
+				fy,
+				float(cColorWidth) - cx,
+				cy,
+				this->getLocalTransform(),
+				0,
+				cv::Size(cColorWidth, cColorHeight));
+		}
+	}
+
+	if (!colorCameraModel_.isValidForProjection())
+	{
+		UERROR("Failed to get camera parameters! Is the camera connected? Try restarting the camera again or use kTypeColor2DepthSD.");
+		close();
+		return false;
+	}
+
+	std::string serial = getSerial();
+	if (!serial.empty())
+	{
+		UINFO("Running kinect device \"%s\"", serial.c_str());
+	}
+
+	return true;
+#else
+	UERROR("CameraK4W2: RTAB-Map is not built with Kinect for Windows 2 SDK support!");
+	return false;
+#endif
+}
+
+bool CameraK4W2::isCalibrated() const
+{
+	return true;
+}
+
+std::string CameraK4W2::getSerial() const
+{
+#ifdef RTABMAP_K4W2
+	if (pKinectSensor_)
+	{
+		wchar_t uid[255] = { 0 };
+		// It seems to fail every time!?
+		HRESULT hr = pKinectSensor_->get_UniqueKinectId(255, uid);
+		if (SUCCEEDED(hr))
+		{
+			std::wstring ws(uid);
+			return std::string(ws.begin(), ws.end());
+		}
+	}
+#endif
+	return "";
+}
+
+SensorData CameraK4W2::captureImage(CameraInfo * info)
+{
+	SensorData data;
+
+#ifdef RTABMAP_K4W2
+
+	if (!pMultiSourceFrameReader_)
+	{
+		return data;
+	}
+
+	HRESULT hr;
+
+	//now check for frame events
+	HANDLE handles[] = { reinterpret_cast<HANDLE>(hMSEvent) };
+
+	double t = UTimer::now();
+	while((UTimer::now()-t < 5.0) && WaitForMultipleObjects(_countof(handles), handles, false, 5000) == WAIT_OBJECT_0)
+	{
+		IMultiSourceFrameArrivedEventArgs* pArgs = NULL;
+
+		hr = pMultiSourceFrameReader_->GetMultiSourceFrameArrivedEventData(hMSEvent, &pArgs);
+		if (SUCCEEDED(hr))
+		{
+			IMultiSourceFrameReference * pFrameRef = NULL;
+			hr = pArgs->get_FrameReference(&pFrameRef);
+			if (SUCCEEDED(hr))
+			{
+				IMultiSourceFrame* pMultiSourceFrame = NULL;
+				IDepthFrame* pDepthFrame = NULL;
+				IColorFrame* pColorFrame = NULL;
+
+				hr = pFrameRef->AcquireFrame(&pMultiSourceFrame);
+				if (FAILED(hr))
+				{
+					UERROR("Failed getting latest frame.");
+				}
+
+				IDepthFrameReference* pDepthFrameReference = NULL;
+				hr = pMultiSourceFrame->get_DepthFrameReference(&pDepthFrameReference);
+				if (SUCCEEDED(hr))
+				{
+					hr = pDepthFrameReference->AcquireFrame(&pDepthFrame);
+				}
+				SafeRelease(pDepthFrameReference);
+
+				IColorFrameReference* pColorFrameReference = NULL;
+				hr = pMultiSourceFrame->get_ColorFrameReference(&pColorFrameReference);
+				if (SUCCEEDED(hr))
+				{
+					hr = pColorFrameReference->AcquireFrame(&pColorFrame);
+				}
+				SafeRelease(pColorFrameReference);
+
+				if (pDepthFrame && pColorFrame)
+				{
+					IFrameDescription* pDepthFrameDescription = NULL;
+					int nDepthWidth = 0;
+					int nDepthHeight = 0;
+					UINT nDepthBufferSize = 0;
+					UINT16 *pDepthBuffer = NULL;
+
+					IFrameDescription* pColorFrameDescription = NULL;
+					int nColorWidth = 0;
+					int nColorHeight = 0;
+					ColorImageFormat imageFormat = ColorImageFormat_None;
+					UINT nColorBufferSize = 0;
+					RGBQUAD *pColorBuffer = NULL;
+
+					// get depth frame data
+					if (SUCCEEDED(hr))
+						hr = pDepthFrame->get_FrameDescription(&pDepthFrameDescription);
+					if (SUCCEEDED(hr))
+						hr = pDepthFrameDescription->get_Width(&nDepthWidth);
+					if (SUCCEEDED(hr))
+						hr = pDepthFrameDescription->get_Height(&nDepthHeight);
+					if (SUCCEEDED(hr))
+						hr = pDepthFrame->AccessUnderlyingBuffer(&nDepthBufferSize, &pDepthBuffer);
+
+					// get color frame data
+					if (SUCCEEDED(hr))
+						hr = pColorFrame->get_FrameDescription(&pColorFrameDescription);
+					if (SUCCEEDED(hr))
+						hr = pColorFrameDescription->get_Width(&nColorWidth);
+					if (SUCCEEDED(hr))
+						hr = pColorFrameDescription->get_Height(&nColorHeight);
+					if (SUCCEEDED(hr))
+						hr = pColorFrame->get_RawColorImageFormat(&imageFormat);
+					if (SUCCEEDED(hr))
+					{
+						if (imageFormat == ColorImageFormat_Bgra)
+						{
+							hr = pColorFrame->AccessRawUnderlyingBuffer(&nColorBufferSize, reinterpret_cast<BYTE**>(&pColorBuffer));
+						}
+						else if (pColorRGBX_)
+						{
+							pColorBuffer = pColorRGBX_;
+							nColorBufferSize = cColorWidth * cColorHeight * sizeof(RGBQUAD);
+							hr = pColorFrame->CopyConvertedFrameDataToArray(nColorBufferSize, reinterpret_cast<BYTE*>(pColorBuffer), ColorImageFormat_Bgra);
+						}
+						else
+						{
+							hr = E_FAIL;
+						}
+					}
+
+					if(SUCCEEDED(hr))
+					{
+						//ProcessFrame(nDepthTime, pDepthBuffer, nDepthWidth, nDepthHeight,
+						//	pColorBuffer, nColorWidth, nColorHeight,
+						//	pBodyIndexBuffer, nBodyIndexWidth, nBodyIndexHeight);
+
+						// Make sure we've received valid data
+						if (pCoordinateMapper_ &&
+							pDepthBuffer && (nDepthWidth == cDepthWidth) && (nDepthHeight == cDepthHeight) &&
+							pColorBuffer && (nColorWidth == cColorWidth) && (nColorHeight == cColorHeight))
+						{
+							if (type_ == kTypeColor2DepthSD)
+							{
+								HRESULT hr = pCoordinateMapper_->MapColorFrameToDepthSpace(nDepthWidth * nDepthHeight, (UINT16*)pDepthBuffer, nColorWidth * nColorHeight, pDepthCoordinates_);
+								if (SUCCEEDED(hr))
+								{
+									cv::Mat depth = cv::Mat::zeros(nDepthHeight, nDepthWidth, CV_16UC1);
+									cv::Mat imageColorRegistered = cv::Mat::zeros(nDepthHeight, nDepthWidth, CV_8UC3);
+									// loop over output pixels
+									for (int colorIndex = 0; colorIndex < (nColorWidth*nColorHeight); ++colorIndex)
+									{
+										DepthSpacePoint p = pDepthCoordinates_[colorIndex];
+										// Values that are negative infinity means it is an invalid color to depth mapping so we
+										// skip processing for this pixel
+										if (p.X != -std::numeric_limits<float>::infinity() && p.Y != -std::numeric_limits<float>::infinity())
+										{
+											// To avoid black lines caused by rounding pixel values, we should set 4 pixels
+											// At the same do mirror
+											int pixel_x_l, pixel_y_l, pixel_x_h, pixel_y_h;
+											pixel_x_l = nDepthWidth - static_cast<int>(p.X);
+											pixel_y_l = static_cast<int>(p.Y);
+											pixel_x_h = pixel_x_l - 1;
+											pixel_y_h = pixel_y_l + 1;
+
+											const RGBQUAD* pSrc = pColorBuffer + colorIndex;
+											if ((pixel_x_l >= 0 && pixel_x_l < nDepthWidth) && (pixel_y_l >= 0 && pixel_y_l < nDepthHeight))
+											{
+												unsigned char *  ptr = imageColorRegistered.ptr<unsigned char>(pixel_y_l, pixel_x_l);
+												ptr[0] = pSrc->rgbBlue;
+												ptr[1] = pSrc->rgbGreen;
+												ptr[2] = pSrc->rgbRed;
+												depth.at<unsigned short>(pixel_y_l, pixel_x_l) = *(pDepthBuffer + nDepthWidth - pixel_x_l + pixel_y_l*nDepthWidth);
+											}
+											if ((pixel_x_l >= 0 && pixel_x_l < nDepthWidth) && (pixel_y_h >= 0 && pixel_y_h < nDepthHeight))
+											{
+												unsigned char *  ptr = imageColorRegistered.ptr<unsigned char>(pixel_y_h, pixel_x_l);
+												ptr[0] = pSrc->rgbBlue;
+												ptr[1] = pSrc->rgbGreen;
+												ptr[2] = pSrc->rgbRed;
+												depth.at<unsigned short>(pixel_y_h, pixel_x_l) = *(pDepthBuffer + nDepthWidth - pixel_x_l + pixel_y_h*nDepthWidth);
+											}
+											if ((pixel_x_h >= 0 && pixel_x_h < nDepthWidth) && (pixel_y_l >= 0 && pixel_y_l < nDepthHeight))
+											{
+												unsigned char *  ptr = imageColorRegistered.ptr<unsigned char>(pixel_y_l, pixel_x_h);
+												ptr[0] = pSrc->rgbBlue;
+												ptr[1] = pSrc->rgbGreen;
+												ptr[2] = pSrc->rgbRed;
+												depth.at<unsigned short>(pixel_y_l, pixel_x_h) = *(pDepthBuffer + nDepthWidth - pixel_x_h + pixel_y_l*nDepthWidth);
+											}
+											if ((pixel_x_h >= 0 && pixel_x_h < nDepthWidth) && (pixel_y_h >= 0 && pixel_y_h < nDepthHeight))
+											{
+												unsigned char *  ptr = imageColorRegistered.ptr<unsigned char>(pixel_y_h, pixel_x_h);
+												ptr[0] = pSrc->rgbBlue;
+												ptr[1] = pSrc->rgbGreen;
+												ptr[2] = pSrc->rgbRed;
+												depth.at<unsigned short>(pixel_y_h, pixel_x_h) = *(pDepthBuffer + nDepthWidth - pixel_x_h + pixel_y_h*nDepthWidth);
+											}
+										}
+									}
+
+									CameraIntrinsics intrinsics;
+									pCoordinateMapper_->GetDepthCameraIntrinsics(&intrinsics);
+									CameraModel model(
+										intrinsics.FocalLengthX,
+										intrinsics.FocalLengthY,
+										intrinsics.PrincipalPointX,
+										intrinsics.PrincipalPointY,
+										this->getLocalTransform(),
+										0,
+										depth.size());
+									data = SensorData(imageColorRegistered, depth, model, this->getNextSeqID(), UTimer::now());
+								}
+								else
+								{
+									UERROR("Failed color to depth registration!");
+								}
+							}
+							else //depthToColor
+							{
+								HRESULT hr = pCoordinateMapper_->MapDepthFrameToColorSpace(nDepthWidth * nDepthHeight, (UINT16*)pDepthBuffer, nDepthWidth * nDepthHeight, pColorCoordinates_);
+								if (SUCCEEDED(hr))
+								{
+									cv::Mat depthSource(nDepthHeight, nDepthWidth, CV_16UC1, pDepthBuffer);
+									cv::Mat depthRegistered = cv::Mat::zeros(
+										type_ == kTypeDepth2ColorSD ? nColorHeight/2 : nColorHeight, 
+										type_ == kTypeDepth2ColorSD ? nColorWidth/2 : nColorWidth,
+										CV_16UC1);
+									cv::Mat imageColor;
+									if(type_ == kTypeDepth2ColorSD)
+									{
+										cv::Mat tmp;
+										cv::resize(cv::Mat(nColorHeight, nColorWidth, CV_8UC4, pColorBuffer), tmp, cv::Size(), 0.5, 0.5, cv::INTER_AREA);
+										cv::cvtColor(tmp, imageColor, CV_BGRA2BGR);
+									}
+									else
+									{
+										cv::cvtColor(cv::Mat(nColorHeight, nColorWidth, CV_8UC4, pColorBuffer), imageColor, CV_BGRA2BGR);
+									}
+									// loop over output pixels
+									for (int depthIndex = 0; depthIndex < (nDepthWidth*nDepthHeight); ++depthIndex)
+									{
+										ColorSpacePoint p = pColorCoordinates_[depthIndex];
+										// Values that are negative infinity means it is an invalid color to depth mapping so we
+										// skip processing for this pixel
+										if (p.X != -std::numeric_limits<float>::infinity() && p.Y != -std::numeric_limits<float>::infinity())
+										{
+											if (type_ == kTypeDepth2ColorSD)
+											{
+												p.X /= 2.0f;
+												p.Y /= 2.0f;
+											}
+											const unsigned short & depth_value = depthSource.at<unsigned short>(0, depthIndex);
+											int pixel_x_l, pixel_y_l, pixel_x_h, pixel_y_h;
+											// get the coordinate on image plane.
+											pixel_x_l = depthRegistered.cols - p.X; // flip depth
+											pixel_y_l = p.Y;
+											pixel_x_h = pixel_x_l - 1;
+											pixel_y_h = pixel_y_l + 1;
+
+											if (pixel_x_l >= 0 && pixel_x_l < depthRegistered.cols &&
+												pixel_y_l>0 && pixel_y_l < depthRegistered.rows && // ignore first line
+												depth_value)
+											{
+												unsigned short & depthPixel = depthRegistered.at<unsigned short>(pixel_y_l, pixel_x_l);
+												if (depthPixel == 0 || depthPixel > depth_value)
+												{
+													depthPixel = depth_value;
+												}
+											}
+											if (pixel_x_h >= 0 && pixel_x_h < depthRegistered.cols &&
+												pixel_y_h>0 && pixel_y_h < depthRegistered.rows && // ignore first line
+												depth_value)
+											{
+												unsigned short & depthPixel = depthRegistered.at<unsigned short>(pixel_y_h, pixel_x_h);
+												if (depthPixel == 0 || depthPixel > depth_value)
+												{
+													depthPixel = depth_value;
+												}
+											}
+										}
+									}
+
+									CameraModel model = colorCameraModel_;
+									if (type_ == kTypeDepth2ColorSD)
+									{
+										model = model.scaled(0.5);
+									}
+									util2d::fillRegisteredDepthHoles(depthRegistered, true, true, type_ == kTypeDepth2ColorHD);
+									depthRegistered = rtabmap::util2d::fillDepthHoles(depthRegistered, 1);
+									cv::flip(imageColor, imageColor, 1);
+									data = SensorData(imageColor, depthRegistered, model, this->getNextSeqID(), UTimer::now());
+								}
+								else
+								{
+									UERROR("Failed depth to color registration!");
+								}
+							}
+						}
+					}
+
+					SafeRelease(pDepthFrameDescription);
+					SafeRelease(pColorFrameDescription);
+				}
+
+				pFrameRef->Release();
+
+				SafeRelease(pDepthFrame);
+				SafeRelease(pColorFrame);
+				SafeRelease(pMultiSourceFrame);
+			}	
+			pArgs->Release();
+		}
+		if (!data.imageRaw().empty())
+		{
+			break;
+		}
+	}
+#else
+	UERROR("CameraK4W2: RTAB-Map is not built with Kinect for Windows 2 SDK support!");
+#endif
+	return data;
+}
+
 /////////////////////////
 // CameraRealSense
 /////////////////////////
@@ -1974,7 +2601,13 @@ bool CameraRealSense::available()
 #endif
 }
 
-CameraRealSense::CameraRealSense(int device, int presetRGB, int presetDepth, float imageRate, const rtabmap::Transform & localTransform) :
+CameraRealSense::CameraRealSense(
+		int device,
+		int presetRGB,
+		int presetDepth,
+		bool computeOdometry,
+		float imageRate,
+		const rtabmap::Transform & localTransform) :
 	Camera(imageRate, localTransform)
 #ifdef RTABMAP_REALSENSE
     ,
@@ -1982,7 +2615,9 @@ CameraRealSense::CameraRealSense(int device, int presetRGB, int presetDepth, flo
 	dev_(0),
 	deviceId_(device),
 	presetRGB_(presetRGB),
-	presetDepth_(presetDepth)
+	presetDepth_(presetDepth),
+	computeOdometry_(computeOdometry),
+	slam_(0)
 #endif
 {
 	UDEBUG("");
@@ -1990,18 +2625,89 @@ CameraRealSense::CameraRealSense(int device, int presetRGB, int presetDepth, flo
 
 CameraRealSense::~CameraRealSense()
 {
+	UDEBUG("");
 #ifdef RTABMAP_REALSENSE
+	UDEBUG("");
+	if(dev_)
+	{
+		if(slam_!=0)
+		{
+			dev_->stop(rs::source::all_sources);
+		}
+		else
+		{
+			dev_->stop();
+		}
+		dev_ = 0;
+	}
+	UDEBUG("");
 	if (ctx_)
 	{
 		delete ctx_;
 	}
+#ifdef RTABMAP_REALSENSE_SLAM
+	UDEBUG("");
+	if(slam_)
+	{
+		UScopeMutex lock(slamLock_);
+		slam_->flush_resources();
+		delete slam_;
+		slam_ = 0;
+	}
+#endif
 #endif
 }
+
+#ifdef RTABMAP_REALSENSE_SLAM
+bool setStreamConfigIntrin(
+		rs::core::stream_type stream,
+		std::map< rs::core::stream_type, rs::core::intrinsics > intrinsics,
+		rs::core::video_module_interface::supported_module_config & supported_config,
+		rs::core::video_module_interface::actual_module_config & actual_config)
+{
+  auto & supported_stream_config = supported_config[stream];
+  if (!supported_stream_config.is_enabled || supported_stream_config.size.width != intrinsics[stream].width || supported_stream_config.size.height != intrinsics[stream].height)
+  {
+	  UERROR("size of stream is not supported by slam");
+	  			UERROR("  supported: stream %d, width: %d height: %d", (uint32_t) stream, supported_stream_config.size.width, supported_stream_config.size.height);
+	  			UERROR("  received: stream %d, width: %d height: %d", (uint32_t) stream, intrinsics[stream].width, intrinsics[stream].height);
+
+    return false;
+  }
+  rs::core::video_module_interface::actual_image_stream_config &actual_stream_config = actual_config[stream];
+  actual_config[stream].size.width = intrinsics[stream].width;
+  actual_config[stream].size.height = intrinsics[stream].height;
+  actual_stream_config.frame_rate = supported_stream_config.frame_rate;
+  actual_stream_config.intrinsics = intrinsics[stream];
+  actual_stream_config.is_enabled = true;
+  return true;
+}
+#endif
 
 bool CameraRealSense::init(const std::string & calibrationFolder, const std::string & cameraName)
 {
 	UDEBUG("");
 #ifdef RTABMAP_REALSENSE
+
+	if(dev_)
+	{
+		dev_->stop(rs::source::all_sources);
+		dev_ = 0;
+	}
+	bufferedFrames_.clear();
+
+#ifdef RTABMAP_REALSENSE_SLAM
+	motionSeq_[0] = motionSeq_[1] = 0;
+	if(slam_)
+	{
+		UScopeMutex lock(slamLock_);
+		UDEBUG("Flush slam");
+		slam_->flush_resources();
+		delete slam_;
+		slam_ = 0;
+	}
+#endif
+
 	if (ctx_ == 0)
 	{
 		ctx_ = new rs::context();
@@ -2021,11 +2727,22 @@ bool CameraRealSense::init(const std::string & calibrationFolder, const std::str
 		UERROR("Cannot connect to device %d", deviceId_);
 		return false;
 	}
-	UINFO("Using device %d, an %s", deviceId_, dev_->get_name());
+	std::string name = dev_->get_name();
+	UINFO("Using device %d, an %s", deviceId_, name.c_str());
 	UINFO("    Serial number: %s", dev_->get_serial());
 	UINFO("    Firmware version: %s", dev_->get_firmware_version());
 	UINFO("    Preset RGB: %d", presetRGB_);
 	UINFO("    Preset Depth: %d", presetDepth_);
+
+	bool computeOdometry = false;
+#ifdef RTABMAP_REALSENSE_SLAM
+	if (name.find("ZR300") != std::string::npos && computeOdometry_)
+	{
+		// Only enable ZR300 functionality if fisheye stream is enabled.
+		// Accel/Gyro automatically enabled when fisheye requested
+		computeOdometry = true;
+	}
+#endif
 
 	// Configure depth and color to run with the device's preferred settings
 	UINFO("Enabling streams...");
@@ -2040,12 +2757,263 @@ bool CameraRealSense::init(const std::string & calibrationFolder, const std::str
 	rs::intrinsics color_intrin = dev_->get_stream_intrinsics(rs::stream::color);
 	UINFO("    RGB:   %dx%d", color_intrin.width, color_intrin.height);
 	UINFO("    Depth: %dx%d", depth_intrin.width, depth_intrin.height);
-	dev_->start();
 
-	dev_->wait_for_frames();
+#ifdef RTABMAP_REALSENSE_SLAM
+	UDEBUG("Setup frame callback");
+	// Define lambda callback for receiving stream data
+	std::function<void(rs::frame)> frameCallback = [this](rs::frame frame)
+	{
+		if(slam_ != 0)
+		{
+			const auto timestampDomain = frame.get_frame_timestamp_domain();
+			if (rs::timestamp_domain::microcontroller != timestampDomain)
+			{
+				UERROR("error: Junk time stamp in stream: %d\twith frame counter: %d",
+						(int)(frame.get_stream_type()), frame.get_frame_number());
+				return ;
+			}
+		}
+
+		int width = frame.get_width();
+		int height = frame.get_height();
+		rs::core::correlated_sample_set sample_set = {};
+
+		rs::core::image_info info =
+		{
+		  width,
+		  height,
+		  rs::utils::convert_pixel_format(frame.get_format()),
+		  frame.get_stride()
+		};
+		cv::Mat image;
+		if(frame.get_format() == rs::format::raw8)
+		{
+			image = cv::Mat(height, width, CV_8UC1, (unsigned char*)frame.get_data());
+		}
+		else if(frame.get_format() == rs::format::z16)
+		{
+			image = cv::Mat(height, width, CV_16UC1, (unsigned char*)frame.get_data());
+			if(bufferedFrames_.find(frame.get_timestamp()) != bufferedFrames_.end())
+			{
+				bufferedFrames_.find(frame.get_timestamp())->second.second = image.clone();
+				UScopeMutex lock(dataMutex_);
+				bool notify = lastSyncFrames_.first.empty();
+				lastSyncFrames_ = bufferedFrames_.find(frame.get_timestamp())->second;
+				if(notify)
+				{
+					dataReady_.release();
+				}
+				bufferedFrames_.erase(frame.get_timestamp());
+			}
+			else
+			{
+				bufferedFrames_.insert(std::make_pair(frame.get_timestamp(), std::make_pair(cv::Mat(), image.clone())));
+			}
+			if(bufferedFrames_.size()>5)
+			{
+				UWARN("Frames cannot be synchronized!");
+				bufferedFrames_.clear();
+			}
+		}
+		else if(frame.get_format() == rs::format::rgb8)
+		{
+			image = cv::Mat(height, width, CV_8UC3, (unsigned char*)frame.get_data());
+			if(bufferedFrames_.find(frame.get_timestamp()) != bufferedFrames_.end())
+			{
+				bufferedFrames_.find(frame.get_timestamp())->second.first = image.clone();
+				UScopeMutex lock(dataMutex_);
+				bool notify = lastSyncFrames_.first.empty();
+				lastSyncFrames_ = bufferedFrames_.find(frame.get_timestamp())->second;
+				if(notify)
+				{
+					dataReady_.release();
+				}
+				bufferedFrames_.erase(frame.get_timestamp());
+			}
+			else
+			{
+				bufferedFrames_.insert(std::make_pair(frame.get_timestamp(), std::make_pair(image.clone(), cv::Mat())));
+			}
+			if(bufferedFrames_.size()>5)
+			{
+				UWARN("Frames cannot be synchronized!");
+				bufferedFrames_.clear();
+			}
+			return;
+		}
+		else
+		{
+			return;
+		}
+
+		if(slam_ != 0)
+		{
+			rs::core::stream_type stream = rs::utils::convert_stream_type(frame.get_stream_type());
+			sample_set[stream] = rs::core::image_interface::create_instance_from_raw_data(
+								   & info,
+								   image.data,
+								   stream,
+								   rs::core::image_interface::flag::any,
+								   frame.get_timestamp(),
+								   (uint64_t)frame.get_frame_number(),
+								   rs::core::timestamp_domain::microcontroller);
+
+			UScopeMutex lock(slamLock_);
+			if (slam_->process_sample_set(sample_set) < rs::core::status_no_error)
+			{
+				UERROR("error: failed to process sample");
+			}
+			sample_set[stream]->release();
+		}
+	};
+
+	// Setup stream callback for stream
+	if(computeOdometry)
+	{
+		dev_->set_frame_callback(rs::stream::fisheye, frameCallback);
+	}
+	dev_->set_frame_callback(rs::stream::depth, frameCallback);
+	dev_->set_frame_callback(rs::stream::color, frameCallback);
+
+	if (computeOdometry)
+	{
+		dev_->enable_stream(rs::stream::fisheye, 640, 480, rs::format::raw8, 30);
+		rs::intrinsics fisheye_intrin = dev_->get_stream_intrinsics(rs::stream::fisheye);
+		UINFO("    Fish: %dx%d", fisheye_intrin.width, fisheye_intrin.height);
+
+		// Needed to align image timestamps to common clock-domain with the motion events
+		dev_->set_option(rs::option::fisheye_strobe, 1);
+		// This option causes the fisheye image to be aquired in-sync with the depth image.
+		dev_->set_option(rs::option::fisheye_external_trigger, 1);
+		dev_->set_option(rs::option::fisheye_color_auto_exposure, 1);
+
+		UDEBUG("Setup motion callback");
+		//define callback to the motion events and set it.
+		std::function<void(rs::motion_data)> motion_callback;
+		motion_callback = [this](rs::motion_data entry)
+		{
+			if ((entry.timestamp_data.source_id != RS_EVENT_IMU_GYRO) &&
+					(entry.timestamp_data.source_id != RS_EVENT_IMU_ACCEL))
+				return;
+
+			rs_event_source motionType = entry.timestamp_data.source_id;
+
+			rs::core::correlated_sample_set sample_set = {};
+			if (motionType == RS_EVENT_IMU_ACCEL)
+			{
+				sample_set[rs::core::motion_type::accel].timestamp = entry.timestamp_data.timestamp;
+				sample_set[rs::core::motion_type::accel].data[0] = (float)entry.axes[0];
+				sample_set[rs::core::motion_type::accel].data[1] = (float)entry.axes[1];
+				sample_set[rs::core::motion_type::accel].data[2] = (float)entry.axes[2];
+				sample_set[rs::core::motion_type::accel].type = rs::core::motion_type::accel;
+				++motionSeq_[0];
+				sample_set[rs::core::motion_type::accel].frame_number = motionSeq_[0];
+			}
+			else if (motionType == RS_EVENT_IMU_GYRO)
+			{
+				sample_set[rs::core::motion_type::gyro].timestamp = entry.timestamp_data.timestamp;
+				sample_set[rs::core::motion_type::gyro].data[0] = (float)entry.axes[0];
+				sample_set[rs::core::motion_type::gyro].data[1] = (float)entry.axes[1];
+				sample_set[rs::core::motion_type::gyro].data[2] = (float)entry.axes[2];
+				sample_set[rs::core::motion_type::gyro].type = rs::core::motion_type::gyro;
+				++motionSeq_[1];
+				sample_set[rs::core::motion_type::gyro].frame_number = motionSeq_[1];
+			}
+
+			UScopeMutex lock(slamLock_);
+			if (slam_->process_sample_set(sample_set) < rs::core::status_no_error)
+			{
+				UERROR("error: failed to process sample");
+			}
+		};
+
+		std::function<void(rs::timestamp_data)> timestamp_callback;
+		timestamp_callback = [](rs::timestamp_data entry) {};
+
+		dev_->enable_motion_tracking(motion_callback, timestamp_callback);
+		UINFO("  enabled accel and gyro stream");
+
+		rs::motion_intrinsics imuIntrinsics;
+		rs::extrinsics fisheye2ImuExtrinsics;
+		rs::extrinsics fisheye2DepthExtrinsics;
+		try
+		{
+			imuIntrinsics = dev_->get_motion_intrinsics();
+			fisheye2ImuExtrinsics = dev_->get_motion_extrinsics_from(rs::stream::fisheye);
+			fisheye2DepthExtrinsics = dev_->get_extrinsics(rs::stream::depth, rs::stream::fisheye);
+		}
+		catch (const rs::error & e) {
+			UERROR("Exception: %s (try to unplug/plug the camera)", e.what());
+			return false;
+		}
+
+		UDEBUG("Setup SLAM");
+		UScopeMutex lock(slamLock_);
+		slam_ = new rs::slam::slam();
+		slam_->set_auto_occupancy_map_building(false);
+		slam_->force_relocalization_pose(false);
+
+		rs::core::video_module_interface::supported_module_config supported_config = {};
+		if (slam_->query_supported_module_config(0, supported_config) < rs::core::status_no_error)
+		{
+			UERROR("Failed to query the first supported module configuration");
+			return false;
+		}
+
+		rs::core::video_module_interface::actual_module_config actual_config = {};
+
+		// Set camera intrinsics
+		std::map< rs::core::stream_type, rs::core::intrinsics > intrinsics;
+		intrinsics[rs::core::stream_type::fisheye] = rs::utils::convert_intrinsics(fisheye_intrin);
+		intrinsics[rs::core::stream_type::depth] = rs::utils::convert_intrinsics(depth_intrin);
+
+		if(!setStreamConfigIntrin(rs::core::stream_type::fisheye, intrinsics, supported_config, actual_config))
+		{
+			return false;
+		}
+		if(!setStreamConfigIntrin(rs::core::stream_type::depth, intrinsics, supported_config, actual_config))
+		{
+			return false;
+		}
+
+		// Set IMU intrinsics
+		actual_config[rs::core::motion_type::accel].is_enabled = true;
+		actual_config[rs::core::motion_type::gyro].is_enabled = true;
+		actual_config[rs::core::motion_type::gyro].intrinsics = rs::utils::convert_motion_device_intrinsics(imuIntrinsics.gyro);
+		actual_config[rs::core::motion_type::accel].intrinsics = rs::utils::convert_motion_device_intrinsics(imuIntrinsics.acc);
+
+		// Set extrinsics
+		actual_config[rs::core::stream_type::fisheye].extrinsics_motion = rs::utils::convert_extrinsics(fisheye2ImuExtrinsics);
+		actual_config[rs::core::stream_type::fisheye].extrinsics = rs::utils::convert_extrinsics(fisheye2DepthExtrinsics);
+
+		UDEBUG("Set SLAM config");
+		// Set actual config
+		if (slam_->set_module_config(actual_config) < rs::core::status_no_error)
+		{
+			UERROR("error : failed to set the enabled module configuration");
+			return false;
+		}
+
+		dev_->start(rs::source::all_sources);
+	}
+	else
+	{
+		dev_->start();
+	}
+#else
+	dev_->start();
+	try {
+		dev_->wait_for_frames();
+	}
+	catch (const rs::error & e)
+	{
+		UERROR("Exception: %s", e.what());
+	}
+#endif
+
 	uSleep(1000); // ignore the first frames
 	UINFO("Enabling streams...done!");
-	
+
 	return true;
 
 #else
@@ -2074,26 +3042,75 @@ std::string CameraRealSense::getSerial() const
 	return "NA";
 }
 
+bool CameraRealSense::odomProvided() const
+{
+#ifdef RTABMAP_REALSENSE_SLAM
+	return slam_!=0;
+#else
+	return false;
+#endif
+}
+
+#ifdef RTABMAP_REALSENSE_SLAM
+Transform rsPoseToTransform(const rs::slam::PoseMatrix4f & pose)
+{
+	return Transform(
+			pose.m_data[0], pose.m_data[1], pose.m_data[2], pose.m_data[3],
+			pose.m_data[4], pose.m_data[5], pose.m_data[6], pose.m_data[7],
+			pose.m_data[8], pose.m_data[9], pose.m_data[10], pose.m_data[11]);
+}
+#endif
+
 SensorData CameraRealSense::captureImage(CameraInfo * info)
 {
 	SensorData data;
 #ifdef RTABMAP_REALSENSE
 	if (dev_)
 	{
-		dev_->wait_for_frames();
-
-		// Retrieve our images
-		const uint16_t * depth_image = (const uint16_t *)dev_->get_frame_data(rs::stream::depth);
-		const uint8_t * color_image = (const uint8_t *)dev_->get_frame_data(rs::stream::color);
+		cv::Mat rgb;
+		cv::Mat depthIn;
 
 		// Retrieve camera parameters for mapping between depth and color
 		rs::intrinsics depth_intrin = dev_->get_stream_intrinsics(rs::stream::depth);
 		rs::extrinsics depth_to_color = dev_->get_extrinsics(rs::stream::depth, rs::stream::color);
 		rs::intrinsics color_intrin = dev_->get_stream_intrinsics(rs::stream::color);
+
+#ifdef RTABMAP_REALSENSE_SLAM
+		if(!dataReady_.acquire(1, 5000))
+		{
+			UWARN("Not received new frames since 5 seconds, end of stream reached!");
+			return data;
+		}
+		{
+			UScopeMutex lock(dataMutex_);
+			rgb = lastSyncFrames_.first;
+			depthIn = lastSyncFrames_.second;
+			lastSyncFrames_.first = cv::Mat();
+			lastSyncFrames_.second = cv::Mat();
+		}
+
+		if(rgb.empty() || depthIn.empty())
+		{
+			return data;
+		}
+#else
+		try {
+			dev_->wait_for_frames();
+		}
+		catch (const rs::error & e)
+		{
+			UERROR("Exception: %s", e.what());
+			return data;
+		}
+
+		// Retrieve our images
+		depthIn = cv::Mat(depth_intrin.height, depth_intrin.width, CV_16UC1, (unsigned char*)dev_->get_frame_data(rs::stream::depth));
+		rgb = cv::Mat(color_intrin.height, color_intrin.width, CV_8UC3, (unsigned char*)dev_->get_frame_data(rs::stream::color));
+#endif
+
 		float scale = dev_->get_depth_scale();
 
 		// factory registration...
-		cv::Mat rgb = cv::Mat(cv::Size(color_intrin.width, color_intrin.height), CV_8UC3, (void*)color_image);
 		cv::Mat bgr;
 		cv::cvtColor(rgb, bgr, CV_RGB2BGR);
 
@@ -2132,7 +3149,7 @@ SensorData CameraRealSense::captureImage(CameraInfo * info)
 			for (int dx = 0; dx < depth_intrin.width; ++dx)
 			{
 				// Retrieve the 16-bit depth value and map it into a depth in meters
-				uint16_t depth_value = depth_image[dy * depth_intrin.width + dx];
+				uint16_t depth_value = depthIn.at<unsigned short>(dy,dx);
 				float depth_in_meters = depth_value * scale;
 
 				// Skip over pixels with a depth value of zero, which is used to indicate no data
@@ -2165,6 +3182,22 @@ SensorData CameraRealSense::captureImage(CameraInfo * info)
 		if (!bgr.empty() && !depth.empty())
 		{
 			data = SensorData(bgr, depth, model, this->getNextSeqID(), UTimer::now());
+#ifdef RTABMAP_REALSENSE_SLAM
+			if(info && slam_)
+			{
+				UScopeMutex lock(slamLock_);
+				rs::slam::PoseMatrix4f pose;
+				if(slam_->get_camera_pose(pose) == rs::core::status_no_error)
+				{
+					Transform opticalRotation(0,0,1,0, -1,0,0,0, 0,-1,0,0);
+					info->odomPose = opticalRotation * rsPoseToTransform(pose) * opticalRotation.inverse();
+				}
+				else
+				{
+					UERROR("Failed getting odometry pose");
+				}
+			}
+#endif
 		}
 	}
 	else

@@ -156,7 +156,8 @@ bool Parameters::isFeatureParameter(const std::string & parameter)
 			group.compare("FREAK") == 0 ||
 			group.compare("BRIEF") == 0 ||
 			group.compare("GFTT") == 0 ||
-			group.compare("BRISK") == 0;
+			group.compare("BRISK") == 0 ||
+			group.compare("KAZE") == 0;
 }
 
 rtabmap::ParametersMap Parameters::getDefaultOdometryParameters(bool stereo, bool vis, bool icp)
@@ -171,7 +172,8 @@ rtabmap::ParametersMap Parameters::getDefaultOdometryParameters(bool stereo, boo
 			(icp && group.compare("Icp") == 0) ||
 			(vis && Parameters::isFeatureParameter(iter->first)) ||
 			group.compare("Reg") == 0 ||
-			(vis && group.compare("Vis") == 0))
+			(vis && group.compare("Vis") == 0) ||
+			iter->first.compare(kRtabmapPublishRAMUsage())==0)
 		{
 			if(stereo)
 			{
@@ -224,6 +226,31 @@ const std::map<std::string, std::pair<bool, std::string> > & Parameters::getRemo
 	{
 		// removed parameters
 
+		// 0.17.0
+		removedParameters_.insert(std::make_pair("Grid/Scan2dMaxFilledRange",     std::make_pair(false,  Parameters::kGridRangeMax())));
+
+		// 0.16.0
+		removedParameters_.insert(std::make_pair("Grid/ProjRayTracing",           std::make_pair(true,  Parameters::kGridRayTracing())));
+		removedParameters_.insert(std::make_pair("Grid/DepthMin",                 std::make_pair(true,  Parameters::kGridRangeMin())));
+		removedParameters_.insert(std::make_pair("Grid/DepthMax",                 std::make_pair(true,  Parameters::kGridRangeMax())));
+
+		// 0.15.1
+		removedParameters_.insert(std::make_pair("Reg/VarianceFromInliersCount",  std::make_pair(false, "")));
+		removedParameters_.insert(std::make_pair("Reg/VarianceNormalized",        std::make_pair(false, "")));
+
+		// 0.13.3
+		removedParameters_.insert(std::make_pair("Icp/PointToPlaneNormalNeighbors", std::make_pair(true,  Parameters::kIcpPointToPlaneK())));
+
+
+		// 0.13.1
+		removedParameters_.insert(std::make_pair("Rtabmap/VhStrategy",            std::make_pair(true,  Parameters::kVhEpEnabled())));
+
+		// 0.12.5
+		removedParameters_.insert(std::make_pair("Grid/FullUpdate",               std::make_pair(true,  Parameters::kGridGlobalFullUpdate())));
+
+		// 0.12.1
+		removedParameters_.insert(std::make_pair("Grid/3DGroundIsObstacle",       std::make_pair(true,  Parameters::kGridGroundIsObstacle())));
+
 		// 0.11.12
 		removedParameters_.insert(std::make_pair("Optimizer/Slam2D",              std::make_pair(true,  Parameters::kRegForce3DoF())));
 		removedParameters_.insert(std::make_pair("OdomF2M/FixedMapPath",          std::make_pair(false,  "")));
@@ -255,7 +282,6 @@ const std::map<std::string, std::pair<bool, std::string> > & Parameters::getRemo
 
 		removedParameters_.insert(std::make_pair("Kp/WordsPerImage",              std::make_pair(true, Parameters::kKpMaxFeatures())));
 
-		removedParameters_.insert(std::make_pair("Mem/LaserScanVoxelSize",        std::make_pair(false, Parameters::kMemLaserScanDownsampleStepSize())));
 		removedParameters_.insert(std::make_pair("Mem/LocalSpaceLinksKeptInWM",   std::make_pair(false, "")));
 
 		removedParameters_.insert(std::make_pair("RGBD/PoseScanMatching",         std::make_pair(true,  Parameters::kRGBDNeighborLinkRefining())));
@@ -271,7 +297,7 @@ const std::map<std::string, std::pair<bool, std::string> > & Parameters::getRemo
 		removedParameters_.insert(std::make_pair("Odom/MaxDepth",                 std::make_pair(true,  Parameters::kVisMaxDepth())));
 		removedParameters_.insert(std::make_pair("Odom/RoiRatios",                std::make_pair(true,  Parameters::kVisRoiRatios())));
 		removedParameters_.insert(std::make_pair("Odom/Force2D",                  std::make_pair(true,  Parameters::kRegForce3DoF())));
-		removedParameters_.insert(std::make_pair("Odom/VarianceFromInliersCount", std::make_pair(true,  Parameters::kRegVarianceFromInliersCount())));
+		removedParameters_.insert(std::make_pair("Odom/VarianceFromInliersCount", std::make_pair(false, "")));
 		removedParameters_.insert(std::make_pair("Odom/PnPReprojError",           std::make_pair(true,  Parameters::kVisPnPReprojError())));
 		removedParameters_.insert(std::make_pair("Odom/PnPFlags",                 std::make_pair(true,  Parameters::kVisPnPFlags())));
 
@@ -301,7 +327,7 @@ const std::map<std::string, std::pair<bool, std::string> > & Parameters::getRemo
 		removedParameters_.insert(std::make_pair("LccBow/Iterations",               std::make_pair(false,  Parameters::kVisIterations())));
 		removedParameters_.insert(std::make_pair("LccBow/RefineIterations",         std::make_pair(false,  Parameters::kVisRefineIterations())));
 		removedParameters_.insert(std::make_pair("LccBow/Force2D",                  std::make_pair(false,  Parameters::kRegForce3DoF())));
-		removedParameters_.insert(std::make_pair("LccBow/VarianceFromInliersCount", std::make_pair(false,  Parameters::kRegVarianceFromInliersCount())));
+		removedParameters_.insert(std::make_pair("LccBow/VarianceFromInliersCount", std::make_pair(false,  "")));
 		removedParameters_.insert(std::make_pair("LccBow/PnPReprojError",           std::make_pair(false,  Parameters::kVisPnPReprojError())));
 		removedParameters_.insert(std::make_pair("LccBow/PnPFlags",                 std::make_pair(false,  Parameters::kVisPnPFlags())));
 		removedParameters_.insert(std::make_pair("LccBow/EpipolarGeometryVar",      std::make_pair(true,   Parameters::kVisEpipolarGeometryVar())));
@@ -316,7 +342,7 @@ const std::map<std::string, std::pair<bool, std::string> > & Parameters::getRemo
 		removedParameters_.insert(std::make_pair("LccIcp3/Iterations",                  std::make_pair(false, Parameters::kIcpIterations())));
 		removedParameters_.insert(std::make_pair("LccIcp3/CorrespondenceRatio",         std::make_pair(false, Parameters::kIcpCorrespondenceRatio())));
 		removedParameters_.insert(std::make_pair("LccIcp3/PointToPlane",                std::make_pair(true,  Parameters::kIcpPointToPlane())));
-		removedParameters_.insert(std::make_pair("LccIcp3/PointToPlaneNormalNeighbors", std::make_pair(true,  Parameters::kIcpPointToPlaneNormalNeighbors())));
+		removedParameters_.insert(std::make_pair("LccIcp3/PointToPlaneNormalNeighbors", std::make_pair(true,  Parameters::kIcpPointToPlaneK())));
 
 		removedParameters_.insert(std::make_pair("LccIcp2/MaxCorrespondenceDistance",   std::make_pair(true,  Parameters::kIcpMaxCorrespondenceDistance())));
 		removedParameters_.insert(std::make_pair("LccIcp2/Iterations",                  std::make_pair(true,  Parameters::kIcpIterations())));
@@ -614,14 +640,56 @@ ParametersMap Parameters::parseArguments(int argc, char * argv[], bool onlyParam
 			{
 				for(rtabmap::ParametersMap::const_iterator iter=parameters.begin(); iter!=parameters.end(); ++iter)
 				{
-					std::string str = "Param: " + iter->first + " = \"" + iter->second + "\"";
-					std::cout <<
-							str <<
-							std::setw(60 - str.size()) <<
-							" [" <<
-							rtabmap::Parameters::getDescription(iter->first).c_str() <<
-							"]" <<
-							std::endl;
+					bool ignore = false;
+					UASSERT(uSplit(iter->first, '/').size()  == 2);
+					std::string group = uSplit(iter->first, '/').front();
+#ifndef RTABMAP_GTSAM
+				   if(group.compare("GTSAM") == 0)
+				   {
+					   ignore = true;
+				   }
+#endif
+#ifndef RTABMAP_G2O
+					if(group.compare("g2o") == 0)
+					{
+						ignore = true;
+					}
+#endif
+#ifndef RTABMAP_FOVIS
+					if(group.compare("OdomFovis") == 0)
+					{
+						ignore = true;
+					}
+#endif
+#ifndef RTABMAP_VISO2
+					if(group.compare("OdomViso2") == 0)
+					{
+						ignore = true;
+					}
+#endif
+#ifndef RTABMAP_ORBSLAM2
+					if(group.compare("OdomORBSLAM2") == 0)
+					{
+						ignore = true;
+					}
+#endif
+#ifndef RTABMAP_OKVIS
+					if(group.compare("OdomOKVIS") == 0)
+					{
+						ignore = true;
+					}
+#endif
+					if(!ignore)
+					{
+						std::string str = "Param: " + iter->first + " = \"" + iter->second + "\"";
+						std::cout <<
+								str <<
+								std::setw(60 - str.size()) <<
+								" [" <<
+								rtabmap::Parameters::getDescription(iter->first).c_str() <<
+								"]" <<
+								std::endl;
+					}
 				}
 				UWARN("App will now exit after showing default RTAB-Map parameters because "
 						 "argument \"--params\" is detected!");
@@ -637,6 +705,7 @@ ParametersMap Parameters::parseArguments(int argc, char * argv[], bool onlyParam
 					if(i < argc)
 					{
 						uInsert(out, ParametersPair(iter->first, argv[i]));
+						UINFO("Parsed parameter \"%s\"=\"%s\"", iter->first.c_str(), argv[i]);
 					}
 				}
 				else
@@ -682,7 +751,7 @@ ParametersMap Parameters::parseArguments(int argc, char * argv[], bool onlyParam
 }
 
 
-void Parameters::readINI(const std::string & configFile, ParametersMap & parameters)
+void Parameters::readINI(const std::string & configFile, ParametersMap & parameters, bool modifiedOnly)
 {
 	CSimpleIniA ini;
 	ini.LoadFile(configFile.c_str());
@@ -733,16 +802,19 @@ void Parameters::readINI(const std::string & configFile, ParametersMap & paramet
 					addParameter = oldIter->second.first;
 					if(addParameter)
 					{
-						key = oldIter->second.second;
-						UWARN("Parameter migration from \"%s\" to \"%s\" (value=%s, default=%s).",
-								oldIter->first.c_str(), oldIter->second.second.c_str(), iter->second, Parameters::getDefaultParameters().at(oldIter->second.second).c_str());
+						if(parameters.find(oldIter->second.second) == parameters.end())
+						{
+							key = oldIter->second.second;
+							UWARN("Parameter migration from \"%s\" to \"%s\" (value=%s, default=%s).",
+									oldIter->first.c_str(), oldIter->second.second.c_str(), iter->second, Parameters::getDefaultParameters().at(oldIter->second.second).c_str());
+						}
 					}
 					else if(oldIter->second.second.empty())
 					{
 						UWARN("Parameter \"%s\" doesn't exist anymore.",
 									oldIter->first.c_str());
 					}
-					else
+					else if(parameters.find(oldIter->second.second) == parameters.end())
 					{
 						UWARN("Parameter \"%s\" (value=%s) doesn't exist anymore, you may want to use this similar parameter \"%s (default=%s): %s\".",
 									oldIter->first.c_str(), iter->second, oldIter->second.second.c_str(), Parameters::getDefaultParameters().at(oldIter->second.second).c_str(), Parameters::getDescription(oldIter->second.second).c_str());
@@ -752,7 +824,10 @@ void Parameters::readINI(const std::string & configFile, ParametersMap & paramet
 
 				if(Parameters::getDefaultParameters().find(key) != Parameters::getDefaultParameters().end())
 				{
-					uInsert(parameters, ParametersPair(key, iter->second));
+					if(!modifiedOnly || std::string(iter->second).compare(Parameters::getDefaultParameters().find(key)->second) != 0)
+					{
+						uInsert(parameters, ParametersPair(key, iter->second));
+					}
 				}
 			}
 		}
@@ -761,7 +836,7 @@ void Parameters::readINI(const std::string & configFile, ParametersMap & paramet
 	{
 		ULOGGER_WARN("Section \"Core\" in %s doesn't exist... "
 				    "Ignore this warning if the ini file does not exist yet. "
-				    "The ini file will be automatically created when this node will close.", configFile.c_str());
+				    "The ini file will be automatically created when rtabmap will close.", configFile.c_str());
 	}
 }
 
