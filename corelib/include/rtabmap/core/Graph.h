@@ -33,6 +33,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <map>
 #include <list>
 #include <rtabmap/core/Link.h>
+#include <rtabmap/core/GeodeticCoords.h>
 
 namespace rtabmap {
 class Memory;
@@ -53,10 +54,53 @@ bool RTABMAP_EXP exportPoses(
 
 bool RTABMAP_EXP importPoses(
 		const std::string & filePath,
-		int format, // 0=Raw, 1=RGBD-SLAM, 2=KITTI, 3=TORO, 4=g2o, GPS (t,x,y)
+		int format, // 0=Raw, 1=RGBD-SLAM, 2=KITTI, 3=TORO, 4=g2o, 5=NewCollege(t,x,y), 6=Malaga Urban GPS, 7=St Lucia INS, 8=Karlsruhe
 		std::map<int, Transform> & poses,
 		std::multimap<int, Link> * constraints = 0, // optional for formats 3 and 4
 		std::map<int, double> * stamps = 0); // optional for format 1
+
+bool RTABMAP_EXP exportGPS(
+		const std::string & filePath,
+		const std::map<int, GPS> & gpsValues,
+		unsigned int rgba = 0xFFFFFFFF);
+
+/**
+ * Compute translation and rotation errors for KITTI datasets.
+ * See http://www.cvlibs.net/datasets/kitti/eval_odometry.php.
+ * @param poses_gt, Ground Truth poses
+ * @param poses_result, Estimated poses
+ * @param t_err, Output translation error (%)
+ * @param r_err, Output rotation error (deg/m)
+ */
+void RTABMAP_EXP calcKittiSequenceErrors(
+		const std::vector<Transform> &poses_gt,
+		const std::vector<Transform> &poses_result,
+		float & t_err,
+		float & r_err);
+
+/**
+ * Compute root-mean-square error (RMSE) like the TUM RGBD
+ * dataset's evaluation tool (absolute trajectory error).
+ * See https://vision.in.tum.de/data/datasets/rgbd-dataset
+ * @param groundTruth, Ground Truth poses
+ * @param poses, Estimated poses
+ * @return Gt to Map transform
+ */
+Transform RTABMAP_EXP calcRMSE(
+		const std::map<int, Transform> &groundTruth,
+		const std::map<int, Transform> &poses,
+		float & translational_rmse,
+		float & translational_mean,
+		float & translational_median,
+		float & translational_std,
+		float & translational_min,
+		float & translational_max,
+		float & rotational_rmse,
+		float & rotational_mean,
+		float & rotational_median,
+		float & rotational_std,
+		float & rotational_min,
+		float & rotational_max);
 
 std::multimap<int, Link>::iterator RTABMAP_EXP findLink(
 		std::multimap<int, Link> & links,
@@ -79,6 +123,8 @@ std::multimap<int, int>::const_iterator RTABMAP_EXP findLink(
 		int to,
 		bool checkBothWays = true);
 
+std::multimap<int, Link> RTABMAP_EXP filterDuplicateLinks(
+		const std::multimap<int, Link> & links);
 std::multimap<int, Link> RTABMAP_EXP filterLinks(
 		const std::multimap<int, Link> & links,
 		Link::Type filteredType);
@@ -183,6 +229,11 @@ int RTABMAP_EXP findNearestNode(
 		const std::map<int, rtabmap::Transform> & nodes,
 		const rtabmap::Transform & targetPose);
 
+std::vector<int> RTABMAP_EXP findNearestNodes(
+		const std::map<int, rtabmap::Transform> & nodes,
+		const rtabmap::Transform & targetPose,
+		int k);
+
 /**
  * Get nodes near the query
  * @param nodeId the query id
@@ -204,6 +255,10 @@ float RTABMAP_EXP computePathLength(
 		const std::vector<std::pair<int, Transform> > & path,
 		unsigned int fromIndex = 0,
 		unsigned int toIndex = 0);
+
+// assuming they are all linked in map order
+float RTABMAP_EXP computePathLength(
+		const std::map<int, Transform> & path);
 
 std::list<std::map<int, Transform> > RTABMAP_EXP getPaths(
 		std::map<int, Transform> poses,

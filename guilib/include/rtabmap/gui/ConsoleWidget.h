@@ -25,8 +25,8 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifndef CONSOLEWIDGET_H_
-#define CONSOLEWIDGET_H_
+#ifndef RTABMAP_CONSOLEWIDGET_H_
+#define RTABMAP_CONSOLEWIDGET_H_
 
 #include "rtabmap/gui/RtabmapGuiExp.h" // DLL export/import defines
 
@@ -61,7 +61,7 @@ private slots:
 	void updateTextEditBufferSize();
 
 protected:
-	virtual void handleEvent(UEvent * anEvent);
+	virtual bool handleEvent(UEvent * anEvent);
 
 private:
 	Ui_consoleWidget * _ui;

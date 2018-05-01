@@ -30,6 +30,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap/core/util3d_filtering.h>
 #include <rtabmap/core/util3d_surface.h>
 #include <rtabmap/core/util2d.h>
+#include <rtabmap/core/util2d.h>
 #include <rtabmap/utilite/ULogger.h>
 #include <rtabmap/utilite/UMath.h>
 #include <rtabmap/utilite/UConversion.h>
@@ -214,13 +215,13 @@ pcl::PointXYZ projectDepthTo3D(
 		float cx, float cy,
 		float fx, float fy,
 		bool smoothing,
-		float maxZError)
+		float depthErrorRatio)
 {
 	UASSERT(depthImage.type() == CV_16UC1 || depthImage.type() == CV_32FC1);
 
 	pcl::PointXYZ pt;
 
-	float depth = util2d::getDepth(depthImage, x, y, smoothing, maxZError);
+	float depth = util2d::getDepth(depthImage, x, y, smoothing, depthErrorRatio);
 	if(depth > 0.0f)
 	{
 		// Use correct principal point from calibration
@@ -239,6 +240,26 @@ pcl::PointXYZ projectDepthTo3D(
 	return pt;
 }
 
+Eigen::Vector3f projectDepthTo3DRay(
+		const cv::Size & imageSize,
+		float x, float y,
+		float cx, float cy,
+		float fx, float fy)
+{
+	Eigen::Vector3f ray;
+
+	// Use correct principal point from calibration
+	cx = cx > 0.0f ? cx : float(imageSize.width/2) - 0.5f; //cameraInfo.K.at(2)
+	cy = cy > 0.0f ? cy : float(imageSize.height/2) - 0.5f; //cameraInfo.K.at(5)
+
+	// Fill in XYZ
+	ray[0] = (x - cx) / fx;
+	ray[1] = (y - cy) / fy;
+	ray[2] = 1.0f;
+
+	return ray;
+}
+
 pcl::PointCloud<pcl::PointXYZ>::Ptr cloudFromDepth(
 		const cv::Mat & imageDepth,
 		float cx, float cy,
@@ -253,47 +274,90 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr cloudFromDepth(
 }
 
 pcl::PointCloud<pcl::PointXYZ>::Ptr cloudFromDepth(
-		const cv::Mat & imageDepth,
+		const cv::Mat & imageDepthIn,
 		const CameraModel & model,
 		int decimation,
 		float maxDepth,
 		float minDepth,
 		std::vector<int> * validIndices)
 {
+	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
+	if(decimation == 0)
+	{
+		decimation = 1;
+	}
 	float rgbToDepthFactorX = 1.0f;
 	float rgbToDepthFactorY = 1.0f;
 
 	UASSERT(model.isValidForProjection());
-	UASSERT(!imageDepth.empty() && (imageDepth.type() == CV_16UC1 || imageDepth.type() == CV_32FC1));
+	UASSERT(!imageDepthIn.empty() && (imageDepthIn.type() == CV_16UC1 || imageDepthIn.type() == CV_32FC1));
 
-	int imageRows = imageDepth.rows;
-	int imageCols = imageDepth.cols;
-
+	cv::Mat imageDepth = imageDepthIn;
 	if(model.imageHeight()>0 && model.imageWidth()>0)
 	{
-		UASSERT(model.imageHeight() % imageDepth.rows == 0 && model.imageWidth() % imageDepth.cols == 0);
-		UASSERT_MSG(model.imageHeight() % decimation == 0, uFormat("model.imageHeight()=%d decimation=%d", model.imageHeight(), decimation).c_str());
-		UASSERT_MSG(model.imageWidth() % decimation == 0, uFormat("model.imageWidth()=%d decimation=%d", model.imageWidth(), decimation).c_str());
+		UASSERT(model.imageHeight() % imageDepthIn.rows == 0 && model.imageWidth() % imageDepthIn.cols == 0);
+
+		if(decimation < 0)
+		{
+			UDEBUG("Decimation from model (%d)", decimation);
+			if(model.imageHeight() % decimation != 0)
+			{
+				UERROR("Decimation is not valid for current image size (model.imageHeight()=%d decimation=%d). The cloud is not created.", model.imageHeight(), decimation);
+				return cloud;
+			}
+			if(model.imageWidth() % decimation != 0)
+			{
+				UERROR("Decimation is not valid for current image size (model.imageWidth()=%d decimation=%d). The cloud is not created.", model.imageWidth(), decimation);
+				return cloud;
+			}
+
+			// decimate from RGB image size, upsample depth if needed
+			decimation = -1*decimation;
+
+			int targetSize = model.imageHeight() / decimation;
+			if(targetSize > imageDepthIn.rows)
+			{
+				UDEBUG("Depth interpolation factor=%d", targetSize/imageDepthIn.rows);
+				imageDepth = util2d::interpolate(imageDepthIn, targetSize/imageDepthIn.rows);
+				decimation = 1;
+			}
+			else if(targetSize == imageDepthIn.rows)
+			{
+				decimation = 1;
+			}
+			else
+			{
+				UASSERT(imageDepthIn.rows % targetSize == 0);
+				decimation = imageDepthIn.rows / targetSize;
+			}
+		}
+		else
+		{
+			if(imageDepthIn.rows % decimation != 0)
+			{
+				UERROR("Decimation is not valid for current image size (imageDepth.rows=%d decimation=%d). The cloud is not created.", imageDepthIn.rows, decimation);
+				return cloud;
+			}
+			if(imageDepthIn.cols % decimation != 0)
+			{
+				UERROR("Decimation is not valid for current image size (imageDepth.cols=%d decimation=%d). The cloud is not created.", imageDepthIn.cols, decimation);
+				return cloud;
+			}
+		}
+
 		rgbToDepthFactorX = 1.0f/float((model.imageWidth() / imageDepth.cols));
 		rgbToDepthFactorY = 1.0f/float((model.imageHeight() / imageDepth.rows));
-		imageRows = model.imageHeight();
-		imageCols = model.imageWidth();
 	}
 	else
 	{
+		decimation = abs(decimation);
 		UASSERT_MSG(imageDepth.rows % decimation == 0, uFormat("rows=%d decimation=%d", imageDepth.rows, decimation).c_str());
 		UASSERT_MSG(imageDepth.cols % decimation == 0, uFormat("cols=%d decimation=%d", imageDepth.cols, decimation).c_str());
 	}
 
-	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
-	if(decimation < 1)
-	{
-		return cloud;
-	}
-
 	//cloud.header = cameraInfo.header;
-	cloud->height = imageRows/decimation;
-	cloud->width  = imageCols/decimation;
+	cloud->height = imageDepth.rows/decimation;
+	cloud->width  = imageDepth.cols/decimation;
 	cloud->is_dense = false;
 	cloud->resize(cloud->height * cloud->width);
 	if(validIndices)
@@ -306,8 +370,7 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr cloudFromDepth(
 	float depthCx = model.cx() * rgbToDepthFactorX;
 	float depthCy = model.cy() * rgbToDepthFactorY;
 
-	UDEBUG("rgb=%dx%d depth=%dx%d fx=%f fy=%f cx=%f cy=%f (depth factors=%f %f) decimation=%d",
-			imageCols, imageRows,
+	UDEBUG("depth=%dx%d fx=%f fy=%f cx=%f cy=%f (depth factors=%f %f) decimation=%d",
 			imageDepth.cols, imageDepth.rows,
 			model.fx(), model.fy(), model.cx(), model.cy(),
 			rgbToDepthFactorX,
@@ -315,13 +378,13 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr cloudFromDepth(
 			decimation);
 
 	int oi = 0;
-	for(int h = 0; h < imageRows && h/decimation < (int)cloud->height; h+=decimation)
+	for(int h = 0; h < imageDepth.rows && h/decimation < (int)cloud->height; h+=decimation)
 	{
-		for(int w = 0; w < imageCols && w/decimation < (int)cloud->width; w+=decimation)
+		for(int w = 0; w < imageDepth.cols && w/decimation < (int)cloud->width; w+=decimation)
 		{
 			pcl::PointXYZ & pt = cloud->at((h/decimation)*cloud->width + (w/decimation));
 
-			pcl::PointXYZ ptXYZ = projectDepthTo3D(imageDepth, w*rgbToDepthFactorX, h*rgbToDepthFactorY, depthCx, depthCy, depthFx, depthFy, false);
+			pcl::PointXYZ ptXYZ = projectDepthTo3D(imageDepth, w, h, depthCx, depthCy, depthFx, depthFy, false);
 			if(pcl::isFinite(ptXYZ) && ptXYZ.z>=minDepth && (maxDepth<=0.0f || ptXYZ.z <= maxDepth))
 			{
 				pt.x = ptXYZ.x;
@@ -363,25 +426,90 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloudFromDepthRGB(
 
 pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloudFromDepthRGB(
 		const cv::Mat & imageRgb,
-		const cv::Mat & imageDepth,
+		const cv::Mat & imageDepthIn,
 		const CameraModel & model,
 		int decimation,
 		float maxDepth,
 		float minDepth,
 		std::vector<int> * validIndices)
 {
+	pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
+	if(decimation == 0)
+	{
+		decimation = 1;
+	}
 	UDEBUG("");
 	UASSERT(model.isValidForProjection());
-	UASSERT((model.imageHeight() == 0 && model.imageWidth() == 0) || (model.imageHeight() == imageRgb.rows && model.imageWidth() == imageRgb.cols));
-	UASSERT(imageRgb.rows % imageDepth.rows == 0 && imageRgb.cols % imageDepth.cols == 0);
-	UASSERT(!imageDepth.empty() && (imageDepth.type() == CV_16UC1 || imageDepth.type() == CV_32FC1));
-	UASSERT_MSG(imageRgb.rows % decimation == 0, uFormat("imageDepth.rows=%d decimation=%d", imageRgb.rows, decimation).c_str());
-	UASSERT_MSG(imageRgb.cols % decimation == 0, uFormat("imageDepth.cols=%d decimation=%d", imageRgb.cols, decimation).c_str());
-
-	pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
-	if(decimation < 1)
+	UASSERT_MSG((model.imageHeight() == 0 && model.imageWidth() == 0) ||
+			    (model.imageHeight() == imageRgb.rows && model.imageWidth() == imageRgb.cols),
+				uFormat("model=%dx%d rgb=%dx%d", model.imageWidth(), model.imageHeight(), imageRgb.cols, imageRgb.rows).c_str());
+	UASSERT_MSG(imageRgb.rows % imageDepthIn.rows == 0 && imageRgb.cols % imageDepthIn.cols == 0,
+			uFormat("rgb=%dx%d depth=%dx%d", imageRgb.cols, imageRgb.rows, imageDepthIn.cols, imageDepthIn.rows).c_str());
+	UASSERT(!imageDepthIn.empty() && (imageDepthIn.type() == CV_16UC1 || imageDepthIn.type() == CV_32FC1));
+	if(decimation < 0)
 	{
-		return cloud;
+		if(imageRgb.rows % decimation != 0 || imageRgb.cols % decimation != 0)
+		{
+			int oldDecimation = decimation;
+			while(decimation <= -1)
+			{
+				if(imageRgb.rows % decimation == 0 && imageRgb.cols % decimation == 0)
+				{
+					break;
+				}
+				++decimation;
+			}
+
+			if(imageRgb.rows % oldDecimation != 0 || imageRgb.cols % oldDecimation != 0)
+			{
+				UWARN("Decimation (%d) is not valid for current image size (rgb=%dx%d). Highest compatible decimation used=%d.", oldDecimation, imageRgb.cols, imageRgb.rows, decimation);
+			}
+		}
+	}
+	else
+	{
+		if(imageDepthIn.rows % decimation != 0 || imageDepthIn.cols % decimation != 0)
+		{
+			int oldDecimation = decimation;
+			while(decimation >= 1)
+			{
+				if(imageDepthIn.rows % decimation == 0 && imageDepthIn.cols % decimation == 0)
+				{
+					break;
+				}
+				--decimation;
+			}
+
+			if(imageDepthIn.rows % oldDecimation != 0 || imageDepthIn.cols % oldDecimation != 0)
+			{
+				UWARN("Decimation (%d) is not valid for current image size (depth=%dx%d). Highest compatible decimation used=%d.", oldDecimation, imageDepthIn.cols, imageDepthIn.rows, decimation);
+			}
+		}
+	}
+
+	cv::Mat imageDepth = imageDepthIn;
+	if(decimation < 0)
+	{
+		UDEBUG("Decimation from RGB image (%d)", decimation);
+		// decimate from RGB image size, upsample depth if needed
+		decimation = -1*decimation;
+
+		int targetSize = imageRgb.rows / decimation;
+		if(targetSize > imageDepthIn.rows)
+		{
+			UDEBUG("Depth interpolation factor=%d", targetSize/imageDepthIn.rows);
+			imageDepth = util2d::interpolate(imageDepthIn, targetSize/imageDepthIn.rows);
+			decimation = 1;
+		}
+		else if(targetSize == imageDepthIn.rows)
+		{
+			decimation = 1;
+		}
+		else
+		{
+			UASSERT(imageDepthIn.rows % targetSize == 0);
+			decimation = imageDepthIn.rows / targetSize;
+		}
 	}
 
 	bool mono;
@@ -399,8 +527,8 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloudFromDepthRGB(
 	}
 
 	//cloud.header = cameraInfo.header;
-	cloud->height = imageRgb.rows/decimation;
-	cloud->width  = imageRgb.cols/decimation;
+	cloud->height = imageDepth.rows/decimation;
+	cloud->width  = imageDepth.cols/decimation;
 	cloud->is_dense = false;
 	cloud->resize(cloud->height * cloud->width);
 	if(validIndices)
@@ -408,12 +536,12 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloudFromDepthRGB(
 		validIndices->resize(cloud->size());
 	}
 
-	float rgbToDepthFactorX = 1.0f/float((imageRgb.cols / imageDepth.cols));
-	float rgbToDepthFactorY = 1.0f/float((imageRgb.rows / imageDepth.rows));
-	float depthFx = model.fx() * rgbToDepthFactorX;
-	float depthFy = model.fy() * rgbToDepthFactorY;
-	float depthCx = model.cx() * rgbToDepthFactorX;
-	float depthCy = model.cy() * rgbToDepthFactorY;
+	float rgbToDepthFactorX = float(imageRgb.cols) / float(imageDepth.cols);
+	float rgbToDepthFactorY = float(imageRgb.rows) / float(imageDepth.rows);
+	float depthFx = model.fx() / rgbToDepthFactorX;
+	float depthFy = model.fy() / rgbToDepthFactorY;
+	float depthCx = model.cx() / rgbToDepthFactorX;
+	float depthCy = model.cy() / rgbToDepthFactorY;
 
 	UDEBUG("rgb=%dx%d depth=%dx%d fx=%f fy=%f cx=%f cy=%f (depth factors=%f %f) decimation=%d",
 			imageRgb.cols, imageRgb.rows,
@@ -424,34 +552,39 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloudFromDepthRGB(
 			decimation);
 
 	int oi = 0;
-	for(int h = 0; h < imageRgb.rows && h/decimation < (int)cloud->height; h+=decimation)
+	for(int h = 0; h < imageDepth.rows && h/decimation < (int)cloud->height; h+=decimation)
 	{
-		for(int w = 0; w < imageRgb.cols && w/decimation < (int)cloud->width; w+=decimation)
+		for(int w = 0; w < imageDepth.cols && w/decimation < (int)cloud->width; w+=decimation)
 		{
 			pcl::PointXYZRGB & pt = cloud->at((h/decimation)*cloud->width + (w/decimation));
+
+			int x = int(w*rgbToDepthFactorX);
+			int y = int(h*rgbToDepthFactorY);
+			UASSERT(x >=0 && x<imageRgb.cols && y >=0 && y<imageRgb.rows);
 			if(!mono)
 			{
-				pt.b = imageRgb.at<cv::Vec3b>(h,w)[0];
-				pt.g = imageRgb.at<cv::Vec3b>(h,w)[1];
-				pt.r = imageRgb.at<cv::Vec3b>(h,w)[2];
+				const unsigned char * bgr = imageRgb.ptr<unsigned char>(y,x);
+				pt.b = bgr[0];
+				pt.g = bgr[1];
+				pt.r = bgr[2];
 			}
 			else
 			{
-				unsigned char v = imageRgb.at<unsigned char>(h,w);
+				unsigned char v = imageRgb.at<unsigned char>(y,x);
 				pt.b = v;
 				pt.g = v;
 				pt.r = v;
 			}
 
-			pcl::PointXYZ ptXYZ = projectDepthTo3D(imageDepth, w*rgbToDepthFactorX, h*rgbToDepthFactorY, depthCx, depthCy, depthFx, depthFy, false);
-			if(pcl::isFinite(ptXYZ) && ptXYZ.z>=minDepth && (maxDepth<=0.0f || ptXYZ.z <= maxDepth))
+			pcl::PointXYZ ptXYZ = projectDepthTo3D(imageDepth, w, h, depthCx, depthCy, depthFx, depthFy, false);
+			if (pcl::isFinite(ptXYZ) && ptXYZ.z >= minDepth && (maxDepth <= 0.0f || ptXYZ.z <= maxDepth))
 			{
 				pt.x = ptXYZ.x;
 				pt.y = ptXYZ.y;
 				pt.z = ptXYZ.z;
-				if(validIndices)
+				if (validIndices)
 				{
-					validIndices->at(oi) = (h/decimation)*cloud->width + (w/decimation);
+					validIndices->at(oi) = (h / decimation)*cloud->width + (w / decimation);
 				}
 				++oi;
 			}
@@ -482,9 +615,25 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr cloudFromDisparity(
 		std::vector<int> * validIndices)
 {
 	UASSERT(imageDisparity.type() == CV_32FC1 || imageDisparity.type()==CV_16SC1);
-	UASSERT(imageDisparity.rows % decimation == 0);
-	UASSERT(imageDisparity.cols % decimation == 0);
 	UASSERT(decimation >= 1);
+
+	if(imageDisparity.rows % decimation != 0 || imageDisparity.cols % decimation != 0)
+	{
+		int oldDecimation = decimation;
+		while(decimation >= 1)
+		{
+			if(imageDisparity.rows % decimation == 0 && imageDisparity.cols % decimation == 0)
+			{
+				break;
+			}
+			--decimation;
+		}
+
+		if(imageDisparity.rows % oldDecimation != 0 || imageDisparity.cols % oldDecimation != 0)
+		{
+			UWARN("Decimation (%d) is not valid for current image size (depth=%dx%d). Highest compatible decimation used=%d.", oldDecimation, imageDisparity.cols, imageDisparity.rows, decimation);
+		}
+	}
 
 	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
 
@@ -573,7 +722,24 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloudFromDisparityRGB(
 			(imageDisparity.type() == CV_32FC1 || imageDisparity.type()==CV_16SC1));
 	UASSERT(imageRgb.channels() == 3 || imageRgb.channels() == 1);
 	UASSERT(decimation >= 1);
-	UASSERT(imageDisparity.rows % decimation == 0 && imageDisparity.cols % decimation == 0);
+
+	if(imageDisparity.rows % decimation != 0 || imageDisparity.cols % decimation != 0)
+	{
+		int oldDecimation = decimation;
+		while(decimation >= 1)
+		{
+			if(imageDisparity.rows % decimation == 0 && imageDisparity.cols % decimation == 0)
+			{
+				break;
+			}
+			--decimation;
+		}
+
+		if(imageDisparity.rows % oldDecimation != 0 || imageDisparity.cols % oldDecimation != 0)
+		{
+			UWARN("Decimation (%d) is not valid for current image size (depth=%dx%d). Highest compatible decimation used=%d.", oldDecimation, imageDisparity.cols, imageDisparity.rows, decimation);
+		}
+	}
 
 	pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
 
@@ -657,21 +823,10 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloudFromStereoImages(
 	UASSERT(imageLeft.channels() == 3 || imageLeft.channels() == 1);
 	UASSERT(imageLeft.rows == imageRight.rows &&
 			imageLeft.cols == imageRight.cols);
-	UASSERT(decimation >= 1);
+	UASSERT(decimation >= 1.0f);
 
 	cv::Mat leftColor = imageLeft;
 	cv::Mat rightMono = imageRight;
-
-	StereoCameraModel modelDecimation = model;
-
-	if(leftColor.rows % decimation != 0 ||
-	   leftColor.cols % decimation != 0)
-	{
-		leftColor = util2d::decimate(leftColor, decimation);
-		rightMono = util2d::decimate(rightMono, decimation);
-		modelDecimation.scale(1/float(decimation));
-		decimation = 1;
-	}
 
 	cv::Mat leftMono;
 	if(leftColor.channels() == 3)
@@ -686,7 +841,7 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloudFromStereoImages(
 	return cloudFromDisparityRGB(
 			leftColor,
 			util2d::disparityFromStereoImages(leftMono, rightMono, parameters),
-			modelDecimation,
+			model,
 			decimation,
 			maxDepth,
 			minDepth,
@@ -699,8 +854,14 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr RTABMAP_EXP cloudFromSensorData(
 		float maxDepth,
 		float minDepth,
 		std::vector<int> * validIndices,
-		const ParametersMap & parameters)
+		const ParametersMap & stereoParameters,
+		const std::vector<float> & roiRatios)
 {
+	if(decimation == 0)
+	{
+		decimation = 1;
+	}
+
 	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
 
 	if(!sensorData.depthRaw().empty() && sensorData.cameraModels().size())
@@ -712,9 +873,56 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr RTABMAP_EXP cloudFromSensorData(
 		{
 			if(sensorData.cameraModels()[i].isValidForProjection())
 			{
+				cv::Mat depth = cv::Mat(sensorData.depthRaw(), cv::Rect(subImageWidth*i, 0, subImageWidth, sensorData.depthRaw().rows));
+				CameraModel model = sensorData.cameraModels()[i];
+				if( roiRatios.size() == 4 &&
+					(roiRatios[0] > 0.0f ||
+					roiRatios[1] > 0.0f ||
+					roiRatios[2] > 0.0f ||
+					roiRatios[3] > 0.0f))
+				{
+					cv::Rect roiDepth = util2d::computeRoi(depth, roiRatios);
+					cv::Rect roiRgb;
+					if(model.imageWidth() && model.imageHeight())
+					{
+						roiRgb = util2d::computeRoi(model.imageSize(), roiRatios);
+					}
+					if(	roiDepth.width%decimation==0 &&
+						roiDepth.height%decimation==0 &&
+						(roiRgb.width != 0 ||
+						   (roiRgb.width%decimation==0 &&
+							roiRgb.height%decimation==0)))
+					{
+						depth = cv::Mat(depth, roiDepth);
+						if(model.imageWidth() != 0 && model.imageHeight() != 0)
+						{
+							model = model.roi(util2d::computeRoi(model.imageSize(), roiRatios));
+						}
+						else
+						{
+							model = model.roi(roiDepth);
+						}
+					}
+					else
+					{
+						UERROR("Cannot apply ROI ratios [%f,%f,%f,%f] because resulting "
+							  "dimension (depth=%dx%d rgb=%dx%d) cannot be divided exactly "
+							  "by decimation parameter (%d). Ignoring ROI ratios...",
+							  roiRatios[0],
+							  roiRatios[1],
+							  roiRatios[2],
+							  roiRatios[3],
+							  roiDepth.width,
+							  roiDepth.height,
+							  roiRgb.width,
+							  roiRgb.height,
+							  decimation);
+					}
+				}
+
 				pcl::PointCloud<pcl::PointXYZ>::Ptr tmp = util3d::cloudFromDepth(
-						cv::Mat(sensorData.depthRaw(), cv::Rect(subImageWidth*i, 0, subImageWidth, sensorData.depthRaw().rows)),
-						sensorData.cameraModels()[i],
+						depth,
+						model,
 						decimation,
 						maxDepth,
 						minDepth,
@@ -722,7 +930,10 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr RTABMAP_EXP cloudFromSensorData(
 
 				if(tmp->size())
 				{
-					tmp = util3d::transformPointCloud(tmp, sensorData.cameraModels()[i].localTransform());
+					if(!model.localTransform().isNull() && !model.localTransform().isIdentity())
+					{
+						tmp = util3d::transformPointCloud(tmp, model.localTransform());
+					}
 
 					if(sensorData.cameraModels().size() > 1)
 					{
@@ -765,9 +976,41 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr RTABMAP_EXP cloudFromSensorData(
 		{
 			leftMono = sensorData.imageRaw();
 		}
+
+		cv::Mat right(sensorData.rightRaw());
+		StereoCameraModel model = sensorData.stereoCameraModel();
+		if( roiRatios.size() == 4 &&
+			((roiRatios[0] > 0.0f && roiRatios[0] <= 1.0f) ||
+			 (roiRatios[1] > 0.0f && roiRatios[1] <= 1.0f) ||
+			 (roiRatios[2] > 0.0f && roiRatios[2] <= 1.0f) ||
+			 (roiRatios[3] > 0.0f && roiRatios[3] <= 1.0f)))
+		{
+			cv::Rect roi = util2d::computeRoi(leftMono, roiRatios);
+			if(	roi.width%decimation==0 &&
+				roi.height%decimation==0)
+			{
+				leftMono = cv::Mat(leftMono, roi);
+				right = cv::Mat(right, roi);
+				model.roi(roi);
+			}
+			else
+			{
+				UERROR("Cannot apply ROI ratios [%f,%f,%f,%f] because resulting "
+					  "dimension (left=%dx%d) cannot be divided exactly "
+					  "by decimation parameter (%d). Ignoring ROI ratios...",
+					  roiRatios[0],
+					  roiRatios[1],
+					  roiRatios[2],
+					  roiRatios[3],
+					  roi.width,
+					  roi.height,
+					  decimation);
+			}
+		}
+
 		cloud = cloudFromDisparity(
-				util2d::disparityFromStereoImages(leftMono, sensorData.rightRaw(), parameters),
-				sensorData.stereoCameraModel(),
+				util2d::disparityFromStereoImages(leftMono, right, stereoParameters),
+				model,
 				decimation,
 				maxDepth,
 				minDepth,
@@ -775,7 +1018,7 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr RTABMAP_EXP cloudFromSensorData(
 
 		if(cloud->size())
 		{
-			if(cloud->size())
+			if(cloud->size() && !sensorData.stereoCameraModel().left().localTransform().isNull() && !sensorData.stereoCameraModel().left().localTransform().isIdentity())
 			{
 				cloud = util3d::transformPointCloud(cloud, sensorData.stereoCameraModel().left().localTransform());
 			}
@@ -790,42 +1033,72 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr RTABMAP_EXP cloudRGBFromSensorData(
 		float maxDepth,
 		float minDepth,
 		std::vector<int> * validIndices,
-		const ParametersMap & parameters)
+		const ParametersMap & stereoParameters,
+		const std::vector<float> & roiRatios)
 {
-	UASSERT(!sensorData.imageRaw().empty());
-	UASSERT((!sensorData.depthRaw().empty() && sensorData.cameraModels().size()) ||
-			(!sensorData.rightRaw().empty() && sensorData.stereoCameraModel().isValidForProjection()));
+	if(decimation == 0)
+	{
+		decimation = 1;
+	}
+
 	pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
 
-	if(!sensorData.depthRaw().empty() && sensorData.cameraModels().size())
+	if(!sensorData.imageRaw().empty() && !sensorData.depthRaw().empty() && sensorData.cameraModels().size())
 	{
 		//depth
 		UDEBUG("");
 		UASSERT(int((sensorData.imageRaw().cols/sensorData.cameraModels().size())*sensorData.cameraModels().size()) == sensorData.imageRaw().cols);
 		UASSERT(int((sensorData.depthRaw().cols/sensorData.cameraModels().size())*sensorData.cameraModels().size()) == sensorData.depthRaw().cols);
-		UASSERT(sensorData.imageRaw().cols % sensorData.depthRaw().cols == 0);
-		UASSERT(sensorData.imageRaw().rows % sensorData.depthRaw().rows == 0);
+		UASSERT_MSG(sensorData.imageRaw().cols % sensorData.depthRaw().cols == 0, uFormat("rgb=%d depth=%d", sensorData.imageRaw().cols, sensorData.depthRaw().cols).c_str());
+		UASSERT_MSG(sensorData.imageRaw().rows % sensorData.depthRaw().rows == 0, uFormat("rgb=%d depth=%d", sensorData.imageRaw().rows, sensorData.depthRaw().rows).c_str());
 		int subRGBWidth = sensorData.imageRaw().cols/sensorData.cameraModels().size();
 		int subDepthWidth = sensorData.depthRaw().cols/sensorData.cameraModels().size();
-
-		if(subRGBWidth % decimation != 0 || subDepthWidth % decimation != 0)
-		{
-			UWARN("Image size (rgb=%d,%d depth=%d,%d) modulus decimation (%d) is not null "
-				  "for the cloud creation! Setting decimation to 1...",
-				  subRGBWidth, sensorData.imageRaw().rows,
-				  subDepthWidth, sensorData.depthRaw().rows,
-				  decimation);
-			decimation = 1;
-		}
 
 		for(unsigned int i=0; i<sensorData.cameraModels().size(); ++i)
 		{
 			if(sensorData.cameraModels()[i].isValidForProjection())
 			{
+				cv::Mat rgb(sensorData.imageRaw(), cv::Rect(subRGBWidth*i, 0, subRGBWidth, sensorData.imageRaw().rows));
+				cv::Mat depth(sensorData.depthRaw(), cv::Rect(subDepthWidth*i, 0, subDepthWidth, sensorData.depthRaw().rows));
+				CameraModel model = sensorData.cameraModels()[i];
+				if( roiRatios.size() == 4 &&
+					((roiRatios[0] > 0.0f && roiRatios[0] <= 1.0f) ||
+					 (roiRatios[1] > 0.0f && roiRatios[1] <= 1.0f) ||
+					 (roiRatios[2] > 0.0f && roiRatios[2] <= 1.0f) ||
+					 (roiRatios[3] > 0.0f && roiRatios[3] <= 1.0f)))
+				{
+					cv::Rect roiDepth = util2d::computeRoi(depth, roiRatios);
+					cv::Rect roiRgb = util2d::computeRoi(rgb, roiRatios);
+					if(	roiDepth.width%decimation==0 &&
+						roiDepth.height%decimation==0 &&
+						roiRgb.width%decimation==0 &&
+						roiRgb.height%decimation==0)
+					{
+						depth = cv::Mat(depth, roiDepth);
+						rgb = cv::Mat(rgb, roiRgb);
+						model = model.roi(roiRgb);
+					}
+					else
+					{
+						UERROR("Cannot apply ROI ratios [%f,%f,%f,%f] because resulting "
+							  "dimension (depth=%dx%d rgb=%dx%d) cannot be divided exactly "
+							  "by decimation parameter (%d). Ignoring ROI ratios...",
+							  roiRatios[0],
+							  roiRatios[1],
+							  roiRatios[2],
+							  roiRatios[3],
+							  roiDepth.width,
+							  roiDepth.height,
+							  roiRgb.width,
+							  roiRgb.height,
+							  decimation);
+					}
+				}
+
 				pcl::PointCloud<pcl::PointXYZRGB>::Ptr tmp = util3d::cloudFromDepthRGB(
-						cv::Mat(sensorData.imageRaw(), cv::Rect(subRGBWidth*i, 0, subRGBWidth, sensorData.imageRaw().rows)),
-						cv::Mat(sensorData.depthRaw(), cv::Rect(subDepthWidth*i, 0, subDepthWidth, sensorData.depthRaw().rows)),
-						sensorData.cameraModels()[i],
+						rgb,
+						depth,
+						model,
 						decimation,
 						maxDepth,
 						minDepth,
@@ -833,7 +1106,10 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr RTABMAP_EXP cloudRGBFromSensorData(
 
 				if(tmp->size())
 				{
-					tmp = util3d::transformPointCloud(tmp, sensorData.cameraModels()[i].localTransform());
+					if(!model.localTransform().isNull() && !model.localTransform().isIdentity())
+					{
+						tmp = util3d::transformPointCloud(tmp, model.localTransform());
+					}
 
 					if(sensorData.cameraModels().size() > 1)
 					{
@@ -862,20 +1138,54 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr RTABMAP_EXP cloudRGBFromSensorData(
 			}
 		}
 	}
-	else if(!sensorData.rightRaw().empty() && sensorData.stereoCameraModel().isValidForProjection())
+	else if(!sensorData.imageRaw().empty() && !sensorData.rightRaw().empty() && sensorData.stereoCameraModel().isValidForProjection())
 	{
 		//stereo
 		UDEBUG("");
-		cloud = cloudFromStereoImages(sensorData.imageRaw(),
-				sensorData.rightRaw(),
-				sensorData.stereoCameraModel(),
+
+		cv::Mat left(sensorData.imageRaw());
+		cv::Mat right(sensorData.rightRaw());
+		StereoCameraModel model = sensorData.stereoCameraModel();
+		if( roiRatios.size() == 4 &&
+			((roiRatios[0] > 0.0f && roiRatios[0] <= 1.0f) ||
+			 (roiRatios[1] > 0.0f && roiRatios[1] <= 1.0f) ||
+			 (roiRatios[2] > 0.0f && roiRatios[2] <= 1.0f) ||
+			 (roiRatios[3] > 0.0f && roiRatios[3] <= 1.0f)))
+		{
+			cv::Rect roi = util2d::computeRoi(left, roiRatios);
+			if(	roi.width%decimation==0 &&
+				roi.height%decimation==0)
+			{
+				left = cv::Mat(left, roi);
+				right = cv::Mat(right, roi);
+				model.roi(roi);
+			}
+			else
+			{
+				UERROR("Cannot apply ROI ratios [%f,%f,%f,%f] because resulting "
+					  "dimension (left=%dx%d) cannot be divided exactly "
+					  "by decimation parameter (%d). Ignoring ROI ratios...",
+					  roiRatios[0],
+					  roiRatios[1],
+					  roiRatios[2],
+					  roiRatios[3],
+					  roi.width,
+					  roi.height,
+					  decimation);
+			}
+		}
+
+		cloud = cloudFromStereoImages(
+				left,
+				right,
+				model,
 				decimation,
 				maxDepth,
 				minDepth,
 				validIndices,
-				parameters);
+				stereoParameters);
 
-		if(cloud->size())
+		if(cloud->size() && !sensorData.stereoCameraModel().left().localTransform().isNull() && !sensorData.stereoCameraModel().left().localTransform().isIdentity())
 		{
 			cloud = util3d::transformPointCloud(cloud, sensorData.stereoCameraModel().left().localTransform());
 		}
@@ -884,14 +1194,14 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr RTABMAP_EXP cloudRGBFromSensorData(
 }
 
 pcl::PointCloud<pcl::PointXYZ> laserScanFromDepthImage(
-					const cv::Mat & depthImage,
-					float fx,
-					float fy,
-					float cx,
-					float cy,
-					float maxDepth,
-					float minDepth,
-					const Transform & localTransform)
+		const cv::Mat & depthImage,
+		float fx,
+		float fy,
+		float cx,
+		float cy,
+		float maxDepth,
+		float minDepth,
+		const Transform & localTransform)
 {
 	UASSERT(depthImage.type() == CV_16UC1 || depthImage.type() == CV_32FC1);
 	UASSERT(!localTransform.isNull());
@@ -902,7 +1212,7 @@ pcl::PointCloud<pcl::PointXYZ> laserScanFromDepthImage(
 	{
 		scan.resize(depthImage.cols);
 		int oi = 0;
-		for(int i=0; i<depthImage.cols; ++i)
+		for(int i=depthImage.cols-1; i>=0; --i)
 		{
 			pcl::PointXYZ pt = util3d::projectDepthTo3D(depthImage, i, middle, cx, cy, fx, fy, false);
 			if(pcl::isFinite(pt) && pt.z >= minDepth && (maxDepth == 0 || pt.z < maxDepth))
@@ -919,112 +1229,1111 @@ pcl::PointCloud<pcl::PointXYZ> laserScanFromDepthImage(
 	return scan;
 }
 
-cv::Mat laserScanFromPointCloud(const pcl::PointCloud<pcl::PointXYZ> & cloud, const Transform & transform)
+pcl::PointCloud<pcl::PointXYZ> laserScanFromDepthImages(
+		const cv::Mat & depthImages,
+		const std::vector<CameraModel> & cameraModels,
+		float maxDepth,
+		float minDepth)
 {
-	cv::Mat laserScan(1, (int)cloud.size(), CV_32FC3);
-	bool nullTransform = transform.isNull() || transform.isIdentity();
-	Eigen::Affine3f transform3f = transform.toEigen3f();
-	for(unsigned int i=0; i<cloud.size(); ++i)
+	pcl::PointCloud<pcl::PointXYZ> scan;
+	UASSERT(int((depthImages.cols/cameraModels.size())*cameraModels.size()) == depthImages.cols);
+	int subImageWidth = depthImages.cols/cameraModels.size();
+	for(int i=(int)cameraModels.size()-1; i>=0; --i)
 	{
-		if(!nullTransform)
+		if(cameraModels[i].isValidForProjection())
 		{
-			pcl::PointXYZ pt = pcl::transformPoint(cloud.at(i), transform3f);
-			laserScan.at<cv::Vec3f>(i)[0] = pt.x;
-			laserScan.at<cv::Vec3f>(i)[1] = pt.y;
-			laserScan.at<cv::Vec3f>(i)[2] = pt.z;
+			cv::Mat depth = cv::Mat(depthImages, cv::Rect(subImageWidth*i, 0, subImageWidth, depthImages.rows));
+
+			scan += laserScanFromDepthImage(
+					depth,
+					cameraModels[i].fx(),
+					cameraModels[i].fy(),
+					cameraModels[i].cx(),
+					cameraModels[i].cy(),
+					maxDepth,
+					minDepth,
+					cameraModels[i].localTransform());
 		}
 		else
 		{
-			laserScan.at<cv::Vec3f>(i)[0] = cloud.at(i).x;
-			laserScan.at<cv::Vec3f>(i)[1] = cloud.at(i).y;
-			laserScan.at<cv::Vec3f>(i)[2] = cloud.at(i).z;
+			UERROR("Camera model %d is invalid", i);
 		}
-
 	}
-	return laserScan;
+	return scan;
 }
 
-cv::Mat laserScanFromPointCloud(const pcl::PointCloud<pcl::PointNormal> & cloud, const Transform & transform)
+LaserScan laserScanFromPointCloud(const pcl::PCLPointCloud2 & cloud, bool filterNaNs)
 {
-	cv::Mat laserScan(1, (int)cloud.size(), CV_32FC(6));
-	bool nullTransform = transform.isNull() || transform.isIdentity();
-	Eigen::Affine3f transform3f = transform.toEigen3f();
-	for(unsigned int i=0; i<cloud.size(); ++i)
+	if(cloud.data.empty())
 	{
-		if(!nullTransform)
+		return LaserScan();
+	}
+	//determine the output type
+	int fieldStates[8] = {0}; // x,y,z,normal_x,normal_y,normal_z,rgb,intensity
+	pcl::uint32_t fieldOffsets[8] = {0};
+	for(unsigned int i=0; i<cloud.fields.size(); ++i)
+	{
+		if(cloud.fields[i].name.compare("x") == 0)
 		{
-			pcl::PointNormal pt = pcl::transformPoint(cloud.at(i), transform3f);
-			laserScan.at<cv::Vec6f>(i)[0] = pt.x;
-			laserScan.at<cv::Vec6f>(i)[1] = pt.y;
-			laserScan.at<cv::Vec6f>(i)[2] = pt.z;
-			laserScan.at<cv::Vec6f>(i)[3] = pt.normal_x;
-			laserScan.at<cv::Vec6f>(i)[4] = pt.normal_y;
-			laserScan.at<cv::Vec6f>(i)[5] = pt.normal_z;
+			fieldStates[0] = 1;
+			fieldOffsets[0] = cloud.fields[i].offset;
+		}
+		else if(cloud.fields[i].name.compare("y") == 0)
+		{
+			fieldStates[1] = 1;
+			fieldOffsets[1] = cloud.fields[i].offset;
+		}
+		else if(cloud.fields[i].name.compare("z") == 0)
+		{
+			fieldStates[2] = 1;
+			fieldOffsets[2] = cloud.fields[i].offset;
+		}
+		else if(cloud.fields[i].name.compare("normal_x") == 0)
+		{
+			fieldStates[3] = 1;
+			fieldOffsets[3] = cloud.fields[i].offset;
+		}
+		else if(cloud.fields[i].name.compare("normal_y") == 0)
+		{
+			fieldStates[4] = 1;
+			fieldOffsets[4] = cloud.fields[i].offset;
+		}
+		else if(cloud.fields[i].name.compare("normal_z") == 0)
+		{
+			fieldStates[5] = 1;
+			fieldOffsets[5] = cloud.fields[i].offset;
+		}
+		else if(cloud.fields[i].name.compare("rgb") == 0 || cloud.fields[i].name.compare("rgba") == 0)
+		{
+			fieldStates[6] = 1;
+			fieldOffsets[6] = cloud.fields[i].offset;
+		}
+		else if(cloud.fields[i].name.compare("intensity") == 0)
+		{
+			fieldStates[7] = 1;
+			fieldOffsets[7] = cloud.fields[i].offset;
 		}
 		else
 		{
-			laserScan.at<cv::Vec6f>(i)[0] = cloud.at(i).x;
-			laserScan.at<cv::Vec6f>(i)[1] = cloud.at(i).y;
-			laserScan.at<cv::Vec6f>(i)[2] = cloud.at(i).z;
-			laserScan.at<cv::Vec6f>(i)[3] = cloud.at(i).normal_x;
-			laserScan.at<cv::Vec6f>(i)[4] = cloud.at(i).normal_y;
-			laserScan.at<cv::Vec6f>(i)[5] = cloud.at(i).normal_z;
+			UDEBUG("Ignoring \"%s\" field", cloud.fields[i].name.c_str());
 		}
 	}
-	return laserScan;
+	if(fieldStates[0]==0 || fieldStates[1]==0)
+	{
+		//should have at least x and y set
+		UERROR("Cloud has not corresponding fields to laser scan!");
+		return LaserScan();
+	}
+
+	bool hasNormals = fieldStates[3] || fieldStates[4] || fieldStates[5];
+	bool hasIntensity = fieldStates[7];
+	bool hasRGB = !hasIntensity&&fieldStates[6];
+	bool is3D = fieldStates[0] && fieldStates[1] && fieldStates[2];
+
+	LaserScan::Format format;
+	if(is3D)
+	{
+		if(hasNormals && hasIntensity)
+		{
+			format = LaserScan::kXYZINormal;
+		}
+		else if(hasNormals && hasRGB)
+		{
+			format = LaserScan::kXYZRGBNormal;
+		}
+		else if(!hasNormals && hasIntensity)
+		{
+			format = LaserScan::kXYZI;
+		}
+		else if(!hasNormals && hasRGB)
+		{
+			format = LaserScan::kXYZRGB;
+		}
+		else
+		{
+			format = LaserScan::kXYZ;
+		}
+	}
+	else
+	{
+		if(hasNormals && hasIntensity)
+		{
+			format = LaserScan::kXYINormal;
+		}
+		else if(!hasNormals && hasIntensity)
+		{
+			format = LaserScan::kXYI;
+		}
+		else
+		{
+			format = LaserScan::kXY;
+		}
+	}
+
+	UASSERT(cloud.data.size()/cloud.point_step == cloud.height*cloud.width);
+	cv::Mat laserScan = cv::Mat(1, (int)cloud.data.size()/cloud.point_step, CV_32FC(LaserScan::channels(format)));
+
+	int oi=0;
+	for (uint32_t row = 0; row < cloud.height; ++row)
+	{
+		const uint8_t* row_data = &cloud.data[row * cloud.row_step];
+		for (uint32_t col = 0; col < cloud.width; ++col)
+		{
+			const uint8_t* msg_data = row_data + col * cloud.point_step;
+
+			float * ptr = laserScan.ptr<float>(0, oi);
+
+			bool valid = true;
+			if(laserScan.channels() == 2)
+			{
+				ptr[0] = *(float*)(msg_data + fieldOffsets[0]);
+				ptr[1] = *(float*)(msg_data + fieldOffsets[1]);
+				valid = uIsFinite(ptr[0]) && uIsFinite(ptr[1]);
+			}
+			else if(laserScan.channels() == 3)
+			{
+				ptr[0] = *(float*)(msg_data + fieldOffsets[0]);
+				ptr[1] = *(float*)(msg_data + fieldOffsets[1]);
+				if(format == LaserScan::kXYI)
+				{
+					ptr[2] = *(float*)(msg_data + fieldOffsets[7]);
+				}
+				else // XYZ
+				{
+					ptr[2] = *(float*)(msg_data + fieldOffsets[2]);
+					valid = uIsFinite(ptr[0]) && uIsFinite(ptr[1]) && uIsFinite(ptr[2]);
+				}
+			}
+			else if(laserScan.channels() == 4)
+			{
+				ptr[0] = *(float*)(msg_data + fieldOffsets[0]);
+				ptr[1] = *(float*)(msg_data + fieldOffsets[1]);
+				ptr[2] = *(float*)(msg_data + fieldOffsets[2]);
+				if(format == LaserScan::kXYZI)
+				{
+					ptr[3] = *(float*)(msg_data + fieldOffsets[7]);
+				}
+				else // XYZRGB
+				{
+					pcl::uint8_t b=*(msg_data + fieldOffsets[6]);
+					pcl::uint8_t g=*(msg_data + fieldOffsets[6]+1);
+					pcl::uint8_t r=*(msg_data + fieldOffsets[6]+2);
+					int * ptrInt = (int*)ptr;
+					ptrInt[3] = int(b) | (int(g) << 8) | (int(r) << 16);
+				}
+				valid = uIsFinite(ptr[0]) && uIsFinite(ptr[1]) && uIsFinite(ptr[2]);
+			}
+			else if(laserScan.channels() == 5)
+			{
+				ptr[0] = *(float*)(msg_data + fieldOffsets[0]);
+				ptr[1] = *(float*)(msg_data + fieldOffsets[1]);
+				ptr[2] = *(float*)(msg_data + fieldOffsets[3]);
+				ptr[3] = *(float*)(msg_data + fieldOffsets[4]);
+				ptr[4] = *(float*)(msg_data + fieldOffsets[5]);
+				valid = uIsFinite(ptr[0]) && uIsFinite(ptr[1]) && uIsFinite(ptr[2]) && uIsFinite(ptr[3]) && uIsFinite(ptr[4]);
+			}
+			else if(laserScan.channels() == 6)
+			{
+				ptr[0] = *(float*)(msg_data + fieldOffsets[0]);
+				ptr[1] = *(float*)(msg_data + fieldOffsets[1]);
+				if(format == LaserScan::kXYINormal)
+				{
+					ptr[2] = *(float*)(msg_data + fieldOffsets[7]);
+				}
+				else // XYZNormal
+				{
+					ptr[2] = *(float*)(msg_data + fieldOffsets[2]);
+				}
+				ptr[3] = *(float*)(msg_data + fieldOffsets[3]);
+				ptr[4] = *(float*)(msg_data + fieldOffsets[4]);
+				ptr[5] = *(float*)(msg_data + fieldOffsets[5]);
+				valid = uIsFinite(ptr[0]) && uIsFinite(ptr[1]) && uIsFinite(ptr[2]) && uIsFinite(ptr[3]) && uIsFinite(ptr[4]) &&  uIsFinite(ptr[5]);
+			}
+			else if(laserScan.channels() == 7)
+			{
+				ptr[0] = *(float*)(msg_data + fieldOffsets[0]);
+				ptr[1] = *(float*)(msg_data + fieldOffsets[1]);
+				ptr[2] = *(float*)(msg_data + fieldOffsets[2]);
+				if(format == LaserScan::kXYZINormal)
+				{
+					ptr[3] = *(float*)(msg_data + fieldOffsets[7]);
+				}
+				else // XYZRGBNormal
+				{
+					pcl::uint8_t b=*(msg_data + fieldOffsets[6]);
+					pcl::uint8_t g=*(msg_data + fieldOffsets[6]+1);
+					pcl::uint8_t r=*(msg_data + fieldOffsets[6]+2);
+					int * ptrInt = (int*)ptr;
+					ptrInt[3] = int(b) | (int(g) << 8) | (int(r) << 16);
+				}
+				ptr[4] = *(float*)(msg_data + fieldOffsets[3]);
+				ptr[5] = *(float*)(msg_data + fieldOffsets[4]);
+				ptr[6] = *(float*)(msg_data + fieldOffsets[5]);
+				valid = uIsFinite(ptr[0]) && uIsFinite(ptr[1]) && uIsFinite(ptr[2]) && uIsFinite(ptr[4]) && uIsFinite(ptr[5]) &&  uIsFinite(ptr[6]);
+			}
+			else
+			{
+				UFATAL("Cannot handle as many channels (%d)!", laserScan.channels());
+			}
+
+			if(!filterNaNs || valid)
+			{
+				++oi;
+			}
+		}
+	}
+	if(oi == 0)
+	{
+		return LaserScan();
+	}
+	return  LaserScan(laserScan(cv::Range::all(), cv::Range(0,oi)), 0, 0, format);
 }
 
-cv::Mat laserScan2dFromPointCloud(const pcl::PointCloud<pcl::PointXYZ> & cloud, const Transform & transform)
+cv::Mat laserScanFromPointCloud(const pcl::PointCloud<pcl::PointXYZ> & cloud, const Transform & transform, bool filterNaNs)
+{
+	return laserScanFromPointCloud(cloud, pcl::IndicesPtr(), transform, filterNaNs);
+}
+cv::Mat laserScanFromPointCloud(const pcl::PointCloud<pcl::PointXYZ> & cloud, const pcl::IndicesPtr & indices, const Transform & transform, bool filterNaNs)
+{
+	cv::Mat laserScan;
+	bool nullTransform = transform.isNull() || transform.isIdentity();
+	Eigen::Affine3f transform3f = transform.toEigen3f();
+	int oi = 0;
+	if(indices.get())
+	{
+		laserScan = cv::Mat(1, (int)indices->size(), CV_32FC3);
+		for(unsigned int i=0; i<indices->size(); ++i)
+		{
+			int index = indices->at(i);
+			if(!filterNaNs || pcl::isFinite(cloud.at(index)))
+			{
+				float * ptr = laserScan.ptr<float>(0, oi++);
+				if(!nullTransform)
+				{
+					pcl::PointXYZ pt = pcl::transformPoint(cloud.at(index), transform3f);
+					ptr[0] = pt.x;
+					ptr[1] = pt.y;
+					ptr[2] = pt.z;
+				}
+				else
+				{
+					ptr[0] = cloud.at(index).x;
+					ptr[1] = cloud.at(index).y;
+					ptr[2] = cloud.at(index).z;
+				}
+			}
+		}
+	}
+	else
+	{
+		laserScan = cv::Mat(1, (int)cloud.size(), CV_32FC3);
+		for(unsigned int i=0; i<cloud.size(); ++i)
+		{
+			if(!filterNaNs || pcl::isFinite(cloud.at(i)))
+			{
+				float * ptr = laserScan.ptr<float>(0, oi++);
+				if(!nullTransform)
+				{
+					pcl::PointXYZ pt = pcl::transformPoint(cloud.at(i), transform3f);
+					ptr[0] = pt.x;
+					ptr[1] = pt.y;
+					ptr[2] = pt.z;
+				}
+				else
+				{
+					ptr[0] = cloud.at(i).x;
+					ptr[1] = cloud.at(i).y;
+					ptr[2] = cloud.at(i).z;
+				}
+			}
+		}
+	}
+	if(oi == 0)
+	{
+		return cv::Mat();
+	}
+	return laserScan(cv::Range::all(), cv::Range(0,oi));
+}
+
+cv::Mat laserScanFromPointCloud(const pcl::PointCloud<pcl::PointNormal> & cloud, const Transform & transform, bool filterNaNs)
+{
+	return laserScanFromPointCloud(cloud, pcl::IndicesPtr(), transform, filterNaNs);
+}
+cv::Mat laserScanFromPointCloud(const pcl::PointCloud<pcl::PointNormal> & cloud, const pcl::IndicesPtr & indices, const Transform & transform, bool filterNaNs)
+{
+	cv::Mat laserScan;
+	bool nullTransform = transform.isNull() || transform.isIdentity();
+	int oi=0;
+	if(indices.get())
+	{
+		laserScan = cv::Mat(1, (int)indices->size(), CV_32FC(6));
+		for(unsigned int i=0; i<indices->size(); ++i)
+		{
+			int index = indices->at(i);
+			if(!filterNaNs || (pcl::isFinite(cloud.at(index)) &&
+					uIsFinite(cloud.at(index).normal_x) &&
+					uIsFinite(cloud.at(index).normal_y) &&
+					uIsFinite(cloud.at(index).normal_z)))
+			{
+				float * ptr = laserScan.ptr<float>(0, oi++);
+				if(!nullTransform)
+				{
+					pcl::PointNormal pt = util3d::transformPoint(cloud.at(index), transform);
+					ptr[0] = pt.x;
+					ptr[1] = pt.y;
+					ptr[2] = pt.z;
+					ptr[3] = pt.normal_x;
+					ptr[4] = pt.normal_y;
+					ptr[5] = pt.normal_z;
+				}
+				else
+				{
+					ptr[0] = cloud.at(index).x;
+					ptr[1] = cloud.at(index).y;
+					ptr[2] = cloud.at(index).z;
+					ptr[3] = cloud.at(index).normal_x;
+					ptr[4] = cloud.at(index).normal_y;
+					ptr[5] = cloud.at(index).normal_z;
+				}
+			}
+		}
+	}
+	else
+	{
+		laserScan = cv::Mat(1, (int)cloud.size(), CV_32FC(6));
+		for(unsigned int i=0; i<cloud.size(); ++i)
+		{
+			if(!filterNaNs || (pcl::isFinite(cloud.at(i)) &&
+					uIsFinite(cloud.at(i).normal_x) &&
+					uIsFinite(cloud.at(i).normal_y) &&
+					uIsFinite(cloud.at(i).normal_z)))
+			{
+				float * ptr = laserScan.ptr<float>(0, oi++);
+				if(!nullTransform)
+				{
+					pcl::PointNormal pt = util3d::transformPoint(cloud.at(i), transform);
+					ptr[0] = pt.x;
+					ptr[1] = pt.y;
+					ptr[2] = pt.z;
+					ptr[3] = pt.normal_x;
+					ptr[4] = pt.normal_y;
+					ptr[5] = pt.normal_z;
+				}
+				else
+				{
+					ptr[0] = cloud.at(i).x;
+					ptr[1] = cloud.at(i).y;
+					ptr[2] = cloud.at(i).z;
+					ptr[3] = cloud.at(i).normal_x;
+					ptr[4] = cloud.at(i).normal_y;
+					ptr[5] = cloud.at(i).normal_z;
+				}
+			}
+		}
+	}
+	if(oi == 0)
+	{
+		return cv::Mat();
+	}
+	return laserScan(cv::Range::all(), cv::Range(0,oi));
+}
+
+cv::Mat laserScanFromPointCloud(const pcl::PointCloud<pcl::PointXYZ> & cloud, const pcl::PointCloud<pcl::Normal> & normals, const Transform & transform, bool filterNaNs)
+{
+	UASSERT(cloud.size() == normals.size());
+	cv::Mat laserScan = cv::Mat(1, (int)cloud.size(), CV_32FC(6));
+	bool nullTransform = transform.isNull() || transform.isIdentity();
+	int oi =0;
+	for(unsigned int i=0; i<cloud.size(); ++i)
+	{
+		if(!filterNaNs || (pcl::isFinite(cloud.at(i)) && pcl::isFinite(normals.at(i))))
+		{
+			float * ptr = laserScan.ptr<float>(0, oi++);
+			if(!nullTransform)
+			{
+				pcl::PointNormal pt;
+				pt.x = cloud.at(i).x;
+				pt.y = cloud.at(i).y;
+				pt.z = cloud.at(i).z;
+				pt.normal_x = normals.at(i).normal_x;
+				pt.normal_y = normals.at(i).normal_y;
+				pt.normal_z = normals.at(i).normal_z;
+				pt = util3d::transformPoint(pt, transform);
+				ptr[0] = pt.x;
+				ptr[1] = pt.y;
+				ptr[2] = pt.z;
+				ptr[3] = pt.normal_x;
+				ptr[4] = pt.normal_y;
+				ptr[5] = pt.normal_z;
+			}
+			else
+			{
+				ptr[0] = cloud.at(i).x;
+				ptr[1] = cloud.at(i).y;
+				ptr[2] = cloud.at(i).z;
+				ptr[3] = normals.at(i).normal_x;
+				ptr[4] = normals.at(i).normal_y;
+				ptr[5] = normals.at(i).normal_z;
+			}
+		}
+	}
+	if(oi == 0)
+	{
+		return cv::Mat();
+	}
+	return laserScan(cv::Range::all(), cv::Range(0,oi));
+}
+
+cv::Mat laserScanFromPointCloud(const pcl::PointCloud<pcl::PointXYZRGB> & cloud, const Transform & transform, bool filterNaNs)
+{
+	return laserScanFromPointCloud(cloud, pcl::IndicesPtr(), transform, filterNaNs);
+}
+
+cv::Mat laserScanFromPointCloud(const pcl::PointCloud<pcl::PointXYZRGB> & cloud, const pcl::IndicesPtr & indices, const Transform & transform, bool filterNaNs)
+{
+	cv::Mat laserScan;
+	bool nullTransform = transform.isNull() || transform.isIdentity();
+	Eigen::Affine3f transform3f = transform.toEigen3f();
+	int oi=0;
+	if(indices.get())
+	{
+		laserScan = cv::Mat(1, (int)indices->size(), CV_32FC(4));
+		for(unsigned int i=0; i<indices->size(); ++i)
+		{
+			int index = indices->at(i);
+			if(!filterNaNs || pcl::isFinite(cloud.at(index)))
+			{
+				float * ptr = laserScan.ptr<float>(0, oi++);
+				if(!nullTransform)
+				{
+					pcl::PointXYZRGB pt = pcl::transformPoint(cloud.at(index), transform3f);
+					ptr[0] = pt.x;
+					ptr[1] = pt.y;
+					ptr[2] = pt.z;
+				}
+				else
+				{
+					ptr[0] = cloud.at(index).x;
+					ptr[1] = cloud.at(index).y;
+					ptr[2] = cloud.at(index).z;
+				}
+				int * ptrInt = (int*)ptr;
+				ptrInt[3] = int(cloud.at(index).b) | (int(cloud.at(index).g) << 8) | (int(cloud.at(index).r) << 16);
+			}
+		}
+	}
+	else
+	{
+		laserScan = cv::Mat(1, (int)cloud.size(), CV_32FC(4));
+		for(unsigned int i=0; i<cloud.size(); ++i)
+		{
+			if(!filterNaNs || pcl::isFinite(cloud.at(i)))
+			{
+				float * ptr = laserScan.ptr<float>(0, oi++);
+				if(!nullTransform)
+				{
+					pcl::PointXYZRGB pt = pcl::transformPoint(cloud.at(i), transform3f);
+					ptr[0] = pt.x;
+					ptr[1] = pt.y;
+					ptr[2] = pt.z;
+				}
+				else
+				{
+					ptr[0] = cloud.at(i).x;
+					ptr[1] = cloud.at(i).y;
+					ptr[2] = cloud.at(i).z;
+				}
+				int * ptrInt = (int*)ptr;
+				ptrInt[3] = int(cloud.at(i).b) | (int(cloud.at(i).g) << 8) | (int(cloud.at(i).r) << 16);
+			}
+		}
+	}
+	if(oi == 0)
+	{
+		return cv::Mat();
+	}
+	return laserScan(cv::Range::all(), cv::Range(0,oi));
+}
+
+cv::Mat laserScanFromPointCloud(const pcl::PointCloud<pcl::PointXYZI> & cloud, const Transform & transform, bool filterNaNs)
+{
+	return laserScanFromPointCloud(cloud, pcl::IndicesPtr(), transform, filterNaNs);
+}
+
+cv::Mat laserScanFromPointCloud(const pcl::PointCloud<pcl::PointXYZI> & cloud, const pcl::IndicesPtr & indices, const Transform & transform, bool filterNaNs)
+{
+	cv::Mat laserScan;
+	bool nullTransform = transform.isNull() || transform.isIdentity();
+	Eigen::Affine3f transform3f = transform.toEigen3f();
+	int oi=0;
+	if(indices.get())
+	{
+		laserScan = cv::Mat(1, (int)indices->size(), CV_32FC(4));
+		for(unsigned int i=0; i<indices->size(); ++i)
+		{
+			int index = indices->at(i);
+			if(!filterNaNs || pcl::isFinite(cloud.at(index)))
+			{
+				float * ptr = laserScan.ptr<float>(0, oi++);
+				if(!nullTransform)
+				{
+					pcl::PointXYZI pt = pcl::transformPoint(cloud.at(index), transform3f);
+					ptr[0] = pt.x;
+					ptr[1] = pt.y;
+					ptr[2] = pt.z;
+				}
+				else
+				{
+					ptr[0] = cloud.at(index).x;
+					ptr[1] = cloud.at(index).y;
+					ptr[2] = cloud.at(index).z;
+				}
+				ptr[3] = cloud.at(index).intensity;
+			}
+		}
+	}
+	else
+	{
+		laserScan = cv::Mat(1, (int)cloud.size(), CV_32FC(4));
+		for(unsigned int i=0; i<cloud.size(); ++i)
+		{
+			if(!filterNaNs || pcl::isFinite(cloud.at(i)))
+			{
+				float * ptr = laserScan.ptr<float>(0, oi++);
+				if(!nullTransform)
+				{
+					pcl::PointXYZI pt = pcl::transformPoint(cloud.at(i), transform3f);
+					ptr[0] = pt.x;
+					ptr[1] = pt.y;
+					ptr[2] = pt.z;
+				}
+				else
+				{
+					ptr[0] = cloud.at(i).x;
+					ptr[1] = cloud.at(i).y;
+					ptr[2] = cloud.at(i).z;
+				}
+				ptr[3] = cloud.at(i).intensity;
+			}
+		}
+	}
+	if(oi == 0)
+	{
+		return cv::Mat();
+	}
+	return laserScan(cv::Range::all(), cv::Range(0,oi));
+}
+
+cv::Mat laserScanFromPointCloud(const pcl::PointCloud<pcl::PointXYZRGB> & cloud, const pcl::PointCloud<pcl::Normal> & normals, const Transform & transform, bool filterNaNs)
+{
+	UASSERT(cloud.size() == normals.size());
+	cv::Mat laserScan(1, (int)cloud.size(), CV_32FC(7));
+	bool nullTransform = transform.isNull() || transform.isIdentity();
+	int oi = 0;
+	for(unsigned int i=0; i<cloud.size(); ++i)
+	{
+		if(!filterNaNs || pcl::isFinite(cloud.at(i)))
+		{
+			float * ptr = laserScan.ptr<float>(0, oi++);
+			if(!nullTransform)
+			{
+				pcl::PointXYZRGBNormal pt;
+				pt.x = cloud.at(i).x;
+				pt.y = cloud.at(i).y;
+				pt.z = cloud.at(i).z;
+				pt.normal_x = normals.at(i).normal_x;
+				pt.normal_y = normals.at(i).normal_y;
+				pt.normal_z = normals.at(i).normal_z;
+				pt = util3d::transformPoint(pt, transform);
+				ptr[0] = pt.x;
+				ptr[1] = pt.y;
+				ptr[2] = pt.z;
+				ptr[4] = pt.normal_x;
+				ptr[5] = pt.normal_y;
+				ptr[6] = pt.normal_z;
+			}
+			else
+			{
+				ptr[0] = cloud.at(i).x;
+				ptr[1] = cloud.at(i).y;
+				ptr[2] = cloud.at(i).z;
+				ptr[4] = normals.at(i).normal_x;
+				ptr[5] = normals.at(i).normal_y;
+				ptr[6] = normals.at(i).normal_z;
+			}
+			int * ptrInt = (int*)ptr;
+			ptrInt[3] = int(cloud.at(i).b) | (int(cloud.at(i).g) << 8) | (int(cloud.at(i).r) << 16);
+		}
+	}
+	if(oi == 0)
+	{
+		return cv::Mat();
+	}
+	return laserScan(cv::Range::all(), cv::Range(0,oi));
+}
+
+cv::Mat laserScanFromPointCloud(const pcl::PointCloud<pcl::PointXYZRGBNormal> & cloud, const Transform & transform, bool filterNaNs)
+{
+	return laserScanFromPointCloud(cloud, pcl::IndicesPtr(), transform, filterNaNs);
+}
+cv::Mat laserScanFromPointCloud(const pcl::PointCloud<pcl::PointXYZRGBNormal> & cloud, const pcl::IndicesPtr & indices, const Transform & transform, bool filterNaNs)
+{
+	cv::Mat laserScan;
+	bool nullTransform = transform.isNull() || transform.isIdentity();
+	int oi = 0;
+	if(indices.get())
+	{
+		laserScan = cv::Mat(1, (int)indices->size(), CV_32FC(7));
+		for(unsigned int i=0; i<indices->size(); ++i)
+		{
+			int index = indices->at(i);
+			if(!filterNaNs || (pcl::isFinite(cloud.at(index)) &&
+					uIsFinite(cloud.at(index).normal_x) &&
+					uIsFinite(cloud.at(index).normal_y) &&
+					uIsFinite(cloud.at(index).normal_z)))
+			{
+				float * ptr = laserScan.ptr<float>(0, oi++);
+				if(!nullTransform)
+				{
+					pcl::PointXYZRGBNormal pt = util3d::transformPoint(cloud.at(index), transform);
+					ptr[0] = pt.x;
+					ptr[1] = pt.y;
+					ptr[2] = pt.z;
+					ptr[4] = pt.normal_x;
+					ptr[5] = pt.normal_y;
+					ptr[6] = pt.normal_z;
+				}
+				else
+				{
+					ptr[0] = cloud.at(index).x;
+					ptr[1] = cloud.at(index).y;
+					ptr[2] = cloud.at(index).z;
+					ptr[4] = cloud.at(index).normal_x;
+					ptr[5] = cloud.at(index).normal_y;
+					ptr[6] = cloud.at(index).normal_z;
+				}
+				int * ptrInt = (int*)ptr;
+				ptrInt[3] = int(cloud.at(index).b) | (int(cloud.at(index).g) << 8) | (int(cloud.at(index).r) << 16);
+			}
+		}
+	}
+	else
+	{
+		laserScan = cv::Mat(1, (int)cloud.size(), CV_32FC(7));
+		for(unsigned int i=0; i<cloud.size(); ++i)
+		{
+			if(!filterNaNs || (pcl::isFinite(cloud.at(i)) &&
+					uIsFinite(cloud.at(i).normal_x) &&
+					uIsFinite(cloud.at(i).normal_y) &&
+					uIsFinite(cloud.at(i).normal_z)))
+			{
+				float * ptr = laserScan.ptr<float>(0, oi++);
+				if(!nullTransform)
+				{
+					pcl::PointXYZRGBNormal pt = util3d::transformPoint(cloud.at(i), transform);
+					ptr[0] = pt.x;
+					ptr[1] = pt.y;
+					ptr[2] = pt.z;
+					ptr[4] = pt.normal_x;
+					ptr[5] = pt.normal_y;
+					ptr[6] = pt.normal_z;
+				}
+				else
+				{
+					ptr[0] = cloud.at(i).x;
+					ptr[1] = cloud.at(i).y;
+					ptr[2] = cloud.at(i).z;
+					ptr[4] = cloud.at(i).normal_x;
+					ptr[5] = cloud.at(i).normal_y;
+					ptr[6] = cloud.at(i).normal_z;
+				}
+				int * ptrInt = (int*)ptr;
+				ptrInt[3] = int(cloud.at(i).b) | (int(cloud.at(i).g) << 8) | (int(cloud.at(i).r) << 16);
+			}
+		}
+	}
+	if(oi == 0)
+	{
+		return cv::Mat();
+	}
+	return laserScan(cv::Range::all(), cv::Range(0,oi));
+}
+
+cv::Mat laserScanFromPointCloud(const pcl::PointCloud<pcl::PointXYZI> & cloud, const pcl::PointCloud<pcl::Normal> & normals, const Transform & transform, bool filterNaNs)
+{
+	UASSERT(cloud.size() == normals.size());
+	cv::Mat laserScan(1, (int)cloud.size(), CV_32FC(7));
+	bool nullTransform = transform.isNull() || transform.isIdentity();
+	int oi=0;
+	for(unsigned int i=0; i<cloud.size(); ++i)
+	{
+		if(!filterNaNs || (pcl::isFinite(cloud.at(i)) && pcl::isFinite(normals.at(i))))
+		{
+			float * ptr = laserScan.ptr<float>(0, oi++);
+			if(!nullTransform)
+			{
+				pcl::PointXYZINormal pt;
+				pt.x = cloud.at(i).x;
+				pt.y = cloud.at(i).y;
+				pt.z = cloud.at(i).z;
+				pt.normal_x = normals.at(i).normal_x;
+				pt.normal_y = normals.at(i).normal_y;
+				pt.normal_z = normals.at(i).normal_z;
+				pt = util3d::transformPoint(pt, transform);
+				ptr[0] = pt.x;
+				ptr[1] = pt.y;
+				ptr[2] = pt.z;
+				ptr[4] = pt.normal_x;
+				ptr[5] = pt.normal_y;
+				ptr[6] = pt.normal_z;
+			}
+			else
+			{
+				ptr[0] = cloud.at(i).x;
+				ptr[1] = cloud.at(i).y;
+				ptr[2] = cloud.at(i).z;
+				ptr[4] = normals.at(i).normal_x;
+				ptr[5] = normals.at(i).normal_y;
+				ptr[6] = normals.at(i).normal_z;
+			}
+			ptr[3] = cloud.at(i).intensity;
+		}
+	}
+	if(oi == 0)
+	{
+		return cv::Mat();
+	}
+	return laserScan(cv::Range::all(), cv::Range(0,oi));
+}
+cv::Mat laserScanFromPointCloud(const pcl::PointCloud<pcl::PointXYZINormal> & cloud, const Transform & transform, bool filterNaNs)
+{
+	cv::Mat laserScan(1, (int)cloud.size(), CV_32FC(7));
+	bool nullTransform = transform.isNull() || transform.isIdentity();
+	int oi = 0;
+	for(unsigned int i=0; i<cloud.size(); ++i)
+	{
+		if(!filterNaNs || (pcl::isFinite(cloud.at(i)) &&
+				uIsFinite(cloud.at(i).normal_x) &&
+				uIsFinite(cloud.at(i).normal_y) &&
+				uIsFinite(cloud.at(i).normal_z)))
+		{
+			float * ptr = laserScan.ptr<float>(0, oi++);
+			if(!nullTransform)
+			{
+				pcl::PointXYZINormal pt = util3d::transformPoint(cloud.at(i), transform);
+				ptr[0] = pt.x;
+				ptr[1] = pt.y;
+				ptr[2] = pt.z;
+				ptr[4] = pt.normal_x;
+				ptr[5] = pt.normal_y;
+				ptr[6] = pt.normal_z;
+			}
+			else
+			{
+				ptr[0] = cloud.at(i).x;
+				ptr[1] = cloud.at(i).y;
+				ptr[2] = cloud.at(i).z;
+				ptr[4] = cloud.at(i).normal_x;
+				ptr[5] = cloud.at(i).normal_y;
+				ptr[6] = cloud.at(i).normal_z;
+			}
+			ptr[3] = cloud.at(i).intensity;
+		}
+	}
+	if(oi == 0)
+	{
+		return cv::Mat();
+	}
+	return laserScan(cv::Range::all(), cv::Range(0,oi));
+}
+
+cv::Mat laserScan2dFromPointCloud(const pcl::PointCloud<pcl::PointXYZ> & cloud, const Transform & transform, bool filterNaNs)
 {
 	cv::Mat laserScan(1, (int)cloud.size(), CV_32FC2);
 	bool nullTransform = transform.isNull();
 	Eigen::Affine3f transform3f = transform.toEigen3f();
+	int oi=0;
 	for(unsigned int i=0; i<cloud.size(); ++i)
 	{
-		if(!nullTransform)
+		if(!filterNaNs || pcl::isFinite(cloud.at(i)))
 		{
-			pcl::PointXYZ pt = pcl::transformPoint(cloud.at(i), transform3f);
-			laserScan.at<cv::Vec2f>(i)[0] = pt.x;
-			laserScan.at<cv::Vec2f>(i)[1] = pt.y;
-		}
-		else
-		{
-			laserScan.at<cv::Vec2f>(i)[0] = cloud.at(i).x;
-			laserScan.at<cv::Vec2f>(i)[1] = cloud.at(i).y;
+			float * ptr = laserScan.ptr<float>(0, oi++);
+			if(!nullTransform)
+			{
+				pcl::PointXYZ pt = pcl::transformPoint(cloud.at(i), transform3f);
+				ptr[0] = pt.x;
+				ptr[1] = pt.y;
+			}
+			else
+			{
+				ptr[0] = cloud.at(i).x;
+				ptr[1] = cloud.at(i).y;
+			}
 		}
 
 	}
-	return laserScan;
+	if(oi == 0)
+	{
+		return cv::Mat();
+	}
+	return laserScan(cv::Range::all(), cv::Range(0,oi));
 }
 
-pcl::PointCloud<pcl::PointXYZ>::Ptr laserScanToPointCloud(const cv::Mat & laserScan, const Transform & transform)
+cv::Mat laserScan2dFromPointCloud(const pcl::PointCloud<pcl::PointXYZI> & cloud, const Transform & transform, bool filterNaNs)
 {
-	UASSERT(laserScan.empty() || laserScan.type() == CV_32FC2 || laserScan.type() == CV_32FC3 || laserScan.type() == CV_32FC(6));
-
-	pcl::PointCloud<pcl::PointXYZ>::Ptr output(new pcl::PointCloud<pcl::PointXYZ>);
-	output->resize(laserScan.cols);
+	cv::Mat laserScan(1, (int)cloud.size(), CV_32FC3);
 	bool nullTransform = transform.isNull();
 	Eigen::Affine3f transform3f = transform.toEigen3f();
-	for(int i=0; i<laserScan.cols; ++i)
+	int oi=0;
+	for(unsigned int i=0; i<cloud.size(); ++i)
 	{
-		if(laserScan.type() == CV_32FC2)
+		if(!filterNaNs || pcl::isFinite(cloud.at(i)))
 		{
-			output->at(i).x = laserScan.at<cv::Vec2f>(i)[0];
-			output->at(i).y = laserScan.at<cv::Vec2f>(i)[1];
-		}
-		else if(laserScan.type() == CV_32FC3)
-		{
-			output->at(i).x = laserScan.at<cv::Vec3f>(i)[0];
-			output->at(i).y = laserScan.at<cv::Vec3f>(i)[1];
-			output->at(i).z = laserScan.at<cv::Vec3f>(i)[2];
-		}
-		else
-		{
-			output->at(i).x = laserScan.at<cv::Vec6f>(i)[0];
-			output->at(i).y = laserScan.at<cv::Vec6f>(i)[1];
-			output->at(i).z = laserScan.at<cv::Vec6f>(i)[2];
+			float * ptr = laserScan.ptr<float>(0, oi++);
+			if(!nullTransform)
+			{
+				pcl::PointXYZI pt = pcl::transformPoint(cloud.at(i), transform3f);
+				ptr[0] = pt.x;
+				ptr[1] = pt.y;
+				ptr[2] = pt.intensity;
+			}
+			else
+			{
+				ptr[0] = cloud.at(i).x;
+				ptr[1] = cloud.at(i).y;
+				ptr[2] = cloud.at(i).intensity;
+			}
 		}
 
+	}
+	if(oi == 0)
+	{
+		return cv::Mat();
+	}
+	return laserScan(cv::Range::all(), cv::Range(0,oi));
+}
+
+cv::Mat laserScan2dFromPointCloud(const pcl::PointCloud<pcl::PointNormal> & cloud, const Transform & transform, bool filterNaNs)
+{
+	cv::Mat laserScan(1, (int)cloud.size(), CV_32FC(5));
+	bool nullTransform = transform.isNull();
+	int oi=0;
+	for(unsigned int i=0; i<cloud.size(); ++i)
+	{
+		if(!filterNaNs || (pcl::isFinite(cloud.at(i)) &&
+				uIsFinite(cloud.at(i).normal_x) &&
+				uIsFinite(cloud.at(i).normal_y) &&
+				uIsFinite(cloud.at(i).normal_z)))
+		{
+			float * ptr = laserScan.ptr<float>(0, oi++);
+			if(!nullTransform)
+			{
+				pcl::PointNormal pt = util3d::transformPoint(cloud.at(i), transform);
+				ptr[0] = pt.x;
+				ptr[1] = pt.y;
+				ptr[2] = pt.normal_x;
+				ptr[3] = pt.normal_y;
+				ptr[4] = pt.normal_z;
+			}
+			else
+			{
+				const pcl::PointNormal & pt = cloud.at(i);
+				ptr[0] = pt.x;
+				ptr[1] = pt.y;
+				ptr[2] = pt.normal_x;
+				ptr[3] = pt.normal_y;
+				ptr[4] = pt.normal_z;
+			}
+		}
+	}
+	if(oi == 0)
+	{
+		return cv::Mat();
+	}
+	return laserScan(cv::Range::all(), cv::Range(0,oi));
+}
+
+cv::Mat laserScan2dFromPointCloud(const pcl::PointCloud<pcl::PointXYZ> & cloud, const pcl::PointCloud<pcl::Normal> & normals, const Transform & transform, bool filterNaNs)
+{
+	UASSERT(cloud.size() == normals.size());
+	cv::Mat laserScan(1, (int)cloud.size(), CV_32FC(5));
+	bool nullTransform = transform.isNull() || transform.isIdentity();
+	int oi=0;
+	for(unsigned int i=0; i<cloud.size(); ++i)
+	{
+		if(!filterNaNs || (pcl::isFinite(cloud.at(i)) && pcl::isFinite(normals.at(i))))
+		{
+			float * ptr = laserScan.ptr<float>(0, oi++);
+			if(!nullTransform)
+			{
+				pcl::PointNormal pt;
+				pt.x = cloud.at(i).x;
+				pt.y = cloud.at(i).y;
+				pt.z = cloud.at(i).z;
+				pt.normal_x = normals.at(i).normal_x;
+				pt.normal_y = normals.at(i).normal_y;
+				pt.normal_z = normals.at(i).normal_z;
+				pt = util3d::transformPoint(pt, transform);
+				ptr[0] = pt.x;
+				ptr[1] = pt.y;
+				ptr[2] = pt.normal_x;
+				ptr[3] = pt.normal_y;
+				ptr[4] = pt.normal_z;
+			}
+			else
+			{
+				ptr[0] = cloud.at(i).x;
+				ptr[1] = cloud.at(i).y;
+				ptr[2] = normals.at(i).normal_x;
+				ptr[3] = normals.at(i).normal_y;
+				ptr[4] = normals.at(i).normal_z;
+			}
+		}
+	}
+	if(oi == 0)
+	{
+		return cv::Mat();
+	}
+	return laserScan(cv::Range::all(), cv::Range(0,oi));
+}
+
+cv::Mat laserScan2dFromPointCloud(const pcl::PointCloud<pcl::PointXYZINormal> & cloud, const Transform & transform, bool filterNaNs)
+{
+	cv::Mat laserScan(1, (int)cloud.size(), CV_32FC(6));
+	bool nullTransform = transform.isNull();
+	int oi=0;
+	for(unsigned int i=0; i<cloud.size(); ++i)
+	{
+		if(!filterNaNs || (pcl::isFinite(cloud.at(i)) &&
+				uIsFinite(cloud.at(i).normal_x) &&
+				uIsFinite(cloud.at(i).normal_y) &&
+				uIsFinite(cloud.at(i).normal_z)))
+		{
+			float * ptr = laserScan.ptr<float>(0, oi++);
+			if(!nullTransform)
+			{
+				pcl::PointXYZINormal pt = util3d::transformPoint(cloud.at(i), transform);
+				ptr[0] = pt.x;
+				ptr[1] = pt.y;
+				ptr[2] = pt.intensity;
+				ptr[3] = pt.normal_x;
+				ptr[4] = pt.normal_y;
+				ptr[5] = pt.normal_z;
+			}
+			else
+			{
+				const pcl::PointXYZINormal & pt = cloud.at(i);
+				ptr[0] = pt.x;
+				ptr[1] = pt.y;
+				ptr[2] = pt.intensity;
+				ptr[3] = pt.normal_x;
+				ptr[4] = pt.normal_y;
+				ptr[5] = pt.normal_z;
+			}
+		}
+	}
+	if(oi == 0)
+	{
+		return cv::Mat();
+	}
+	return laserScan(cv::Range::all(), cv::Range(0,oi));
+}
+
+cv::Mat laserScan2dFromPointCloud(const pcl::PointCloud<pcl::PointXYZI> & cloud, const pcl::PointCloud<pcl::Normal> & normals, const Transform & transform, bool filterNaNs)
+{
+	UASSERT(cloud.size() == normals.size());
+	cv::Mat laserScan(1, (int)cloud.size(), CV_32FC(6));
+	bool nullTransform = transform.isNull() || transform.isIdentity();
+	int oi=0;
+	for(unsigned int i=0; i<cloud.size(); ++i)
+	{
+		if(!filterNaNs || (pcl::isFinite(cloud.at(i)) && pcl::isFinite(normals.at(i))))
+		{
+			float * ptr = laserScan.ptr<float>(0, oi++);
+			if(!nullTransform)
+			{
+				pcl::PointXYZINormal pt;
+				pt.x = cloud.at(i).x;
+				pt.y = cloud.at(i).y;
+				pt.z = cloud.at(i).z;
+				pt.normal_x = normals.at(i).normal_x;
+				pt.normal_y = normals.at(i).normal_y;
+				pt.normal_z = normals.at(i).normal_z;
+				pt = util3d::transformPoint(pt, transform);
+				ptr[0] = pt.x;
+				ptr[1] = pt.y;
+				ptr[2] = pt.intensity;
+				ptr[3] = pt.normal_x;
+				ptr[4] = pt.normal_y;
+				ptr[5] = pt.normal_z;
+			}
+			else
+			{
+				ptr[0] = cloud.at(i).x;
+				ptr[1] = cloud.at(i).y;
+				ptr[2] = cloud.at(i).intensity;
+				ptr[3] = normals.at(i).normal_x;
+				ptr[4] = normals.at(i).normal_y;
+				ptr[5] = normals.at(i).normal_z;
+			}
+		}
+	}
+	if(oi == 0)
+	{
+		return cv::Mat();
+	}
+	return laserScan(cv::Range::all(), cv::Range(0,oi));
+}
+
+pcl::PCLPointCloud2::Ptr laserScanToPointCloud2(const LaserScan & laserScan, const Transform & transform)
+{
+	pcl::PCLPointCloud2::Ptr cloud(new pcl::PCLPointCloud2);
+	if(laserScan.isEmpty())
+	{
+		return cloud;
+	}
+
+	if(laserScan.format() == LaserScan::kXY || laserScan.format() == LaserScan::kXYZ)
+	{
+		pcl::toPCLPointCloud2(*laserScanToPointCloud(laserScan, transform), *cloud);
+	}
+	else if(laserScan.format() == LaserScan::kXYI || laserScan.format() == LaserScan::kXYZI)
+	{
+		pcl::toPCLPointCloud2(*laserScanToPointCloudI(laserScan, transform), *cloud);
+	}
+	else if(laserScan.format() == LaserScan::kXYNormal || laserScan.format() == LaserScan::kXYZNormal)
+	{
+		pcl::toPCLPointCloud2(*laserScanToPointCloudNormal(laserScan, transform), *cloud);
+	}
+	else if(laserScan.format() == LaserScan::kXYINormal || laserScan.format() == LaserScan::kXYZINormal)
+	{
+		pcl::toPCLPointCloud2(*laserScanToPointCloudINormal(laserScan, transform), *cloud);
+	}
+	else if(laserScan.format() == LaserScan::kXYZRGB)
+	{
+		pcl::toPCLPointCloud2(*laserScanToPointCloudRGB(laserScan, transform), *cloud);
+	}
+	else if(laserScan.format() == LaserScan::kXYZRGBNormal)
+	{
+		pcl::toPCLPointCloud2(*laserScanToPointCloudRGBNormal(laserScan, transform), *cloud);
+	}
+	else
+	{
+		UERROR("Unknown conversion from LaserScan format %d to PointCloud2.", laserScan.format());
+	}
+	return cloud;
+}
+
+pcl::PointCloud<pcl::PointXYZ>::Ptr laserScanToPointCloud(const LaserScan & laserScan, const Transform & transform)
+{
+	pcl::PointCloud<pcl::PointXYZ>::Ptr output(new pcl::PointCloud<pcl::PointXYZ>);
+	output->resize(laserScan.size());
+	output->is_dense = true;
+	bool nullTransform = transform.isNull();
+	Eigen::Affine3f transform3f = transform.toEigen3f();
+	for(int i=0; i<laserScan.size(); ++i)
+	{
+		output->at(i) = util3d::laserScanToPoint(laserScan, i);
 		if(!nullTransform)
 		{
 			output->at(i) = pcl::transformPoint(output->at(i), transform3f);
@@ -1033,42 +2342,290 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr laserScanToPointCloud(const cv::Mat & laserS
 	return output;
 }
 
-pcl::PointCloud<pcl::PointNormal>::Ptr laserScanToPointCloudNormal(const cv::Mat & laserScan, const Transform & transform)
+pcl::PointCloud<pcl::PointNormal>::Ptr laserScanToPointCloudNormal(const LaserScan & laserScan, const Transform & transform)
 {
-	UASSERT(laserScan.empty() || laserScan.type() == CV_32FC2 || laserScan.type() == CV_32FC3 || laserScan.type() == CV_32FC(6));
-
 	pcl::PointCloud<pcl::PointNormal>::Ptr output(new pcl::PointCloud<pcl::PointNormal>);
-	output->resize(laserScan.cols);
+	output->resize(laserScan.size());
+	output->is_dense = true;
 	bool nullTransform = transform.isNull();
-	for(int i=0; i<laserScan.cols; ++i)
+	for(int i=0; i<laserScan.size(); ++i)
 	{
-		if(laserScan.type() == CV_32FC2)
-		{
-			output->at(i).x = laserScan.at<cv::Vec2f>(i)[0];
-			output->at(i).y = laserScan.at<cv::Vec2f>(i)[1];
-		}
-		else if(laserScan.type() == CV_32FC3)
-		{
-			output->at(i).x = laserScan.at<cv::Vec3f>(i)[0];
-			output->at(i).y = laserScan.at<cv::Vec3f>(i)[1];
-			output->at(i).z = laserScan.at<cv::Vec3f>(i)[2];
-		}
-		else
-		{
-			output->at(i).x = laserScan.at<cv::Vec6f>(i)[0];
-			output->at(i).y = laserScan.at<cv::Vec6f>(i)[1];
-			output->at(i).z = laserScan.at<cv::Vec6f>(i)[2];
-			output->at(i).normal_x = laserScan.at<cv::Vec6f>(i)[3];
-			output->at(i).normal_y = laserScan.at<cv::Vec6f>(i)[4];
-			output->at(i).normal_z = laserScan.at<cv::Vec6f>(i)[5];
-		}
-
+		output->at(i) = laserScanToPointNormal(laserScan, i);
 		if(!nullTransform)
 		{
 			output->at(i) = util3d::transformPoint(output->at(i), transform);
 		}
 	}
 	return output;
+}
+
+pcl::PointCloud<pcl::PointXYZRGB>::Ptr laserScanToPointCloudRGB(const LaserScan & laserScan, const Transform & transform,  unsigned char r, unsigned char g, unsigned char b)
+{
+	pcl::PointCloud<pcl::PointXYZRGB>::Ptr output(new pcl::PointCloud<pcl::PointXYZRGB>);
+	output->resize(laserScan.size());
+	output->is_dense = true;
+	bool nullTransform = transform.isNull() || transform.isIdentity();
+	Eigen::Affine3f transform3f = transform.toEigen3f();
+	for(int i=0; i<laserScan.size(); ++i)
+	{
+		output->at(i) = util3d::laserScanToPointRGB(laserScan, i, r, g, b);
+		if(!nullTransform)
+		{
+			output->at(i) = pcl::transformPoint(output->at(i), transform3f);
+		}
+	}
+	return output;
+}
+
+pcl::PointCloud<pcl::PointXYZI>::Ptr laserScanToPointCloudI(const LaserScan & laserScan, const Transform & transform,  float intensity)
+{
+	pcl::PointCloud<pcl::PointXYZI>::Ptr output(new pcl::PointCloud<pcl::PointXYZI>);
+	output->resize(laserScan.size());
+	output->is_dense = true;
+	bool nullTransform = transform.isNull() || transform.isIdentity();
+	Eigen::Affine3f transform3f = transform.toEigen3f();
+	for(int i=0; i<laserScan.size(); ++i)
+	{
+		output->at(i) = util3d::laserScanToPointI(laserScan, i, intensity);
+		if(!nullTransform)
+		{
+			output->at(i) = pcl::transformPoint(output->at(i), transform3f);
+		}
+	}
+	return output;
+}
+
+pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr laserScanToPointCloudRGBNormal(const LaserScan & laserScan, const Transform & transform,  unsigned char r, unsigned char g, unsigned char b)
+{
+	pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr output(new pcl::PointCloud<pcl::PointXYZRGBNormal>);
+	output->resize(laserScan.size());
+	output->is_dense = true;
+	bool nullTransform = transform.isNull() || transform.isIdentity();
+	for(int i=0; i<laserScan.size(); ++i)
+	{
+		output->at(i) = util3d::laserScanToPointRGBNormal(laserScan, i, r, g, b);
+		if(!nullTransform)
+		{
+			output->at(i) = util3d::transformPoint(output->at(i), transform);
+		}
+	}
+	return output;
+}
+
+pcl::PointCloud<pcl::PointXYZINormal>::Ptr laserScanToPointCloudINormal(const LaserScan & laserScan, const Transform & transform,  float intensity)
+{
+	pcl::PointCloud<pcl::PointXYZINormal>::Ptr output(new pcl::PointCloud<pcl::PointXYZINormal>);
+	output->resize(laserScan.size());
+	output->is_dense = true;
+	bool nullTransform = transform.isNull() || transform.isIdentity();
+	for(int i=0; i<laserScan.size(); ++i)
+	{
+		output->at(i) = util3d::laserScanToPointINormal(laserScan, i, intensity);
+		if(!nullTransform)
+		{
+			output->at(i) = util3d::transformPoint(output->at(i), transform);
+		}
+	}
+	return output;
+}
+
+pcl::PointXYZ laserScanToPoint(const LaserScan & laserScan, int index)
+{
+	UASSERT(!laserScan.isEmpty() && !laserScan.isCompressed() && index < laserScan.size());
+	pcl::PointXYZ output;
+	const float * ptr = laserScan.data().ptr<float>(0, index);
+	output.x = ptr[0];
+	output.y = ptr[1];
+	if(!laserScan.is2d())
+	{
+		output.z = ptr[2];
+	}
+	return output;
+}
+
+pcl::PointNormal laserScanToPointNormal(const LaserScan & laserScan, int index)
+{
+	UASSERT(!laserScan.isEmpty() && !laserScan.isCompressed() && index < laserScan.size());
+	pcl::PointNormal output;
+	const float * ptr = laserScan.data().ptr<float>(0, index);
+	output.x = ptr[0];
+	output.y = ptr[1];
+	if(!laserScan.is2d())
+	{
+		output.z = ptr[2];
+	}
+	if(laserScan.hasNormals())
+	{
+		int offset = laserScan.getNormalsOffset();
+		output.normal_x = ptr[offset];
+		output.normal_y = ptr[offset+1];
+		output.normal_z = ptr[offset+2];
+	}
+	return output;
+}
+
+pcl::PointXYZRGB laserScanToPointRGB(const LaserScan & laserScan, int index, unsigned char r, unsigned char g, unsigned char b)
+{
+	UASSERT(!laserScan.isEmpty() && !laserScan.isCompressed() && index < laserScan.size());
+	pcl::PointXYZRGB output;
+	const float * ptr = laserScan.data().ptr<float>(0, index);
+	output.x = ptr[0];
+	output.y = ptr[1];
+	if(!laserScan.is2d())
+	{
+		output.z = ptr[2];
+	}
+
+	if(laserScan.hasRGB())
+	{
+		int * ptrInt = (int*)ptr;
+		int indexRGB = laserScan.getRGBOffset();
+		output.b = (unsigned char)(ptrInt[indexRGB] & 0xFF);
+		output.g = (unsigned char)((ptrInt[indexRGB] >> 8) & 0xFF);
+		output.r = (unsigned char)((ptrInt[indexRGB] >> 16) & 0xFF);
+	}
+	else
+	{
+		output.r = r;
+		output.g = g;
+		output.b = b;
+	}
+	return output;
+}
+
+pcl::PointXYZI laserScanToPointI(const LaserScan & laserScan, int index, float intensity)
+{
+	UASSERT(!laserScan.isEmpty() && !laserScan.isCompressed() && index < laserScan.size());
+	pcl::PointXYZI output;
+	const float * ptr = laserScan.data().ptr<float>(0, index);
+	output.x = ptr[0];
+	output.y = ptr[1];
+	if(!laserScan.is2d())
+	{
+		output.z = ptr[2];
+	}
+
+	if(laserScan.hasIntensity())
+	{
+		int offset = laserScan.getIntensityOffset();
+		output.intensity = ptr[offset];
+	}
+	else
+	{
+		output.intensity = intensity;
+	}
+
+	return output;
+}
+
+pcl::PointXYZRGBNormal laserScanToPointRGBNormal(const LaserScan & laserScan, int index, unsigned char r, unsigned char g, unsigned char b)
+{
+	UASSERT(!laserScan.isEmpty() && !laserScan.isCompressed() && index < laserScan.size());
+	pcl::PointXYZRGBNormal output;
+	const float * ptr = laserScan.data().ptr<float>(0, index);
+	output.x = ptr[0];
+	output.y = ptr[1];
+	if(!laserScan.is2d())
+	{
+		output.z = ptr[2];
+	}
+
+	if(laserScan.hasRGB())
+	{
+		int * ptrInt = (int*)ptr;
+		int indexRGB = laserScan.getRGBOffset();
+		output.b = (unsigned char)(ptrInt[indexRGB] & 0xFF);
+		output.g = (unsigned char)((ptrInt[indexRGB] >> 8) & 0xFF);
+		output.r = (unsigned char)((ptrInt[indexRGB] >> 16) & 0xFF);
+	}
+	else
+	{
+		output.r = r;
+		output.g = g;
+		output.b = b;
+	}
+
+	if(laserScan.hasNormals())
+	{
+		int offset = laserScan.getNormalsOffset();
+		output.normal_x = ptr[offset];
+		output.normal_y = ptr[offset+1];
+		output.normal_z = ptr[offset+2];
+	}
+
+	return output;
+}
+
+pcl::PointXYZINormal laserScanToPointINormal(const LaserScan & laserScan, int index, float intensity)
+{
+	UASSERT(!laserScan.isEmpty() && !laserScan.isCompressed() && index < laserScan.size());
+	pcl::PointXYZINormal output;
+	const float * ptr = laserScan.data().ptr<float>(0, index);
+	output.x = ptr[0];
+	output.y = ptr[1];
+	if(!laserScan.is2d())
+	{
+		output.z = ptr[2];
+	}
+
+	if(laserScan.hasIntensity())
+	{
+		int offset = laserScan.getIntensityOffset();
+		output.intensity = ptr[offset];
+	}
+	else
+	{
+		output.intensity = intensity;
+	}
+
+	if(laserScan.hasNormals())
+	{
+		int offset = laserScan.getNormalsOffset();
+		output.normal_x = ptr[offset];
+		output.normal_y = ptr[offset+1];
+		output.normal_z = ptr[offset+2];
+	}
+
+	return output;
+}
+
+void getMinMax3D(const cv::Mat & laserScan, cv::Point3f & min, cv::Point3f & max)
+{
+	UASSERT(!laserScan.empty());
+	UASSERT(laserScan.type() == CV_32FC2 || laserScan.type() == CV_32FC3 || laserScan.type() == CV_32FC(4) || laserScan.type() == CV_32FC(5) || laserScan.type() == CV_32FC(6) || laserScan.type() == CV_32FC(7));
+
+	const float * ptr = laserScan.ptr<float>(0, 0);
+	min.x = max.x = ptr[0];
+	min.y = max.y = ptr[1];
+	bool is3d = laserScan.channels() >= 3 && laserScan.channels() != 5;
+	min.z = max.z = is3d?ptr[2]:0.0f;
+	for(int i=1; i<laserScan.cols; ++i)
+	{
+		ptr = laserScan.ptr<float>(0, i);
+
+		if(ptr[0] < min.x) min.x = ptr[0];
+		else if(ptr[0] > max.x) max.x = ptr[0];
+
+		if(ptr[1] < min.y) min.y = ptr[1];
+		else if(ptr[1] > max.y) max.y = ptr[1];
+
+		if(is3d)
+		{
+			if(ptr[2] < min.z) min.z = ptr[2];
+			else if(ptr[2] > max.z) max.z = ptr[2];
+		}
+	}
+}
+void getMinMax3D(const cv::Mat & laserScan, pcl::PointXYZ & min, pcl::PointXYZ & max)
+{
+	cv::Point3f minCV, maxCV;
+	getMinMax3D(laserScan, minCV, maxCV);
+	min.x = minCV.x;
+	min.y = minCV.y;
+	min.z = minCV.z;
+	max.x = maxCV.x;
+	max.y = maxCV.y;
+	max.z = maxCV.z;
 }
 
 // inspired from ROS image_geometry/src/stereo_camera_model.cpp
@@ -1113,13 +2670,13 @@ cv::Point3f projectDisparityTo3D(
 // Register point cloud to camera (return registered depth image)
 cv::Mat projectCloudToCamera(
 		const cv::Size & imageSize,
-		const cv::Mat & cameraMatrixK, // /base_link -> /camera_link
+		const cv::Mat & cameraMatrixK,
 		const cv::Mat & laserScan,     // assuming laser scan points are already in /base_link coordinate
-		const rtabmap::Transform & cameraTransform)
+		const rtabmap::Transform & cameraTransform) // /base_link -> /camera_link
 {
 	UASSERT(!cameraTransform.isNull());
 	UASSERT(!laserScan.empty());
-	UASSERT(laserScan.type() == CV_32FC2 || laserScan.type() == CV_32FC3 || laserScan.type() == CV_32FC(6));
+	UASSERT(laserScan.type() == CV_32FC2 || laserScan.type() == CV_32FC3 || laserScan.type() == CV_32FC(4) || laserScan.type() == CV_32FC(5) || laserScan.type() == CV_32FC(6) || laserScan.type() == CV_32FC(7));
 	UASSERT(cameraMatrixK.type() == CV_64FC1 && cameraMatrixK.cols == 3 && cameraMatrixK.cols == 3);
 
 	float fx = cameraMatrixK.at<double>(0,0);
@@ -1133,42 +2690,62 @@ cv::Mat projectCloudToCamera(
 	int count = 0;
 	for(int i=0; i<laserScan.cols; ++i)
 	{
+		const float* ptr = laserScan.ptr<float>(0, i);
+
 		// Get 3D from laser scan
 		cv::Point3f ptScan;
-		if(laserScan.type() == CV_32FC2)
+		if(laserScan.type() == CV_32FC2 || laserScan.type() == CV_32FC(5))
 		{
-			ptScan.x = laserScan.at<cv::Vec2f>(i)[0];
-			ptScan.y = laserScan.at<cv::Vec2f>(i)[1];
+			// 2D scans
+			ptScan.x = ptr[0];
+			ptScan.y = ptr[1];
 			ptScan.z = 0;
 		}
-		else if(laserScan.type() == CV_32FC3)
+		else // 3D scans
 		{
-			ptScan.x = laserScan.at<cv::Vec3f>(i)[0];
-			ptScan.y = laserScan.at<cv::Vec3f>(i)[1];
-			ptScan.z = laserScan.at<cv::Vec3f>(i)[2];
-		}
-		else
-		{
-			ptScan.x = laserScan.at<cv::Vec6f>(i)[0];
-			ptScan.y = laserScan.at<cv::Vec6f>(i)[1];
-			ptScan.z = laserScan.at<cv::Vec6f>(i)[2];
+			ptScan.x = ptr[0];
+			ptScan.y = ptr[1];
+			ptScan.z = ptr[2];
 		}
 		ptScan = util3d::transformPoint(ptScan, t);
 
 		// re-project in camera frame
 		float z = ptScan.z;
-		float invZ = 1.0f/z;
-		int dx = (fx*ptScan.x)*invZ + cx;
-		int dy = (fy*ptScan.y)*invZ + cy;
 
-		if(z > 0.0f && uIsInBounds(dx, 0, registered.cols) && uIsInBounds(dy, 0, registered.rows))
+		bool set = false;
+		if(z > 0.0f)
 		{
-			++count;
-			float &zReg = registered.at<float>(dy, dx);
-			if(zReg == 0 || z < zReg)
+			float invZ = 1.0f/z;
+			float dx = (fx*ptScan.x)*invZ + cx;
+			float dy = (fy*ptScan.y)*invZ + cy;
+			int dx_low = dx;
+			int dy_low = dy;
+			int dx_high = dx + 0.5f;
+			int dy_high = dy + 0.5f;
+
+			if(uIsInBounds(dx_low, 0, registered.cols) && uIsInBounds(dy_low, 0, registered.rows))
 			{
-				zReg = z;
+				float &zReg = registered.at<float>(dy_low, dx_low);
+				if(zReg == 0 || z < zReg)
+				{
+					zReg = z;
+				}
+				set = true;
 			}
+			if((dx_low != dx_high || dy_low != dy_high) &&
+				uIsInBounds(dx_high, 0, registered.cols) && uIsInBounds(dy_high, 0, registered.rows))
+			{
+				float &zReg = registered.at<float>(dy_high, dx_high);
+				if(zReg == 0 || z < zReg)
+				{
+					zReg = z;
+				}
+				set = true;
+			}
+		}
+		if(set)
+		{
+			count++;
 		}
 	}
 	UDEBUG("Points in camera=%d/%d", count, laserScan.cols);
@@ -1178,9 +2755,9 @@ cv::Mat projectCloudToCamera(
 
 cv::Mat projectCloudToCamera(
 		const cv::Size & imageSize,
-		const cv::Mat & cameraMatrixK, // /base_link -> /camera_link
+		const cv::Mat & cameraMatrixK,
 		const pcl::PointCloud<pcl::PointXYZ>::Ptr laserScan,  // assuming points are already in /base_link coordinate
-		const rtabmap::Transform & cameraTransform)
+		const rtabmap::Transform & cameraTransform)           // /base_link -> /camera_link
 {
 	UASSERT(!cameraTransform.isNull());
 	UASSERT(!laserScan->empty());
@@ -1203,21 +2780,170 @@ cv::Mat projectCloudToCamera(
 
 		// re-project in camera frame
 		float z = ptScan.z;
-		float invZ = 1.0f/z;
-		int dx = (fx*ptScan.x)*invZ + cx;
-		int dy = (fy*ptScan.y)*invZ + cy;
-
-		if(z > 0.0f && uIsInBounds(dx, 0, registered.cols) && uIsInBounds(dy, 0, registered.rows))
+		bool set = false;
+		if(z > 0.0f)
 		{
-			++count;
-			float &zReg = registered.at<float>(dy, dx);
-			if(zReg == 0 || z < zReg)
+			float invZ = 1.0f/z;
+			float dx = (fx*ptScan.x)*invZ + cx;
+			float dy = (fy*ptScan.y)*invZ + cy;
+			int dx_low = dx;
+			int dy_low = dy;
+			int dx_high = dx + 0.5f;
+			int dy_high = dy + 0.5f;
+			if(uIsInBounds(dx_low, 0, registered.cols) && uIsInBounds(dy_low, 0, registered.rows))
 			{
-				zReg = z;
+				set = true;
+				float &zReg = registered.at<float>(dy_low, dx_low);
+				if(zReg == 0 || z < zReg)
+				{
+					zReg = z;
+				}
 			}
+			if((dx_low != dx_high || dy_low != dy_high) &&
+				uIsInBounds(dx_high, 0, registered.cols) && uIsInBounds(dy_high, 0, registered.rows))
+			{
+				set = true;
+				float &zReg = registered.at<float>(dy_high, dx_high);
+				if(zReg == 0 || z < zReg)
+				{
+					zReg = z;
+				}
+			}
+		}
+		if(set)
+		{
+			count++;
 		}
 	}
 	UDEBUG("Points in camera=%d/%d", count, (int)laserScan->size());
+
+	return registered;
+}
+
+cv::Mat projectCloudToCamera(
+		const cv::Size & imageSize,
+		const cv::Mat & cameraMatrixK,
+		const pcl::PCLPointCloud2::Ptr laserScan,  // assuming points are already in /base_link coordinate
+		const rtabmap::Transform & cameraTransform)           // /base_link -> /camera_link
+{
+	UASSERT(!cameraTransform.isNull());
+	UASSERT(!laserScan->data.empty());
+	UASSERT(cameraMatrixK.type() == CV_64FC1 && cameraMatrixK.cols == 3 && cameraMatrixK.cols == 3);
+
+	float fx = cameraMatrixK.at<double>(0,0);
+	float fy = cameraMatrixK.at<double>(1,1);
+	float cx = cameraMatrixK.at<double>(0,2);
+	float cy = cameraMatrixK.at<double>(1,2);
+
+	cv::Mat registered = cv::Mat::zeros(imageSize, CV_32FC1);
+	Transform t = cameraTransform.inverse();
+
+	pcl::MsgFieldMap field_map;
+	pcl::createMapping<pcl::PointXYZ> (laserScan->fields, field_map);
+
+	int count = 0;
+	if(field_map.size() == 1)
+	{
+		for (uint32_t row = 0; row < laserScan->height; ++row)
+		{
+			const uint8_t* row_data = &laserScan->data[row * laserScan->row_step];
+			for (uint32_t col = 0; col < laserScan->width; ++col)
+			{
+				const uint8_t* msg_data = row_data + col * laserScan->point_step;
+				pcl::PointXYZ ptScan;
+				memcpy (&ptScan, msg_data + field_map.front().serialized_offset, field_map.front().size);
+				ptScan = util3d::transformPoint(ptScan, t);
+
+				// re-project in camera frame
+				float z = ptScan.z;
+				bool set = false;
+				if(z > 0.0f)
+				{
+					float invZ = 1.0f/z;
+					float dx = (fx*ptScan.x)*invZ + cx;
+					float dy = (fy*ptScan.y)*invZ + cy;
+					int dx_low = dx;
+					int dy_low = dy;
+					int dx_high = dx + 0.5f;
+					int dy_high = dy + 0.5f;
+					if(uIsInBounds(dx_low, 0, registered.cols) && uIsInBounds(dy_low, 0, registered.rows))
+					{
+						set = true;
+						float &zReg = registered.at<float>(dy_low, dx_low);
+						if(zReg == 0 || z < zReg)
+						{
+							zReg = z;
+						}
+					}
+					if((dx_low != dx_high || dy_low != dy_high) &&
+						uIsInBounds(dx_high, 0, registered.cols) && uIsInBounds(dy_high, 0, registered.rows))
+					{
+						set = true;
+						float &zReg = registered.at<float>(dy_high, dx_high);
+						if(zReg == 0 || z < zReg)
+						{
+							zReg = z;
+						}
+					}
+				}
+				if(set)
+				{
+					count++;
+				}
+			}
+		}
+	}
+	else
+	{
+		UERROR("field map pcl::pointXYZ not found!");
+	}
+/*
+	int count = 0;
+	for(int i=0; i<(int)laserScan->size(); ++i)
+	{
+		// Get 3D from laser scan
+		pcl::PointXYZ ptScan = laserScan->at(i);
+		ptScan = util3d::transformPoint(ptScan, t);
+
+		// re-project in camera frame
+		float z = ptScan.z;
+		bool set = false;
+		if(z > 0.0f)
+		{
+			float invZ = 1.0f/z;
+			float dx = (fx*ptScan.x)*invZ + cx;
+			float dy = (fy*ptScan.y)*invZ + cy;
+			int dx_low = dx;
+			int dy_low = dy;
+			int dx_high = dx + 0.5f;
+			int dy_high = dy + 0.5f;
+			if(uIsInBounds(dx_low, 0, registered.cols) && uIsInBounds(dy_low, 0, registered.rows))
+			{
+				set = true;
+				float &zReg = registered.at<float>(dy_low, dx_low);
+				if(zReg == 0 || z < zReg)
+				{
+					zReg = z;
+				}
+			}
+			if((dx_low != dx_high || dy_low != dy_high) &&
+				uIsInBounds(dx_high, 0, registered.cols) && uIsInBounds(dy_high, 0, registered.rows))
+			{
+				set = true;
+				float &zReg = registered.at<float>(dy_high, dx_high);
+				if(zReg == 0 || z < zReg)
+				{
+					zReg = z;
+				}
+			}
+		}
+		if(set)
+		{
+			count++;
+		}
+	}
+	*/
+	UDEBUG("Points in camera=%d/%d", count, (int)laserScan->data.size());
 
 	return registered;
 }
@@ -1330,65 +3056,6 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr concatenateClouds(const std::list<pcl::Po
 	return cloud;
 }
 
-pcl::TextureMesh::Ptr concatenateTextureMeshes(const std::list<pcl::TextureMesh::Ptr> & meshes)
-{
-	pcl::TextureMesh::Ptr output(new pcl::TextureMesh);
-	std::map<std::string, int> addedMaterials; //<file, index>
-	for(std::list<pcl::TextureMesh::Ptr>::const_iterator iter = meshes.begin(); iter!=meshes.end(); ++iter)
-	{
-		// append point cloud
-		int polygonStep = output->cloud.height * output->cloud.width;
-		pcl::PCLPointCloud2 tmp;
-		pcl::concatenatePointCloud(output->cloud, iter->get()->cloud, tmp);
-		output->cloud = tmp;
-
-		UASSERT((*iter)->tex_polygons.size() == (*iter)->tex_coordinates.size() &&
-				(*iter)->tex_polygons.size() == (*iter)->tex_materials.size());
-
-		int materialCount = (*iter)->tex_polygons.size();
-		for(int i=0; i<materialCount; ++i)
-		{
-			std::map<std::string, int>::iterator jter = addedMaterials.find((*iter)->tex_materials[i].tex_file);
-			int index;
-			if(jter != addedMaterials.end())
-			{
-				index = jter->second;
-			}
-			else
-			{
-				addedMaterials.insert(std::make_pair((*iter)->tex_materials[i].tex_file, output->tex_materials.size()));
-				index = output->tex_materials.size();
-				output->tex_materials.push_back((*iter)->tex_materials[i]);
-				output->tex_materials.back().tex_name = uFormat("material_%d", index);
-				output->tex_polygons.resize(output->tex_polygons.size() + 1);
-				output->tex_coordinates.resize(output->tex_coordinates.size() + 1);
-			}
-
-			// update and append polygon indices
-			int oi = output->tex_polygons[index].size();
-			output->tex_polygons[index].resize(output->tex_polygons[index].size() + (*iter)->tex_polygons[i].size());
-			for(unsigned int j=0; j<(*iter)->tex_polygons[i].size(); ++j)
-			{
-				pcl::Vertices polygon = (*iter)->tex_polygons[i][j];
-				for(unsigned int k=0; k<polygon.vertices.size(); ++k)
-				{
-					polygon.vertices[k] += polygonStep;
-				}
-				output->tex_polygons[index][oi+j] = polygon;
-			}
-
-			// append uv coordinates
-			oi = output->tex_coordinates[index].size();
-			output->tex_coordinates[index].resize(output->tex_coordinates[index].size() + (*iter)->tex_coordinates[i].size());
-			for(unsigned int j=0; j<(*iter)->tex_coordinates[i].size(); ++j)
-			{
-				output->tex_coordinates[index][oi+j] = (*iter)->tex_coordinates[i][j];
-			}
-		}
-	}
-	return output;
-}
-
 pcl::IndicesPtr concatenate(const std::vector<pcl::IndicesPtr> & indices)
 {
 	//compute total size
@@ -1458,64 +3125,59 @@ void savePCDWords(
 	}
 }
 
-pcl::PointCloud<pcl::PointXYZ>::Ptr loadBINCloud(const std::string & fileName, int dim)
+cv::Mat loadBINScan(const std::string & fileName)
 {
-	UASSERT(dim > 0);
-	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
-
+	cv::Mat output;
 	long bytes = UFile::length(fileName);
 	if(bytes)
 	{
+		int dim = 4;
 		UASSERT(bytes % sizeof(float) == 0);
-		int32_t num = bytes/sizeof(float);
+		size_t num = bytes/sizeof(float);
 		UASSERT(num % dim == 0);
-		float *data = (float*)malloc(num*sizeof(float));
-
-		// pointers
-		float *px = data+0;
-		float *py = data+1;
-		float *pz = data+2;
-		float *pr = data+3;
+		output = cv::Mat(1, num/dim, CV_32FC(dim));
 
 		// load point cloud
 		FILE *stream;
 		stream = fopen (fileName.c_str(),"rb");
-		num = fread(data,sizeof(float),num,stream)/4;
-		cloud->resize(num);
-		for (int32_t i=0; i<num; i++) {
-			(*cloud)[i].x = *px;
-			(*cloud)[i].y = *py;
-			(*cloud)[i].z = *pz;
-			px+=4; py+=4; pz+=4; pr+=4;
-		}
+		size_t actualReadNum = fread(output.data,sizeof(float),num,stream);
+		UASSERT(num == actualReadNum);
 		fclose(stream);
 	}
 
-	return cloud;
+	return output;
 }
 
-cv::Mat loadScan(
-		const std::string & path,
-		const Transform & transform,
-		int downsampleStep,
-		float voxelSize,
-		int normalsK)
+pcl::PointCloud<pcl::PointXYZ>::Ptr loadBINCloud(const std::string & fileName)
 {
-	cv::Mat scan;
-	UDEBUG("Loading scan (normalsK=%d) : %s", normalsK, path.c_str());
-	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud = loadCloud(path, Transform::getIdentity(), downsampleStep, voxelSize);
-	if(normalsK > 0 && cloud->size())
+	return laserScanToPointCloud(loadScan(fileName));
+}
+
+pcl::PointCloud<pcl::PointXYZ>::Ptr loadBINCloud(const std::string & fileName, int dim)
+{
+	return loadBINCloud(fileName);
+}
+
+LaserScan loadScan(const std::string & path)
+{
+	std::string fileName = UFile::getName(path);
+	if(UFile::getExtension(fileName).compare("bin") == 0)
 	{
-		pcl::PointCloud<pcl::Normal>::Ptr normals = util3d::computeNormals(cloud, normalsK);
-		pcl::PointCloud<pcl::PointNormal>::Ptr cloudNormals(new pcl::PointCloud<pcl::PointNormal>);
-		pcl::concatenateFields(*cloud, *normals, *cloudNormals);
-		scan = util3d::laserScanFromPointCloud(*cloudNormals, transform);
+		return LaserScan(loadBINScan(path), 0, 0, LaserScan::kXYZI);
+	}
+	else if(UFile::getExtension(fileName).compare("pcd") == 0)
+	{
+		pcl::PCLPointCloud2::Ptr cloud(new pcl::PCLPointCloud2);
+		pcl::io::loadPCDFile(path, *cloud);
+		return laserScanFromPointCloud(*cloud);
 	}
 	else
 	{
-		scan = util3d::laserScanFromPointCloud(*cloud, transform);
+		pcl::PCLPointCloud2::Ptr cloud(new pcl::PCLPointCloud2);
+		pcl::io::loadPLYFile(path, *cloud);
+		return laserScanFromPointCloud(*cloud);
 	}
-	return scan;
+	return LaserScan();
 }
 
 pcl::PointCloud<pcl::PointXYZ>::Ptr loadCloud(
@@ -1530,7 +3192,7 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr loadCloud(
 	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
 	if(UFile::getExtension(fileName).compare("bin") == 0)
 	{
-		cloud = util3d::loadBINCloud(path, 4); // Assume KITTI velodyne format
+		cloud = util3d::loadBINCloud(path); // Assume KITTI velodyne format
 	}
 	else if(UFile::getExtension(fileName).compare("pcd") == 0)
 	{

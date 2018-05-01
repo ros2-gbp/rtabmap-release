@@ -25,8 +25,8 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifndef REGISTRATION_H_
-#define REGISTRATION_H_
+#ifndef RTABMAP_REGISTRATION_H_
+#define RTABMAP_REGISTRATION_H_
 
 #include "rtabmap/core/RtabmapExp.h" // DLL export/import defines
 
@@ -45,6 +45,7 @@ public:
 		kTypeIcp = 1,
 		kTypeVisIcp = 2
 	};
+	static double COVARIANCE_EPSILON;
 
 public:
 	static Registration * create(const ParametersMap & parameters);
@@ -58,10 +59,12 @@ public:
 	bool isScanRequired() const;
 	bool isUserDataRequired() const;
 
+	bool canUseGuess() const;
+
 	int getMinVisualCorrespondences() const;
 	float getMinGeometryCorrespondencesRatio() const;
 
-	bool varianceFromInliersCount() const {return varianceFromInliersCount_;}
+	bool repeatOnce() const {return repeatOnce_;}
 	bool force3DoF() const {return force3DoF_;}
 
 	// take ownership!
@@ -75,7 +78,7 @@ public:
 	Transform computeTransformation(
 			const SensorData & from,
 			const SensorData & to,
-			Transform SensorData = Transform::getIdentity(),
+			Transform guess = Transform::getIdentity(),
 			RegistrationInfo * info = 0) const;
 
 	Transform computeTransformationMod(
@@ -99,11 +102,12 @@ protected:
 	virtual bool isImageRequiredImpl() const {return false;}
 	virtual bool isScanRequiredImpl() const {return false;}
 	virtual bool isUserDataRequiredImpl() const {return false;}
+	virtual bool canUseGuessImpl() const {return false;}
 	virtual int getMinVisualCorrespondencesImpl() const {return 0;}
 	virtual float getMinGeometryCorrespondencesRatioImpl() const {return 0.0f;}
 
 private:
-	bool varianceFromInliersCount_;
+	bool repeatOnce_;
 	bool force3DoF_;
 	Registration * child_;
 
@@ -111,4 +115,4 @@ private:
 
 }
 
-#endif /* REGISTRATION_H_ */
+#endif /* RTABMAP_REGISTRATION_H_ */

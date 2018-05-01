@@ -39,6 +39,11 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <opencv2/video/tracking.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <map>
+#include <Eigen/Core>
+
+#if CV_MAJOR_VERSION >= 3
+#include <opencv2/photo/photo.hpp>
+#endif
 
 namespace rtabmap
 {
@@ -121,14 +126,14 @@ std::vector<cv::Point2f> calcStereoCorrespondences(
 		cv::Size winSize,
 		int maxLevel,
 		int iterations,
-		int minDisparity,
-		int maxDisparity,
+		float minDisparityF,
+		float maxDisparityF,
 		bool ssdApproach)
 {
 	UDEBUG("winSize=(%d,%d)", winSize.width, winSize.height);
 	UDEBUG("maxLevel=%d", maxLevel);
-	UDEBUG("minDisparity=%d", minDisparity);
-	UDEBUG("maxDisparity=%d", maxDisparity);
+	UDEBUG("minDisparity=%f", minDisparityF);
+	UDEBUG("maxDisparity=%f", maxDisparityF);
 	UDEBUG("iterations=%d", iterations);
 	UDEBUG("ssdApproach=%d", ssdApproach?1:0);
 
@@ -159,6 +164,8 @@ std::vector<cv::Point2f> calcStereoCorrespondences(
 	int totalIterations = 0;
 	int noSubPixel = 0;
 	int added = 0;
+	int minDisparity = std::floor(minDisparityF);
+	int maxDisparity = std::floor(maxDisparityF);
 	for(unsigned int i=0; i<leftCorners.size(); ++i)
 	{
 		int oi=0;
@@ -311,7 +318,8 @@ std::vector<cv::Point2f> calcStereoCorrespondences(
 					cache.insert(std::make_pair(previousXc, previousVc));
 				}
 
-				if(xc < leftCorners[i].x+float(d)-1.0f || xc > leftCorners[i].x+float(d)+1.0f)
+				if(/*xc < leftCorners[i].x+float(d)-1.0f || xc > leftCorners[i].x+float(d)+1.0f ||*/
+					float(leftCorners[i].x - xc) <= minDisparityF)
 				{
 					reject = true;
 					break;
@@ -934,7 +942,7 @@ float getDepth(
 		const cv::Mat & depthImage,
 		float x, float y,
 		bool smoothing,
-		float maxZError,
+		float depthErrorRatio,
 		bool estWithNeighborsIfNull)
 {
 	UASSERT(!depthImage.empty());
@@ -1016,10 +1024,15 @@ float getDepth(
 							tmp = d;
 							++count;
 						}
-						else if(fabs(d - tmp) < maxZError)
+						else
 						{
-							tmp+=d;
-							++count;
+							float depthError = depthErrorRatio * tmp;
+							if(fabs(d - tmp/float(count)) < depthError)
+
+							{
+								tmp += d;
+								++count;
+							}
 						}
 					}
 				}
@@ -1057,8 +1070,10 @@ float getDepth(
 							d = depthImage.at<float>(vv,uu);
 						}
 
+						float depthError = depthErrorRatio * depth;
+
 						// ignore if not valid or depth difference is too high
-						if(d != 0.0f && uIsFinite(d) && fabs(d - depth) < maxZError)
+						if(d != 0.0f && uIsFinite(d) && fabs(d - depth) < depthError)
 						{
 							if(uu == u || vv == v)
 							{
@@ -1089,6 +1104,94 @@ float getDepth(
 	return depth;
 }
 
+cv::Rect computeRoi(const cv::Mat & image, const std::string & roiRatios)
+{
+	return computeRoi(image.size(), roiRatios);
+}
+
+cv::Rect computeRoi(const cv::Size & imageSize, const std::string & roiRatios)
+{
+	std::list<std::string> strValues = uSplit(roiRatios, ' ');
+	if(strValues.size() != 4)
+	{
+		UERROR("The number of values must be 4 (roi=\"%s\")", roiRatios.c_str());
+	}
+	else
+	{
+		std::vector<float> values(4);
+		unsigned int i=0;
+		for(std::list<std::string>::iterator iter = strValues.begin(); iter!=strValues.end(); ++iter)
+		{
+			values[i] = uStr2Float(*iter);
+			++i;
+		}
+
+		if(values[0] >= 0 && values[0] < 1 && values[0] < 1.0f-values[1] &&
+			values[1] >= 0 && values[1] < 1 && values[1] < 1.0f-values[0] &&
+			values[2] >= 0 && values[2] < 1 && values[2] < 1.0f-values[3] &&
+			values[3] >= 0 && values[3] < 1 && values[3] < 1.0f-values[2])
+		{
+			return computeRoi(imageSize, values);
+		}
+		else
+		{
+			UERROR("The roi ratios are not valid (roi=\"%s\")", roiRatios.c_str());
+		}
+	}
+	return cv::Rect();
+}
+
+cv::Rect computeRoi(const cv::Mat & image, const std::vector<float> & roiRatios)
+{
+	return computeRoi(image.size(), roiRatios);
+}
+
+cv::Rect computeRoi(const cv::Size & imageSize, const std::vector<float> & roiRatios)
+{
+	if(imageSize.height!=0 && imageSize.width!= 0 && roiRatios.size() == 4)
+	{
+		float width = imageSize.width;
+		float height = imageSize.height;
+		cv::Rect roi(0, 0, width, height);
+		UDEBUG("roi ratios = %f, %f, %f, %f", roiRatios[0],roiRatios[1],roiRatios[2],roiRatios[3]);
+		UDEBUG("roi = %d, %d, %d, %d", roi.x, roi.y, roi.width, roi.height);
+
+		//left roi
+		if(roiRatios[0] > 0 && roiRatios[0] < 1.0f - roiRatios[1])
+		{
+			roi.x = width * roiRatios[0];
+		}
+
+		//right roi
+		if(roiRatios[1] > 0 && roiRatios[1] < 1.0f - roiRatios[0])
+		{
+			roi.width -= width * roiRatios[1];
+		}
+		roi.width -= roi.x;
+
+		//top roi
+		if(roiRatios[2] > 0 && roiRatios[2] < 1.0f - roiRatios[3])
+		{
+			roi.y = height * roiRatios[2];
+		}
+
+		//bottom roi
+		if(roiRatios[3] > 0 && roiRatios[3] < 1.0f - roiRatios[2])
+		{
+			roi.height -= height * roiRatios[3];
+		}
+		roi.height -= roi.y;
+		UDEBUG("roi = %d, %d, %d, %d", roi.x, roi.y, roi.width, roi.height);
+
+		return roi;
+	}
+	else
+	{
+		UERROR("Image is null or _roiRatios(=%d) != 4", roiRatios.size());
+		return cv::Rect();
+	}
+}
+
 cv::Mat decimate(const cv::Mat & image, int decimation)
 {
 	UASSERT(decimation >= 1);
@@ -1099,7 +1202,9 @@ cv::Mat decimate(const cv::Mat & image, int decimation)
 		{
 			if((image.type() == CV_32FC1 || image.type()==CV_16UC1))
 			{
-				UASSERT_MSG(image.rows % decimation == 0 && image.cols % decimation == 0, "Decimation of depth images should be exact!");
+				UASSERT_MSG(image.rows % decimation == 0 && image.cols % decimation == 0,
+						uFormat("Decimation of depth images should be exact! (decimation=%d, size=%dx%d)",
+						decimation, image.cols, image.rows).c_str());
 
 				out = cv::Mat(image.rows/decimation, image.cols/decimation, image.type());
 				if(image.type() == CV_32FC1)
@@ -1138,7 +1243,7 @@ cv::Mat decimate(const cv::Mat & image, int decimation)
 
 cv::Mat interpolate(const cv::Mat & image, int factor, float depthErrorRatio)
 {
-	UASSERT(factor >= 1);
+	UASSERT_MSG(factor >= 1, uFormat("factor=%d", factor).c_str());
 	cv::Mat out;
 	if(!image.empty())
 	{
@@ -1251,6 +1356,7 @@ cv::Mat interpolate(const cv::Mat & image, int factor, float depthErrorRatio)
 cv::Mat registerDepth(
 		const cv::Mat & depth,
 		const cv::Mat & depthK,
+		const cv::Size & colorSize,
 		const cv::Mat & colorK,
 		const rtabmap::Transform & transform)
 {
@@ -1270,10 +1376,13 @@ cv::Mat registerDepth(
 	float rcx = colorK.at<double>(0,2);
 	float rcy = colorK.at<double>(1,2);
 
+	//UDEBUG("depth(%dx%d) fx=%f fy=%f cx=%f cy=%f", depth.cols, depth.rows, fx, fy, cx, cy);
+	//UDEBUG("color(%dx%d) fx=%f fy=%f cx=%f cy=%f", colorSize.width, colorSize.height, rfx, rfy, rcx, rcy);
+
 	Eigen::Affine3f proj = transform.toEigen3f();
 	Eigen::Vector4f P4,P3;
 	P4[3] = 1;
-	cv::Mat registered = cv::Mat::zeros(depth.rows, depth.cols, depth.type());
+	cv::Mat registered = cv::Mat::zeros(colorSize, depth.type());
 
 	bool depthInMM = depth.type() == CV_16UC1;
 	for(int y=0; y<depth.rows; ++y)
@@ -1321,18 +1430,29 @@ cv::Mat registerDepth(
 	return registered;
 }
 
-cv::Mat fillDepthHoles(const cv::Mat & registeredDepth, int maximumHoleSize, float errorRatio)
+cv::Mat fillDepthHoles(const cv::Mat & depth, int maximumHoleSize, float errorRatio)
 {
-	UASSERT(registeredDepth.type() == CV_16UC1);
+	UASSERT(depth.type() == CV_16UC1 || depth.type() == CV_32FC1);
 	UASSERT(maximumHoleSize > 0);
-	cv::Mat output = registeredDepth.clone();
-	for(int y=0; y<registeredDepth.rows-2; ++y)
+	cv::Mat output = depth.clone();
+	bool isMM = depth.type() == CV_16UC1;
+	for(int y=0; y<depth.rows-2; ++y)
 	{
-		for(int x=0; x<registeredDepth.cols-2; ++x)
+		for(int x=0; x<depth.cols-2; ++x)
 		{
-			float a = registeredDepth.at<unsigned short>(y, x);
-			float bRight = registeredDepth.at<unsigned short>(y, x+1);
-			float bDown = registeredDepth.at<unsigned short>(y+1, x);
+			float a, bRight, bDown;
+			if(isMM)
+			{
+				a = depth.at<unsigned short>(y, x);
+				bRight = depth.at<unsigned short>(y, x+1);
+				bDown = depth.at<unsigned short>(y+1, x);
+			}
+			else
+			{
+				a = depth.at<float>(y, x);
+				bRight = depth.at<float>(y, x+1);
+				bDown = depth.at<float>(y+1, x);
+			}
 
 			if(a > 0.0f && (bRight == 0.0f || bDown == 0.0f))
 			{
@@ -1344,13 +1464,13 @@ cv::Mat fillDepthHoles(const cv::Mat & registeredDepth, int maximumHoleSize, flo
 					// horizontal
 					if(!horizontalSet)
 					{
-						if(x+1+h >= registeredDepth.cols)
+						if(x+1+h >= depth.cols)
 						{
 							horizontalSet = true;
 						}
 						else
 						{
-							float c = registeredDepth.at<unsigned short>(y, x+1+h);
+							float c = isMM?depth.at<unsigned short>(y, x+1+h):depth.at<float>(y, x+1+h);
 							if(c == 0)
 							{
 								// ignore this size
@@ -1363,16 +1483,36 @@ cv::Mat fillDepthHoles(const cv::Mat & registeredDepth, int maximumHoleSize, flo
 								{
 									//linear interpolation
 									float slope = (c-a)/float(h+1);
-									for(int z=x+1; z<x+1+h; ++z)
+									if(isMM)
 									{
-										if(output.at<unsigned short>(y, z) == 0)
+										for(int z=x+1; z<x+1+h; ++z)
 										{
-											output.at<unsigned short>(y, z) = (unsigned short)(a+(slope*float(z-x)));
+											unsigned short & value = output.at<unsigned short>(y, z);
+											if(value == 0)
+											{
+												value = (unsigned short)(a+(slope*float(z-x)));
+											}
+											else
+											{
+												// average with the previously set value
+												value = (value+(unsigned short)(a+(slope*float(z-x))))/2;
+											}
 										}
-										else
+									}
+									else
+									{
+										for(int z=x+1; z<x+1+h; ++z)
 										{
-											// average with the previously set value
-											output.at<unsigned short>(y, z) = (output.at<unsigned short>(y, z)+(unsigned short)(a+(slope*float(z-x))))/2;
+											float & value = output.at<float>(y, z);
+											if(value == 0)
+											{
+												value = a+(slope*float(z-x));
+											}
+											else
+											{
+												// average with the previously set value
+												value = (value+(a+(slope*float(z-x))))/2;
+											}
 										}
 									}
 								}
@@ -1385,13 +1525,13 @@ cv::Mat fillDepthHoles(const cv::Mat & registeredDepth, int maximumHoleSize, flo
 					// vertical
 					if(!verticalSet)
 					{
-						if(y+1+h >= registeredDepth.rows)
+						if(y+1+h >= depth.rows)
 						{
 							verticalSet = true;
 						}
 						else
 						{
-							float c = registeredDepth.at<unsigned short>(y+1+h, x);
+							float c = isMM?depth.at<unsigned short>(y+1+h, x):depth.at<float>(y+1+h, x);
 							if(c == 0)
 							{
 								// ignore this size
@@ -1404,16 +1544,36 @@ cv::Mat fillDepthHoles(const cv::Mat & registeredDepth, int maximumHoleSize, flo
 								{
 									//linear interpolation
 									float slope = (c-a)/float(h+1);
-									for(int z=y+1; z<y+1+h; ++z)
+									if(isMM)
 									{
-										if(output.at<unsigned short>(z, x) == 0)
+										for(int z=y+1; z<y+1+h; ++z)
 										{
-											output.at<unsigned short>(z, x) = (unsigned short)(a+(slope*float(z-y)));
+											unsigned short & value = output.at<unsigned short>(z, x);
+											if(value == 0)
+											{
+												value = (unsigned short)(a+(slope*float(z-y)));
+											}
+											else
+											{
+												// average with the previously set value
+												value = (value+(unsigned short)(a+(slope*float(z-y))))/2;
+											}
 										}
-										else
+									}
+									else
+									{
+										for(int z=y+1; z<y+1+h; ++z)
 										{
-											// average with the previously set value
-											output.at<unsigned short>(z, x) = (output.at<unsigned short>(z, x)+(unsigned short)(a+(slope*float(z-y))))/2;
+											float & value = output.at<float>(z, x);
+											if(value == 0)
+											{
+												value = (a+(slope*float(z-y)));
+											}
+											else
+											{
+												// average with the previously set value
+												value = (value+(a+(slope*float(z-y))))/2;
+											}
 										}
 									}
 								}
@@ -1530,6 +1690,342 @@ void fillRegisteredDepthHoles(cv::Mat & registeredDepth, bool vertical, bool hor
 			}
 		}
 	}
+}
+
+// used only for fastBilateralFiltering() below
+class Array3D
+  {
+	public:
+	  Array3D (const size_t width, const size_t height, const size_t depth)
+	  {
+		x_dim_ = width;
+		y_dim_ = height;
+		z_dim_ = depth;
+		v_ = std::vector<Eigen::Vector2f> (width*height*depth, Eigen::Vector2f (0.0f, 0.0f));
+	  }
+
+	  inline Eigen::Vector2f&
+	  operator () (const size_t x, const size_t y, const size_t z)
+	  { return v_[(x * y_dim_ + y) * z_dim_ + z]; }
+
+	  inline const Eigen::Vector2f&
+	  operator () (const size_t x, const size_t y, const size_t z) const
+	  { return v_[(x * y_dim_ + y) * z_dim_ + z]; }
+
+	  inline void
+	  resize (const size_t width, const size_t height, const size_t depth)
+	  {
+		x_dim_ = width;
+		y_dim_ = height;
+		z_dim_ = depth;
+		v_.resize (x_dim_ * y_dim_ * z_dim_);
+	  }
+
+	  Eigen::Vector2f
+	  trilinear_interpolation (const float x,
+							   const float y,
+							   const float z)
+	  {
+	    const size_t x_index  = clamp (0, x_dim_ - 1, static_cast<size_t> (x));
+	    const size_t xx_index = clamp (0, x_dim_ - 1, x_index + 1);
+
+	    const size_t y_index  = clamp (0, y_dim_ - 1, static_cast<size_t> (y));
+	    const size_t yy_index = clamp (0, y_dim_ - 1, y_index + 1);
+
+	    const size_t z_index  = clamp (0, z_dim_ - 1, static_cast<size_t> (z));
+	    const size_t zz_index = clamp (0, z_dim_ - 1, z_index + 1);
+
+	    const float x_alpha = x - static_cast<float> (x_index);
+	    const float y_alpha = y - static_cast<float> (y_index);
+	    const float z_alpha = z - static_cast<float> (z_index);
+
+	    return
+	        (1.0f-x_alpha) * (1.0f-y_alpha) * (1.0f-z_alpha) * (*this)(x_index, y_index, z_index) +
+	        x_alpha        * (1.0f-y_alpha) * (1.0f-z_alpha) * (*this)(xx_index, y_index, z_index) +
+	        (1.0f-x_alpha) * y_alpha        * (1.0f-z_alpha) * (*this)(x_index, yy_index, z_index) +
+	        x_alpha        * y_alpha        * (1.0f-z_alpha) * (*this)(xx_index, yy_index, z_index) +
+	        (1.0f-x_alpha) * (1.0f-y_alpha) * z_alpha        * (*this)(x_index, y_index, zz_index) +
+	        x_alpha        * (1.0f-y_alpha) * z_alpha        * (*this)(xx_index, y_index, zz_index) +
+	        (1.0f-x_alpha) * y_alpha        * z_alpha        * (*this)(x_index, yy_index, zz_index) +
+	        x_alpha        * y_alpha        * z_alpha        * (*this)(xx_index, yy_index, zz_index);
+	  }
+
+	  static inline size_t
+	  clamp (const size_t min_value,
+			 const size_t max_value,
+			 const size_t x)
+	  {
+	    if (x >= min_value && x <= max_value)
+	    {
+	      return x;
+	    }
+	    else if (x < min_value)
+	    {
+	      return (min_value);
+	    }
+	    else
+	    {
+	      return (max_value);
+	    }
+	  }
+
+	  inline size_t
+	  x_size () const
+	  { return x_dim_; }
+
+	  inline size_t
+	  y_size () const
+	  { return y_dim_; }
+
+	  inline size_t
+	  z_size () const
+	  { return z_dim_; }
+
+	  inline std::vector<Eigen::Vector2f >::iterator
+	  begin ()
+	  { return v_.begin (); }
+
+	  inline std::vector<Eigen::Vector2f >::iterator
+	  end ()
+	  { return v_.end (); }
+
+	  inline std::vector<Eigen::Vector2f >::const_iterator
+	  begin () const
+	  { return v_.begin (); }
+
+	  inline std::vector<Eigen::Vector2f >::const_iterator
+	  end () const
+	  { return v_.end (); }
+
+	private:
+	  std::vector<Eigen::Vector2f > v_;
+	  size_t x_dim_, y_dim_, z_dim_;
+  };
+
+/**
+ * Converted pcl::FastBilateralFiltering class to 2d depth image
+ */
+cv::Mat fastBilateralFiltering(const cv::Mat & depth, float sigmaS, float sigmaR, bool earlyDivision)
+{
+	UASSERT(!depth.empty() && (depth.type() == CV_32FC1 || depth.type() == CV_16UC1));
+	UDEBUG("Begin: depth float=%d %dx%d sigmaS=%f sigmaR=%f earlDivision=%d",
+			depth.type()==CV_32FC1?1:0, depth.cols, depth.rows, sigmaS, sigmaR, earlyDivision?1:0);
+
+	cv::Mat output = cv::Mat::zeros(depth.size(), CV_32FC1);
+
+	float base_max = -std::numeric_limits<float>::max ();
+	float base_min = std::numeric_limits<float>::max ();
+	bool found_finite = false;
+	for (int x = 0; x < depth.cols; ++x)
+		for (int y = 0; y < depth.rows; ++y)
+		{
+			float z = depth.type()==CV_32FC1?depth.at<float>(y, x):float(depth.at<unsigned short>(y, x))/1000.0f;
+			if (z > 0.0f && uIsFinite(z))
+			{
+				if (base_max < z)
+					base_max = z;
+				if (base_min > z)
+					base_min = z;
+				found_finite = true;
+			}
+		}
+	if (!found_finite)
+	{
+		UWARN("Given an empty depth image. Doing nothing.");
+		return cv::Mat();
+	}
+	UDEBUG("base_min=%f base_max=%f", base_min, base_max);
+
+	const float base_delta = base_max - base_min;
+
+	const size_t padding_xy = 2;
+	const size_t padding_z  = 2;
+
+	const size_t small_width  = static_cast<size_t> (static_cast<float> (depth.cols  - 1) / sigmaS) + 1 + 2 * padding_xy;
+	const size_t small_height = static_cast<size_t> (static_cast<float> (depth.rows - 1) / sigmaS) + 1 + 2 * padding_xy;
+	const size_t small_depth  = static_cast<size_t> (base_delta / sigmaR)   + 1 + 2 * padding_z;
+
+	UDEBUG("small_width=%d small_height=%d small_depth=%d", (int)small_width, (int)small_height, (int)small_depth);
+	Array3D data (small_width, small_height, small_depth);
+	for (int x = 0; x < depth.cols; ++x)
+	{
+		const size_t small_x = static_cast<size_t> (static_cast<float> (x) / sigmaS + 0.5f) + padding_xy;
+		for (int y = 0; y < depth.rows; ++y)
+		{
+			float v = depth.type()==CV_32FC1?depth.at<float>(y,x):float(depth.at<unsigned short>(y,x))/1000.0f;
+			if((v > 0 && uIsFinite(v)))
+			{
+				float z = v - base_min;
+
+				const size_t small_y = static_cast<size_t> (static_cast<float> (y) / sigmaS + 0.5f) + padding_xy;
+				const size_t small_z = static_cast<size_t> (static_cast<float> (z) / sigmaR + 0.5f) + padding_z;
+
+				Eigen::Vector2f& d = data (small_x, small_y, small_z);
+				d[0] += v;
+				d[1] += 1.0f;
+			}
+		}
+	}
+
+	std::vector<long int> offset (3);
+	offset[0] = &(data (1,0,0)) - &(data (0,0,0));
+	offset[1] = &(data (0,1,0)) - &(data (0,0,0));
+	offset[2] = &(data (0,0,1)) - &(data (0,0,0));
+
+	Array3D buffer (small_width, small_height, small_depth);
+
+	for (size_t dim = 0; dim < 3; ++dim)
+	{
+		const long int off = offset[dim];
+		for (size_t n_iter = 0; n_iter < 2; ++n_iter)
+		{
+		  std::swap (buffer, data);
+		  for(size_t x = 1; x < small_width - 1; ++x)
+			for(size_t y = 1; y < small_height - 1; ++y)
+			{
+			  Eigen::Vector2f* d_ptr = &(data (x,y,1));
+			  Eigen::Vector2f* b_ptr = &(buffer (x,y,1));
+
+			  for(size_t z = 1; z < small_depth - 1; ++z, ++d_ptr, ++b_ptr)
+				*d_ptr = (*(b_ptr - off) + *(b_ptr + off) + 2.0 * (*b_ptr)) / 4.0;
+			}
+		}
+	}
+
+	if (earlyDivision)
+	{
+		for (std::vector<Eigen::Vector2f>::iterator d = data.begin (); d != data.end (); ++d)
+		  *d /= ((*d)[0] != 0) ? (*d)[1] : 1;
+	}
+
+	for (int x = 0; x < depth.cols; ++x)
+	  for (int y = 0; y < depth.rows; ++y)
+	  {
+		  float z = depth.type()==CV_32FC1?depth.at<float>(y,x):float(depth.at<unsigned short>(y,x))/1000.0f;
+		  if(z > 0 && uIsFinite(z))
+		  {
+			  z -= base_min;
+			  const Eigen::Vector2f D = data.trilinear_interpolation (static_cast<float> (x) / sigmaS + padding_xy,
+																	static_cast<float> (y) / sigmaS + padding_xy,
+																	z / sigmaR + padding_z);
+			  float v = earlyDivision ? D[0] : D[0] / D[1];
+			  if(v < base_min || v >= base_max)
+			  {
+				  v = 0.0f;
+			  }
+			  if(depth.type()==CV_16UC1 && v>65.5350f)
+			  {
+				  v = 65.5350f;
+			  }
+			  output.at<float>(y,x) = v;
+		  }
+	  }
+
+	UDEBUG("End");
+	return output;
+}
+
+/**
+ *  \brief Automatic brightness and contrast optimization with optional histogram clipping
+ *  \param [in]src Input image GRAY or BGR or BGRA
+ *  \param [out]dst Destination image
+ *  \param clipHistPercent cut wings of histogram at given percent typical=>1, 0=>Disabled
+ *  \note In case of BGRA image, we won't touch the transparency
+ *  See http://answers.opencv.org/question/75510/how-to-make-auto-adjustmentsbrightness-and-contrast-for-image-android-opencv-image-correction/
+*/
+cv::Mat brightnessAndContrastAuto(const cv::Mat &src, const cv::Mat & mask, float clipLowHistPercent, float clipHighHistPercent)
+{
+
+    CV_Assert(clipLowHistPercent >= 0 && clipHighHistPercent>=0);
+    CV_Assert((src.type() == CV_8UC1) || (src.type() == CV_8UC3) || (src.type() == CV_8UC4));
+
+    int histSize = 256;
+    float alpha, beta;
+    double minGray = 0, maxGray = 0;
+
+    //to calculate grayscale histogram
+    cv::Mat gray;
+    if (src.type() == CV_8UC1) gray = src;
+    else if (src.type() == CV_8UC3) cvtColor(src, gray, CV_BGR2GRAY);
+    else if (src.type() == CV_8UC4) cvtColor(src, gray, CV_BGRA2GRAY);
+    if (clipLowHistPercent == 0 && clipHighHistPercent == 0)
+    {
+        // keep full available range
+        cv::minMaxLoc(gray, &minGray, &maxGray, 0, 0, mask);
+    }
+    else
+    {
+        cv::Mat hist; //the grayscale histogram
+
+        float range[] = { 0, 256 };
+        const float* histRange = { range };
+        bool uniform = true;
+        bool accumulate = false;
+        calcHist(&gray, 1, 0, mask, hist, 1, &histSize, &histRange, uniform, accumulate);
+
+        // calculate cumulative distribution from the histogram
+        std::vector<float> accumulator(histSize);
+        accumulator[0] = hist.at<float>(0);
+        for (int i = 1; i < histSize; i++)
+        {
+            accumulator[i] = accumulator[i - 1] + hist.at<float>(i);
+        }
+
+        // locate points that cuts at required value
+        float max = accumulator.back();
+        clipLowHistPercent *= (max / 100.0); //make percent as absolute
+        clipHighHistPercent *= (max / 100.0); //make percent as absolute
+        // locate left cut
+        minGray = 0;
+        while (accumulator[minGray] < clipLowHistPercent)
+            minGray++;
+
+        // locate right cut
+        maxGray = histSize - 1;
+        while (accumulator[maxGray] >= (max - clipHighHistPercent))
+            maxGray--;
+    }
+
+    // current range
+    float inputRange = maxGray - minGray;
+
+    alpha = (histSize - 1) / inputRange;   // alpha expands current range to histsize range
+    beta = -minGray * alpha;             // beta shifts current range so that minGray will go to 0
+
+    UINFO("minGray=%f maxGray=%f alpha=%f beta=%f", minGray, maxGray, alpha, beta);
+
+    cv::Mat dst;
+    // Apply brightness and contrast normalization
+    // convertTo operates with saurate_cast
+    src.convertTo(dst, -1, alpha, beta);
+
+    // restore alpha channel from source
+    if (dst.type() == CV_8UC4)
+    {
+        int from_to[] = { 3, 3};
+        cv::mixChannels(&src, 4, &dst,1, from_to, 1);
+    }
+    return dst;
+}
+
+cv::Mat exposureFusion(const std::vector<cv::Mat> & images)
+{
+	UASSERT(images.size());
+	cv::Mat fusion;
+#if CV_MAJOR_VERSION >= 3
+	cv::createMergeMertens()->process(images, fusion);
+	cv::Mat rgb8;
+	UASSERT(fusion.channels() == 3);
+	fusion.convertTo(rgb8, CV_8UC3, 255.0);
+	fusion = rgb8;
+#else
+	UWARN("Exposure fusion is only available when rtabmap is built with OpenCV3.");
+	if (images.size())
+	{
+		fusion = images[0].clone();
+	}
+#endif
+	return fusion;
 }
 
 }
