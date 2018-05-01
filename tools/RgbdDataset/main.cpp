@@ -39,6 +39,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/utilite/UFile.h"
 #include "rtabmap/utilite/UMath.h"
 #include "rtabmap/utilite/UStl.h"
+#include "rtabmap/utilite/UProcessInfo.h"
 #include <pcl/common/common.h>
 #include <stdio.h>
 #include <signal.h>
@@ -54,17 +55,16 @@ void showUsage()
 			"                        synchronized images using associate.py tool (use tool version from\n"
 			"                        https://gist.github.com/matlabbe/484134a2d9da8ad425362c6669824798). If \n"
 			"                        \"groundtruth.txt\" is found in the sequence folder, they will be saved in the database.\n"
-			"  --output           Output directory. By default, results are saved in \"path\".\n\n"
+			"  --output           Output directory. By default, results are saved in \"path\".\n"
+			"  --output_name      Output database name (default \"rtabmap\").\n"
+			"  --quiet            Don't show log messages and iteration updates.\n"
 			"%s\n"
 			"Example:\n\n"
-			"   $ rtabmap-kitti_dataset \\\n"
-			"       --Vis/EstimationType 1\\\n"
-			"       --Vis/BundleAdjustment 1\\\n"
-			"       --Vis/PnPReprojError 1.5\\\n"
-			"       --Odom/GuessMotion true\\\n"
-			"       --OdomF2M/BundleAdjustment 1\\\n"
-			"       --Rtabmap/CreateIntermediateNodes true\\\n"
-			"       --Rtabmap/DetectionRate 1\\\n"
+			"   $ rtabmap-rgbd_dataset \\\n"
+			"       --Rtabmap/PublishRAMUsage true\\\n"
+			"       --Rtabmap/DetectionRate 2\\\n"
+			"       --RGBD/LinearUpdate 0\\\n"
+			"       --Mem/STMSize 30\\\n"
 			"       ~/rgbd_dataset_freiburg3_long_office_household\n\n", rtabmap::Parameters::showUsage());
 	exit(1);
 }
@@ -89,6 +89,8 @@ int main(int argc, char * argv[])
 	ParametersMap parameters;
 	std::string path;
 	std::string output;
+	std::string outputName = "rtabmap";
+	bool quiet = false;
 	if(argc < 2)
 	{
 		showUsage();
@@ -100,6 +102,14 @@ int main(int argc, char * argv[])
 			if(std::strcmp(argv[i], "--output") == 0)
 			{
 				output = argv[++i];
+			}
+			else if(std::strcmp(argv[i], "--output_name") == 0)
+			{
+				outputName = argv[++i];
+			}
+			else if(std::strcmp(argv[i], "--quiet") == 0)
+			{
+				quiet = true;
 			}
 		}
 		parameters = Parameters::parseArguments(argc, argv);
@@ -115,8 +125,11 @@ int main(int argc, char * argv[])
 			output = uReplaceChar(output, '~', UDirectory::homeDir());
 			UDirectory::makeDir(output);
 		}
+		parameters.insert(ParametersPair(Parameters::kRtabmapWorkingDirectory(), output));
+		parameters.insert(ParametersPair(Parameters::kRtabmapPublishRAMUsage(), "true"));
 	}
 
+	std::string seq = uSplit(path, '/').back();
 	std::string pathRgbImages  = path+"/rgb_sync";
 	std::string pathDepthImages = path+"/depth_sync";
 	std::string pathGt = path+"/groundtruth.txt";
@@ -126,15 +139,24 @@ int main(int argc, char * argv[])
 		pathGt.clear();
 	}
 
+	if(quiet)
+	{
+		ULogger::setLevel(ULogger::kError);
+	}
+
 	printf("Paths:\n"
+			"   Dataset name:    %s\n"
 			"   Dataset path:    %s\n"
 			"   RGB path:        %s\n"
 			"   Depth path:      %s\n"
-			"   Output:          %s\n",
+			"   Output:          %s\n"
+			"   Output name:     %s\n",
+			seq.c_str(),
 			path.c_str(),
 			pathRgbImages.c_str(),
 			pathDepthImages.c_str(),
-			output.c_str());
+			output.c_str(),
+			outputName.c_str());
 	if(!pathGt.empty())
 	{
 		printf("   groundtruth.txt: %s\n", pathGt.c_str());
@@ -147,26 +169,27 @@ int main(int argc, char * argv[])
 			printf("   %s=%s\n", iter->first.c_str(), iter->second.c_str());
 		}
 	}
+	printf("RTAB-Map version: %s\n", RTABMAP_VERSION);
 
-	// setup calibraiton file
+	// setup calibration file
 	CameraModel model;
 	std::string sequenceName = UFile(path).getName();
 	Transform opticalRotation(0,0,1,0, -1,0,0,0, 0,-1,0,0);
 	float depthFactor = 5.0f;
 	if(sequenceName.find("freiburg1") != std::string::npos)
 	{
-		model = CameraModel("rtabmap_calib", 517.3, 516.5, 318.6, 255.3, opticalRotation, 0, cv::Size(640,480));
+		model = CameraModel(outputName+"_calib", 517.3, 516.5, 318.6, 255.3, opticalRotation, 0, cv::Size(640,480));
 	}
 	else if(sequenceName.find("freiburg2") != std::string::npos)
 	{
-		model = CameraModel("rtabmap_calib", 520.9, 521.0, 325.1, 249.7, opticalRotation, 0, cv::Size(640,480));
-		depthFactor = 5.208f;
+		model = CameraModel(outputName+"_calib", 520.9, 521.0, 325.1, 249.7, opticalRotation, 0, cv::Size(640,480));
 	}
 	else //if(sequenceName.find("freiburg3") != std::string::npos)
 	{
-		model = CameraModel("rtabmap_calib", 535.4, 539.2, 320.1, 247.6, opticalRotation, 0, cv::Size(640,480));
+		model = CameraModel(outputName+"_calib", 535.4, 539.2, 320.1, 247.6, opticalRotation, 0, cv::Size(640,480));
 	}
-	model.save(output);
+	//parameters.insert(ParametersPair(Parameters::kg2oBaseline(), uNumber2Str(40.0f/model.fx())));
+	model.save(path);
 
 	CameraThread cameraThread(new
 		CameraRGBDImages(
@@ -183,15 +206,21 @@ int main(int argc, char * argv[])
 
 	bool intermediateNodes = Parameters::defaultRtabmapCreateIntermediateNodes();
 	float detectionRate = Parameters::defaultRtabmapDetectionRate();
+	int odomStrategy = Parameters::defaultOdomStrategy();
 	Parameters::parse(parameters, Parameters::kRtabmapCreateIntermediateNodes(), intermediateNodes);
+	Parameters::parse(parameters, Parameters::kOdomStrategy(), odomStrategy);
 	Parameters::parse(parameters, Parameters::kRtabmapDetectionRate(), detectionRate);
-	std::string databasePath = output+"/rtabmap.db";
+	std::string databasePath = output+"/"+outputName+".db";
 	UFile::erase(databasePath);
-	if(cameraThread.camera()->init(output, "rtabmap_calib"))
+	if(cameraThread.camera()->init(path, outputName+"_calib"))
 	{
 		int totalImages = (int)((CameraRGBDImages*)cameraThread.camera())->filenames().size();
 
-		OdometryF2M odom(parameters);
+		printf("Processing %d images...\n", totalImages);
+
+		ParametersMap odomParameters = parameters;
+		odomParameters.erase(Parameters::kRtabmapPublishRAMUsage()); // as odometry is in the same process than rtabmap, don't get RAM usage in odometry.
+		Odometry * odom = Odometry::create(odomParameters);
 		Rtabmap rtabmap;
 		rtabmap.init(parameters, databasePath);
 
@@ -205,29 +234,29 @@ int main(int argc, char * argv[])
 		// Processing dataset begin
 		/////////////////////////////
 		cv::Mat covariance;
+		int odomKeyFrames = 0;
 		double previousStamp = 0.0;
 		while(data.isValid() && g_forever)
 		{
-			std::map<std::string, float> externalStats;
 			cameraThread.postUpdate(&data, &cameraInfo);
 			cameraInfo.timeTotal = timer.ticks();
 
-			// save camera statistics to database
-			externalStats.insert(std::make_pair("Camera/BilateralFiltering/ms", cameraInfo.timeBilateralFiltering*1000.0f));
-			externalStats.insert(std::make_pair("Camera/Capture/ms", cameraInfo.timeCapture*1000.0f));
-			externalStats.insert(std::make_pair("Camera/Disparity/ms", cameraInfo.timeDisparity*1000.0f));
-			externalStats.insert(std::make_pair("Camera/ImageDecimation/ms", cameraInfo.timeImageDecimation*1000.0f));
-			externalStats.insert(std::make_pair("Camera/Mirroring/ms", cameraInfo.timeMirroring*1000.0f));
-			externalStats.insert(std::make_pair("Camera/ScanFromDepth/ms", cameraInfo.timeScanFromDepth*1000.0f));
-			externalStats.insert(std::make_pair("Camera/TotalTime/ms", cameraInfo.timeTotal*1000.0f));
-			externalStats.insert(std::make_pair("Camera/UndistortDepth/ms", cameraInfo.timeUndistortDepth*1000.0f));
-
 			OdometryInfo odomInfo;
-			Transform pose = odom.process(data, &odomInfo);
-			externalStats.insert(std::make_pair("Odometry/LocalBundle/ms", odomInfo.localBundleTime*1000.0f));
-			externalStats.insert(std::make_pair("Odometry/TotalTime/ms", odomInfo.timeEstimation*1000.0f));
-			externalStats.insert(std::make_pair("Odometry/Inliers/ms", odomInfo.inliers));
-			externalStats.insert(std::make_pair("Odometry/Features/ms", odomInfo.features));
+			Transform pose = odom->process(data, &odomInfo);
+
+			if(odomStrategy == 2)
+			{
+				//special case for FOVIS, set covariance 1 if 9999 is detected
+				if(!odomInfo.reg.covariance.empty() && odomInfo.reg.covariance.at<double>(0,0) >= 9999)
+				{
+					odomInfo.reg.covariance = cv::Mat::eye(6,6,CV_64FC1);
+				}
+			}
+
+			if(odomInfo.keyFrameAdded)
+			{
+				++odomKeyFrames;
+			}
 
 			bool processData = true;
 			if(detectionRate>0.0f &&
@@ -249,49 +278,102 @@ int main(int argc, char * argv[])
 				data.setFeatures(std::vector<cv::KeyPoint>(), std::vector<cv::Point3f>(), cv::Mat());// remove features
 				processData = intermediateNodes;
 			}
-			if(covariance.empty())
+			if(covariance.empty() || odomInfo.reg.covariance.at<double>(0,0) > covariance.at<double>(0,0))
 			{
-				covariance = odomInfo.covariance;
-			}
-			else
-			{
-				covariance += odomInfo.covariance;
+				covariance = odomInfo.reg.covariance;
 			}
 
 			timer.restart();
 			if(processData)
 			{
+				std::map<std::string, float> externalStats;
+				// save camera statistics to database
+				externalStats.insert(std::make_pair("Camera/BilateralFiltering/ms", cameraInfo.timeBilateralFiltering*1000.0f));
+				externalStats.insert(std::make_pair("Camera/Capture/ms", cameraInfo.timeCapture*1000.0f));
+				externalStats.insert(std::make_pair("Camera/Disparity/ms", cameraInfo.timeDisparity*1000.0f));
+				externalStats.insert(std::make_pair("Camera/ImageDecimation/ms", cameraInfo.timeImageDecimation*1000.0f));
+				externalStats.insert(std::make_pair("Camera/Mirroring/ms", cameraInfo.timeMirroring*1000.0f));
+				externalStats.insert(std::make_pair("Camera/ExposureCompensation/ms", cameraInfo.timeStereoExposureCompensation*1000.0f));
+				externalStats.insert(std::make_pair("Camera/ScanFromDepth/ms", cameraInfo.timeScanFromDepth*1000.0f));
+				externalStats.insert(std::make_pair("Camera/TotalTime/ms", cameraInfo.timeTotal*1000.0f));
+				externalStats.insert(std::make_pair("Camera/UndistortDepth/ms", cameraInfo.timeUndistortDepth*1000.0f));
+				// save odometry statistics to database
+				externalStats.insert(std::make_pair("Odometry/LocalBundle/ms", odomInfo.localBundleTime*1000.0f));
+				externalStats.insert(std::make_pair("Odometry/LocalBundleConstraints/", odomInfo.localBundleConstraints));
+				externalStats.insert(std::make_pair("Odometry/LocalBundleOutliers/", odomInfo.localBundleOutliers));
+				externalStats.insert(std::make_pair("Odometry/TotalTime/ms", odomInfo.timeEstimation*1000.0f));
+				externalStats.insert(std::make_pair("Odometry/Registration/ms", odomInfo.reg.totalTime*1000.0f));
+				externalStats.insert(std::make_pair("Odometry/Inliers/", odomInfo.reg.inliers));
+				externalStats.insert(std::make_pair("Odometry/Features/", odomInfo.features));
+				externalStats.insert(std::make_pair("Odometry/DistanceTravelled/m", odomInfo.distanceTravelled));
+				externalStats.insert(std::make_pair("Odometry/KeyFrameAdded/", odomInfo.keyFrameAdded));
+				externalStats.insert(std::make_pair("Odometry/LocalKeyFrames/", odomInfo.localKeyFrames));
+				externalStats.insert(std::make_pair("Odometry/LocalMapSize/", odomInfo.localMapSize));
+				externalStats.insert(std::make_pair("Odometry/LocalScanMapSize/", odomInfo.localScanMapSize));
+
 				OdometryEvent e(SensorData(), Transform(), odomInfo);
 				rtabmap.process(data, pose, covariance, e.velocity(), externalStats);
 				covariance = cv::Mat();
 			}
-			double slamTime = timer.ticks();
 
 			++iteration;
-			printf("Iteration %d/%d: camera=%dms, odom(quality=%d/%d)=%dms, slam=%dms",
-					iteration, totalImages, int(cameraInfo.timeTotal*1000.0f), odomInfo.inliers, odomInfo.features, int(odomInfo.timeEstimation*1000.0f), int(slamTime*1000.0f));
-			if(processData && rtabmap.getLoopClosureId()>0)
+			if(!quiet || iteration == totalImages)
 			{
-				printf(" *");
+				double slamTime = timer.ticks();
+
+				float rmse = -1;
+				if(rtabmap.getStatistics().data().find(Statistics::kGtTranslational_rmse()) != rtabmap.getStatistics().data().end())
+				{
+					rmse = rtabmap.getStatistics().data().at(Statistics::kGtTranslational_rmse());
+				}
+
+				if(rmse >= 0.0f)
+				{
+					//printf("Iteration %d/%d: camera=%dms, odom(quality=%d/%d, kfs=%d)=%dms, slam=%dms, rmse=%fm, noise stddev=%fm %frad",
+					//		iteration, totalImages, int(cameraInfo.timeTotal*1000.0f), odomInfo.reg.inliers, odomInfo.features, odomKeyFrames, int(odomInfo.timeEstimation*1000.0f), int(slamTime*1000.0f), rmse, sqrt(odomInfo.reg.covariance.at<double>(0,0)), sqrt(odomInfo.reg.covariance.at<double>(3,3)));
+					printf("Iteration %d/%d: camera=%dms, odom(quality=%d/%d, kfs=%d)=%dms, slam=%dms, rmse=%fm",
+							iteration, totalImages, int(cameraInfo.timeTotal*1000.0f), odomInfo.reg.inliers, odomInfo.features, odomKeyFrames, int(odomInfo.timeEstimation*1000.0f), int(slamTime*1000.0f), rmse);
+				}
+				else
+				{
+					printf("Iteration %d/%d: camera=%dms, odom(quality=%d/%d, kfs=%d)=%dms, slam=%dms",
+							iteration, totalImages, int(cameraInfo.timeTotal*1000.0f), odomInfo.reg.inliers, odomInfo.features, odomKeyFrames, int(odomInfo.timeEstimation*1000.0f), int(slamTime*1000.0f));
+				}
+				if(processData && rtabmap.getLoopClosureId()>0)
+				{
+					printf(" *");
+				}
+				printf("\n");
 			}
-			printf("\n");
+			else if(iteration % (totalImages/10) == 0)
+			{
+				printf(".");
+				fflush(stdout);
+			}
 
 			cameraInfo = CameraInfo();
 			timer.restart();
 			data = cameraThread.camera()->takeImage(&cameraInfo);
 		}
+		delete odom;
 		printf("Total time=%fs\n", totalTime.ticks());
 		/////////////////////////////
 		// Processing dataset end
 		/////////////////////////////
 
 		// Save trajectory
-		printf("Saving rtabmap_trajectory.txt ...\n");
+		printf("Saving trajectory...\n");
 		std::map<int, Transform> poses;
 		std::multimap<int, Link> links;
-		rtabmap.getGraph(poses, links, true, true);
-		std::string pathTrajectory = output+"/rtabmap_poses.txt";
-		if(poses.size() && graph::exportPoses(pathTrajectory, 2, poses, links))
+		std::map<int, Signature> signatures;
+		std::map<int, double> stamps;
+		rtabmap.getGraph(poses, links, true, true, &signatures);
+		for(std::map<int, Signature>::iterator iter=signatures.begin(); iter!=signatures.end(); ++iter)
+		{
+			stamps.insert(std::make_pair(iter->first, iter->second.getStamp()));
+		}
+		std::string pathTrajectory = output+"/"+outputName+"_poses.txt";
+		if(poses.size() && graph::exportPoses(pathTrajectory, 1, poses, links, stamps))
 		{
 			printf("Saving %s... done!\n", pathTrajectory.c_str());
 		}
@@ -302,15 +384,9 @@ int main(int argc, char * argv[])
 
 		if(!pathGt.empty())
 		{
-			// Log ground truth statistics (in TUM's RGBD-SLAM format)
+			// Log ground truth statistics
 			std::map<int, Transform> groundTruth;
 
-			//align with ground truth for more meaningful results
-			pcl::PointCloud<pcl::PointXYZ> cloud1, cloud2;
-			cloud1.resize(poses.size());
-			cloud2.resize(poses.size());
-			int oi = 0;
-			int idFirst = 0;
 			for(std::map<int, Transform>::const_iterator iter=poses.begin(); iter!=poses.end(); ++iter)
 			{
 				Transform o, gtPose;
@@ -318,136 +394,68 @@ int main(int argc, char * argv[])
 				std::string l;
 				double s;
 				std::vector<float> v;
-				rtabmap.getMemory()->getNodeInfo(iter->first, o, m, w, l, s, gtPose, v, true);
+				GPS gps;
+				rtabmap.getMemory()->getNodeInfo(iter->first, o, m, w, l, s, gtPose, v, gps, true);
 				if(!gtPose.isNull())
 				{
 					groundTruth.insert(std::make_pair(iter->first, gtPose));
-					if(oi==0)
-					{
-						idFirst = iter->first;
-					}
-					cloud1[oi] = pcl::PointXYZ(gtPose.x(), gtPose.y(), gtPose.z());
-					cloud2[oi++] = pcl::PointXYZ(iter->second.x(), iter->second.y(), iter->second.z());
 				}
 			}
 
-			Transform t = Transform::getIdentity();
-			if(oi>5)
-			{
-				cloud1.resize(oi);
-				cloud2.resize(oi);
 
-				t = util3d::transformFromXYZCorrespondencesSVD(cloud2, cloud1);
-			}
-			else if(idFirst)
-			{
-				t = groundTruth.at(idFirst) * poses.at(idFirst).inverse();
-			}
-			if(!t.isIdentity())
-			{
-				for(std::map<int, Transform>::iterator iter=poses.begin(); iter!=poses.end(); ++iter)
-				{
-					iter->second = t * iter->second;
-				}
-			}
-
-			std::vector<float> translationalErrors(poses.size());
-			std::vector<float> rotationalErrors(poses.size());
-			float sumTranslationalErrors = 0.0f;
-			float sumRotationalErrors = 0.0f;
-			float sumSqrdTranslationalErrors = 0.0f;
-			float sumSqrdRotationalErrors = 0.0f;
-			float radToDegree = 180.0f / M_PI;
+			// compute RMSE statistics
+			float translational_rmse = 0.0f;
+			float translational_mean = 0.0f;
+			float translational_median = 0.0f;
+			float translational_std = 0.0f;
 			float translational_min = 0.0f;
 			float translational_max = 0.0f;
+			float rotational_rmse = 0.0f;
+			float rotational_mean = 0.0f;
+			float rotational_median = 0.0f;
+			float rotational_std = 0.0f;
 			float rotational_min = 0.0f;
 			float rotational_max = 0.0f;
-			oi=0;
-			for(std::map<int, Transform>::iterator iter=poses.begin(); iter!=poses.end(); ++iter)
+			graph::calcRMSE(
+					groundTruth,
+					poses,
+					translational_rmse,
+					translational_mean,
+					translational_median,
+					translational_std,
+					translational_min,
+					translational_max,
+					rotational_rmse,
+					rotational_mean,
+					rotational_median,
+					rotational_std,
+					rotational_min,
+					rotational_max);
+
+			printf("   translational_rmse=   %f m\n", translational_rmse);
+			printf("   rotational_rmse=      %f deg\n", rotational_rmse);
+
+			FILE * pFile = 0;
+			std::string pathErrors = output+"/"+outputName+"_rmse.txt";
+			pFile = fopen(pathErrors.c_str(),"w");
+			if(!pFile)
 			{
-				std::map<int, Transform>::const_iterator jter = groundTruth.find(iter->first);
-				if(jter!=groundTruth.end())
-				{
-					Eigen::Vector3f vA = iter->second.toEigen3f().rotation()*Eigen::Vector3f(1,0,0);
-					Eigen::Vector3f vB = jter->second.toEigen3f().rotation()*Eigen::Vector3f(1,0,0);
-					double a = pcl::getAngle3D(Eigen::Vector4f(vA[0], vA[1], vA[2], 0), Eigen::Vector4f(vB[0], vB[1], vB[2], 0));
-					rotationalErrors[oi] = a*radToDegree;
-					translationalErrors[oi] = iter->second.getDistance(jter->second);
-
-					sumTranslationalErrors+=translationalErrors[oi];
-					sumSqrdTranslationalErrors+=translationalErrors[oi]*translationalErrors[oi];
-					sumRotationalErrors+=rotationalErrors[oi];
-					sumSqrdRotationalErrors+=rotationalErrors[oi]*rotationalErrors[oi];
-
-					if(oi == 0)
-					{
-						translational_min = translational_max = translationalErrors[oi];
-						rotational_min = rotational_max = rotationalErrors[oi];
-					}
-					else
-					{
-						if(translationalErrors[oi] < translational_min)
-						{
-							translational_min = translationalErrors[oi];
-						}
-						else if(translationalErrors[oi] > translational_max)
-						{
-							translational_max = translationalErrors[oi];
-						}
-
-						if(rotationalErrors[oi] < rotational_min)
-						{
-							rotational_min = rotationalErrors[oi];
-						}
-						else if(rotationalErrors[oi] > rotational_max)
-						{
-							rotational_max = rotationalErrors[oi];
-						}
-					}
-
-					++oi;
-				}
+				UERROR("could not save RMSE results to \"%s\"", pathErrors.c_str());
 			}
-			translationalErrors.resize(oi);
-			rotationalErrors.resize(oi);
-			if(oi)
-			{
-				float total = float(oi);
-				float translational_rmse = std::sqrt(sumSqrdTranslationalErrors/total);
-				float translational_mean = sumTranslationalErrors/total;
-				float translational_median = translationalErrors[oi/2];
-				float translational_std = std::sqrt(uVariance(translationalErrors, translational_mean));
-
-				float rotational_rmse = std::sqrt(sumSqrdRotationalErrors/total);
-				float rotational_mean = sumRotationalErrors/total;
-				float rotational_median = rotationalErrors[oi/2];
-				float rotational_std = std::sqrt(uVariance(rotationalErrors, rotational_mean));
-
-				printf("  translational_rmse=   %f\n", translational_rmse);
-				printf("  rotational_rmse=      %f\n", rotational_rmse);
-
-				FILE * pFile = 0;
-				std::string pathErrors = output+"/rtabmap_rmse.txt";
-				pFile = fopen(pathErrors.c_str(),"w");
-				if(!pFile)
-				{
-					UERROR("could not save RMSE results to \"%s\"", pathErrors.c_str());
-				}
-				fprintf(pFile, "Ground truth comparison:\n");
-				fprintf(pFile, "  translational_rmse=   %f\n", translational_rmse);
-				fprintf(pFile, "  translational_mean=   %f\n", translational_mean);
-				fprintf(pFile, "  translational_median= %f\n", translational_median);
-				fprintf(pFile, "  translational_std=    %f\n", translational_std);
-				fprintf(pFile, "  translational_min=    %f\n", translational_min);
-				fprintf(pFile, "  translational_max=    %f\n", translational_max);
-				fprintf(pFile, "  rotational_rmse=      %f\n", rotational_rmse);
-				fprintf(pFile, "  rotational_mean=      %f\n", rotational_mean);
-				fprintf(pFile, "  rotational_median=    %f\n", rotational_median);
-				fprintf(pFile, "  rotational_std=       %f\n", rotational_std);
-				fprintf(pFile, "  rotational_min=       %f\n", rotational_min);
-				fprintf(pFile, "  rotational_max=       %f\n", rotational_max);
-				fclose(pFile);
-			}
+			fprintf(pFile, "Ground truth comparison:\n");
+			fprintf(pFile, "  translational_rmse=   %f\n", translational_rmse);
+			fprintf(pFile, "  translational_mean=   %f\n", translational_mean);
+			fprintf(pFile, "  translational_median= %f\n", translational_median);
+			fprintf(pFile, "  translational_std=    %f\n", translational_std);
+			fprintf(pFile, "  translational_min=    %f\n", translational_min);
+			fprintf(pFile, "  translational_max=    %f\n", translational_max);
+			fprintf(pFile, "  rotational_rmse=      %f\n", rotational_rmse);
+			fprintf(pFile, "  rotational_mean=      %f\n", rotational_mean);
+			fprintf(pFile, "  rotational_median=    %f\n", rotational_median);
+			fprintf(pFile, "  rotational_std=       %f\n", rotational_std);
+			fprintf(pFile, "  rotational_min=       %f\n", rotational_min);
+			fprintf(pFile, "  rotational_max=       %f\n", rotational_max);
+			fclose(pFile);
 		}
 	}
 	else
@@ -455,9 +463,9 @@ int main(int argc, char * argv[])
 		UERROR("Camera init failed!");
 	}
 
-	printf("Saving rtabmap database (with all statistics) to \"%s\"\n", (output+"/rtabmap.db").c_str());
+	printf("Saving rtabmap database (with all statistics) to \"%s\"\n", (output+"/"+outputName+".db").c_str());
 	printf("Do:\n"
-			" $ rtabmap-databaseViewer %s\n\n", (output+"/rtabmap.db").c_str());
+			" $ rtabmap-databaseViewer %s\n\n", (output+"/"+outputName+".db").c_str());
 
 	return 0;
 }

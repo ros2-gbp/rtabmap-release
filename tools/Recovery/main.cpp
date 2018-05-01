@@ -25,42 +25,75 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifndef CREATESIMPLECALIBRATIONDIALOG_H_
-#define CREATESIMPLECALIBRATIONDIALOG_H_
+#include <rtabmap/core/Recovery.h>
+#include <rtabmap/core/ProgressState.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <signal.h>
 
-#include <QDialog>
-#include <QSettings>
+using namespace rtabmap;
 
-class Ui_createSimpleCalibrationDialog;
-
-namespace rtabmap {
-
-class CreateSimpleCalibrationDialog : public QDialog
+void showUsage()
 {
-	Q_OBJECT
-
-public:
-	CreateSimpleCalibrationDialog(
-			const QString & savingFolder = ".",
-			const QString & cameraName = "",
-			QWidget * parent = 0);
-
-	virtual ~CreateSimpleCalibrationDialog();
-
-	void setCameraInfoDir(const QString & folder) {savingFolder_ = folder;}
-	const QString & cameraName() const {return cameraName_;}
-
-private slots:
-	void updateStereoView();
-	void updateSaveStatus();
-	void saveCalibration();
-
-private:
-	Ui_createSimpleCalibrationDialog * ui_;
-	QString savingFolder_;
-	QString cameraName_;
-};
-
+	printf("\nUsage:\n"
+			"rtabmap-recovery [-d] \"my_corrupted_map.db\""
+			"  Options:\n"
+			"     -d        Delete database backup on success (\"*.backup.db\").\n"
+			"\n");
+	exit(1);
 }
 
-#endif /* CREATESIMPLECALIBRATIONDIALOG_H_ */
+class RecoveryProgressState: public ProgressState
+{
+	virtual bool callback(const std::string & msg) const
+	{
+		if(!msg.empty())
+			printf("%s\n", msg.c_str());
+		return true;
+	}
+};
+RecoveryProgressState state;
+
+// catch ctrl-c
+void sighandler(int sig)
+{
+	printf("\nSignal %d caught...\n", sig);
+	state.setCanceled(true);
+}
+
+int main(int argc, char * argv[])
+{
+	signal(SIGABRT, &sighandler);
+	signal(SIGTERM, &sighandler);
+	signal(SIGINT, &sighandler);
+
+	ULogger::setType(ULogger::kTypeConsole);
+	ULogger::setLevel(ULogger::kError);
+
+	if(argc < 2)
+	{
+		showUsage();
+	}
+
+	bool keepBackup = true;
+	for(int i=1; i<argc; ++i)
+	{
+		if(strcmp(argv[i], "-d") == 0)
+		{
+			keepBackup = false;
+		}
+	}
+
+	std::string databasePath = argv[argc-1];
+
+	std::string errorMsg;
+	printf("Recovering \"%s\"\n", databasePath.c_str());
+	if(!databaseRecovery(databasePath, keepBackup, &errorMsg, &state))
+	{
+		printf("Error: %s\n", errorMsg.c_str());
+		return 1;
+	}
+
+	return 0;
+}

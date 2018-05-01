@@ -68,7 +68,7 @@ public:
 	const CameraModel & cameraModel() const {return _model;}
 
 	void setPath(const std::string & dir) {_path=dir;}
-	void setStartIndex(int index) {_startAt = index;} // negative means last
+	virtual void setStartIndex(int index) {_startAt = index;} // negative means last
 	void setDirRefreshed(bool enabled) {_refreshDir = enabled;}
 	void setImagesRectified(bool enabled) {_rectifyImages = enabled;}
 	void setBayerMode(int mode) {_bayerMode = mode;} // -1=disabled (default) 0=BayerBG, 1=BayerGB, 2=BayerRG, 3=BayerGR
@@ -85,19 +85,19 @@ public:
 			int maxScanPts = 0,
 			int downsampleStep = 1,
 			float voxelSize = 0.0f,
-			int normalsK = 0, // compute normals if > 0
-			const Transform & localTransform=Transform::getIdentity())
+			int normalsK = 0,        // compute normals if > 0
+			float normalsRadius = 0, // compute normals if > 0
+			const Transform & localTransform=Transform::getIdentity(),
+			bool forceGroundNormalsUp = false)
 	{
 		_scanPath = dir;
 		_scanLocalTransform = localTransform;
 		_scanMaxPts = maxScanPts;
 		_scanDownsampleStep = downsampleStep;
 		_scanNormalsK = normalsK;
+		_scanNormalsRadius = normalsRadius;
 		_scanVoxelSize = voxelSize;
-		if(_scanDownsampleStep>1)
-		{
-			_scanMaxPts /= _scanDownsampleStep;
-		}
+		_scanForceGroundNormalsUp = forceGroundNormalsUp;
 	}
 
 	void setDepthFromScan(bool enabled, int fillHoles = 1, bool fillHolesFromBorder = false)
@@ -121,6 +121,9 @@ public:
 		_groundTruthFormat = format;
 	}
 
+	void setMaxPoseTimeDiff(double diff) {_maxPoseTimeDiff = diff;}
+	double getMaxPoseTimeDiff() const {return _maxPoseTimeDiff;}
+
 	void setDepth(bool isDepth, float depthScaleFactor = 1.0f)
 	{
 		_isDepth = isDepth;
@@ -133,7 +136,8 @@ protected:
 			std::list<Transform> & outputPoses,
 			std::list<double> & stamps,
 			const std::string & filePath,
-			int format) const;
+			int format,
+			double maxTimeDiff) const;
 
 private:
 	std::string _path;
@@ -158,6 +162,8 @@ private:
 	int _scanDownsampleStep;
 	float _scanVoxelSize;
 	int _scanNormalsK;
+	float _scanNormalsRadius;
+	bool _scanForceGroundNormalsUp;
 
 	bool _depthFromScan;
 	int _depthFromScanFillHoles; // <0:horizontal 0:disabled >0:vertical
@@ -169,9 +175,9 @@ private:
 
 	std::string _odometryPath;
 	int _odometryFormat;
-
 	std::string _groundTruthPath;
 	int _groundTruthFormat;
+	double _maxPoseTimeDiff;
 
 	std::list<double> _stamps;
 	std::list<Transform> odometry_;
