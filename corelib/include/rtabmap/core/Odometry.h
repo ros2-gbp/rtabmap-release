@@ -45,7 +45,12 @@ public:
 	enum Type {
 		kTypeUndef = -1,
 		kTypeF2M = 0,
-		kTypeF2F = 1
+		kTypeF2F = 1,
+		kTypeFovis = 2,
+		kTypeViso2 = 3,
+		kTypeDVO = 4,
+		kTypeORBSLAM2 = 5,
+		kTypeOkvis = 6
 	};
 
 public:
@@ -58,12 +63,15 @@ public:
 	Transform process(SensorData & data, const Transform & guess, OdometryInfo * info = 0);
 	virtual void reset(const Transform & initialPose = Transform::getIdentity());
 	virtual Odometry::Type getType() = 0;
+	virtual bool canProcessRawImages() const {return false;}
 
 	//getters
 	const Transform & getPose() const {return _pose;}
 	bool isInfoDataFilled() const {return _fillInfoData;}
 	const Transform & previousVelocityTransform() const {return previousVelocityTransform_;}
 	double previousStamp() const {return previousStamp_;}
+	unsigned int framesProcessed() const {return framesProcessed_;}
+	bool imagesAlreadyRectified() const {return _imagesAlreadyRectified;}
 
 private:
 	virtual Transform computeTransform(SensorData & data, const Transform & guess = Transform(), OdometryInfo * info = 0) = 0;
@@ -88,12 +96,15 @@ private:
 	float _kalmanMeasurementNoise;
 	int _imageDecimation;
 	bool _alignWithGround;
+	bool _publishRAMUsage;
+	bool _imagesAlreadyRectified;
 	Transform _pose;
 	int _resetCurrentCount;
 	double previousStamp_;
 	Transform previousVelocityTransform_;
 	Transform previousGroundTruthPose_;
 	float distanceTravelled_;
+	unsigned int framesProcessed_;
 
 	std::vector<ParticleFilter *> particleFilters_;
 	cv::KalmanFilter kalmanFilter_;

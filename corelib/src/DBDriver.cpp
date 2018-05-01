@@ -116,6 +116,22 @@ long DBDriver::getMemoryUsed() const
 	return bytes;
 }
 
+long DBDriver::getNodesMemoryUsed() const
+{
+	long bytes;
+	_dbSafeAccessMutex.lock();
+	bytes = getNodesMemoryUsedQuery();
+	_dbSafeAccessMutex.unlock();
+	return bytes;
+}
+long DBDriver::getLinksMemoryUsed() const
+{
+	long bytes;
+	_dbSafeAccessMutex.lock();
+	bytes = getLinksMemoryUsedQuery();
+	_dbSafeAccessMutex.unlock();
+	return bytes;
+}
 long DBDriver::getImagesMemoryUsed() const
 {
 	long bytes;
@@ -129,6 +145,22 @@ long DBDriver::getDepthImagesMemoryUsed() const
 	long bytes;
 	_dbSafeAccessMutex.lock();
 	bytes = getDepthImagesMemoryUsedQuery();
+	_dbSafeAccessMutex.unlock();
+	return bytes;
+}
+long DBDriver::getCalibrationsMemoryUsed() const
+{
+	long bytes;
+	_dbSafeAccessMutex.lock();
+	bytes = getCalibrationsMemoryUsedQuery();
+	_dbSafeAccessMutex.unlock();
+	return bytes;
+}
+long DBDriver::getGridsMemoryUsed() const
+{
+	long bytes;
+	_dbSafeAccessMutex.lock();
+	bytes = getGridsMemoryUsedQuery();
 	_dbSafeAccessMutex.unlock();
 	return bytes;
 }
@@ -153,6 +185,22 @@ long DBDriver::getWordsMemoryUsed() const
 	long bytes;
 	_dbSafeAccessMutex.lock();
 	bytes = getWordsMemoryUsedQuery();
+	_dbSafeAccessMutex.unlock();
+	return bytes;
+}
+long DBDriver::getFeaturesMemoryUsed() const
+{
+	long bytes;
+	_dbSafeAccessMutex.lock();
+	bytes = getFeaturesMemoryUsedQuery();
+	_dbSafeAccessMutex.unlock();
+	return bytes;
+}
+long DBDriver::getStatisticsMemoryUsed() const
+{
+	long bytes;
+	_dbSafeAccessMutex.lock();
+	bytes = getStatisticsMemoryUsedQuery();
 	_dbSafeAccessMutex.unlock();
 	return bytes;
 }
@@ -197,13 +245,31 @@ ParametersMap DBDriver::getLastParameters() const
 	return parameters;
 }
 
-std::map<std::string, float> DBDriver::getStatistics(int nodeId, double & stamp) const
+std::map<std::string, float> DBDriver::getStatistics(int nodeId, double & stamp, std::vector<int> * wmState) const
 {
 	std::map<std::string, float> statistics;
 	_dbSafeAccessMutex.lock();
-	statistics = getStatisticsQuery(nodeId, stamp);
+	statistics = getStatisticsQuery(nodeId, stamp, wmState);
 	_dbSafeAccessMutex.unlock();
 	return statistics;
+}
+
+std::map<int, std::pair<std::map<std::string, float>, double> > DBDriver::getAllStatistics() const
+{
+	std::map<int, std::pair<std::map<std::string, float>, double> > statistics;
+	_dbSafeAccessMutex.lock();
+	statistics = getAllStatisticsQuery();
+	_dbSafeAccessMutex.unlock();
+	return statistics;
+}
+
+std::map<int, std::vector<int> > DBDriver::getAllStatisticsWmStates() const
+{
+	std::map<int, std::vector<int> > wmStates;
+	_dbSafeAccessMutex.lock();
+	wmStates = getAllStatisticsWmStatesQuery();
+	_dbSafeAccessMutex.unlock();
+	return wmStates;
 }
 
 std::string DBDriver::getDatabaseVersion() const
@@ -338,7 +404,7 @@ void DBDriver::asyncSave(VisualWord * vw)
 	}
 }
 
-void DBDriver::saveOrUpdate(const std::vector<Signature *> & signatures) const
+void DBDriver::saveOrUpdate(const std::vector<Signature *> & signatures)
 {
 	ULOGGER_DEBUG("");
 	std::list<Signature *> toSave;
@@ -418,19 +484,30 @@ void DBDriver::updateOccupancyGrid(
 		int nodeId,
 		const cv::Mat & ground,
 		const cv::Mat & obstacles,
+		const cv::Mat & empty,
 		float cellSize,
 		const cv::Point3f & viewpoint)
 {
 	_dbSafeAccessMutex.lock();
 	//just to make sure the occupancy grids are compressed for convenience
 	SensorData data;
-	data.setOccupancyGrid(ground, obstacles, cellSize, viewpoint);
+	data.setOccupancyGrid(ground, obstacles, empty, cellSize, viewpoint);
 	this->updateOccupancyGridQuery(
 			nodeId,
 			data.gridGroundCellsCompressed(),
 			data.gridObstacleCellsCompressed(),
+			data.gridEmptyCellsCompressed(),
 			cellSize,
 			viewpoint);
+	_dbSafeAccessMutex.unlock();
+}
+
+void DBDriver::updateDepthImage(int nodeId, const cv::Mat & image)
+{
+	_dbSafeAccessMutex.lock();
+	this->updateDepthImageQuery(
+			nodeId,
+			image);
 	_dbSafeAccessMutex.unlock();
 }
 
@@ -455,7 +532,6 @@ void DBDriver::loadSignatures(const std::list<int> & signIds,
 	UDEBUG("");
 	// look up in the trash before the database
 	std::list<int> ids = signIds;
-	std::list<Signature*>::iterator sIter;
 	bool valueFound = false;
 	_trashesMutex.lock();
 	{
@@ -513,6 +589,7 @@ void DBDriver::loadWords(const std::set<int> & wordIds, std::list<VisualWord *> 
 		{
 			for(std::set<int>::iterator iter = ids.begin(); iter != ids.end();)
 			{
+				UASSERT(*iter>0);
 				wIter = _trashVisualWords.find(*iter);
 				if(wIter != _trashVisualWords.end())
 				{
@@ -574,7 +651,7 @@ void DBDriver::getNodeData(
 	{
 		const Signature * s = _trashSignatures.at(signatureId);
 		if(!s->sensorData().imageCompressed().empty() ||
-			!s->sensorData().laserScanCompressed().empty() ||
+			!s->sensorData().laserScanCompressed().isEmpty() ||
 			!s->sensorData().userDataCompressed().empty() ||
 			s->sensorData().gridCellSize() != 0.0f ||
 			!s->isSaved())
@@ -623,6 +700,30 @@ bool DBDriver::getCalibration(
 	return found;
 }
 
+bool DBDriver::getLaserScanInfo(
+		int signatureId,
+		LaserScan & info) const
+{
+	UDEBUG("");
+	bool found = false;
+	// look in the trash
+	_trashesMutex.lock();
+	if(uContains(_trashSignatures, signatureId))
+	{
+		info = _trashSignatures.at(signatureId)->sensorData().laserScanCompressed();
+		found = true;
+	}
+	_trashesMutex.unlock();
+
+	if(!found)
+	{
+		_dbSafeAccessMutex.lock();
+		found = this->getLaserScanInfoQuery(signatureId, info);
+		_dbSafeAccessMutex.unlock();
+	}
+	return found;
+}
+
 bool DBDriver::getNodeInfo(
 		int signatureId,
 		Transform & pose,
@@ -630,7 +731,9 @@ bool DBDriver::getNodeInfo(
 		int & weight,
 		std::string & label,
 		double & stamp,
-		Transform & groundTruthPose) const
+		Transform & groundTruthPose,
+		std::vector<float> & velocity,
+		GPS & gps) const
 {
 	bool found = false;
 	// look in the trash
@@ -643,6 +746,7 @@ bool DBDriver::getNodeInfo(
 		label = _trashSignatures.at(signatureId)->getLabel();
 		stamp = _trashSignatures.at(signatureId)->getStamp();
 		groundTruthPose = _trashSignatures.at(signatureId)->getGroundTruthPose();
+		gps = _trashSignatures.at(signatureId)->sensorData().gps();
 		found = true;
 	}
 	_trashesMutex.unlock();
@@ -650,7 +754,7 @@ bool DBDriver::getNodeInfo(
 	if(!found)
 	{
 		_dbSafeAccessMutex.lock();
-		found = this->getNodeInfoQuery(signatureId, pose, mapId, weight, label, stamp, groundTruthPose);
+		found = this->getNodeInfoQuery(signatureId, pose, mapId, weight, label, stamp, groundTruthPose, velocity, gps);
 		_dbSafeAccessMutex.unlock();
 	}
 	return found;
@@ -942,6 +1046,80 @@ void DBDriver::addStatistics(const Statistics & statistics) const
 	_dbSafeAccessMutex.unlock();
 }
 
+void DBDriver::savePreviewImage(const cv::Mat & image) const
+{
+	_dbSafeAccessMutex.lock();
+	savePreviewImageQuery(image);
+	_dbSafeAccessMutex.unlock();
+}
+
+cv::Mat DBDriver::loadPreviewImage() const
+{
+	_dbSafeAccessMutex.lock();
+	cv::Mat image = loadPreviewImageQuery();
+	_dbSafeAccessMutex.unlock();
+	return image;
+}
+
+void DBDriver::saveOptimizedPoses(const std::map<int, Transform> & optimizedPoses, const Transform & lastlocalizationPose) const
+{
+	_dbSafeAccessMutex.lock();
+	saveOptimizedPosesQuery(optimizedPoses, lastlocalizationPose);
+	_dbSafeAccessMutex.unlock();
+}
+std::map<int, Transform> DBDriver::loadOptimizedPoses(Transform * lastlocalizationPose) const
+{
+	_dbSafeAccessMutex.lock();
+	std::map<int, Transform> poses = loadOptimizedPosesQuery(lastlocalizationPose);
+	_dbSafeAccessMutex.unlock();
+	return poses;
+}
+
+void DBDriver::save2DMap(const cv::Mat & map, float xMin, float yMin, float cellSize) const
+{
+	_dbSafeAccessMutex.lock();
+	save2DMapQuery(map, xMin, yMin, cellSize);
+	_dbSafeAccessMutex.unlock();
+}
+
+cv::Mat DBDriver::load2DMap(float & xMin, float & yMin, float & cellSize) const
+{
+	_dbSafeAccessMutex.lock();
+	cv::Mat map = load2DMapQuery(xMin, yMin, cellSize);
+	_dbSafeAccessMutex.unlock();
+	return map;
+}
+
+void DBDriver::saveOptimizedMesh(
+			const cv::Mat & cloud,
+			const std::vector<std::vector<std::vector<unsigned int> > > & polygons,
+#if PCL_VERSION_COMPARE(>=, 1, 8, 0)
+			const std::vector<std::vector<Eigen::Vector2f, Eigen::aligned_allocator<Eigen::Vector2f> > > & texCoords,
+#else
+			const std::vector<std::vector<Eigen::Vector2f> > & texCoords,
+#endif
+			const cv::Mat & textures) const
+{
+	_dbSafeAccessMutex.lock();
+	saveOptimizedMeshQuery(cloud, polygons, texCoords, textures);
+	_dbSafeAccessMutex.unlock();
+}
+
+cv::Mat DBDriver::loadOptimizedMesh(
+				std::vector<std::vector<std::vector<unsigned int> > > * polygons,
+#if PCL_VERSION_COMPARE(>=, 1, 8, 0)
+				std::vector<std::vector<Eigen::Vector2f, Eigen::aligned_allocator<Eigen::Vector2f> > > * texCoords,
+#else
+				std::vector<std::vector<Eigen::Vector2f> > * texCoords,
+#endif
+				cv::Mat * textures) const
+{
+	_dbSafeAccessMutex.lock();
+	cv::Mat cloud = loadOptimizedMeshQuery(polygons, texCoords, textures);
+	_dbSafeAccessMutex.unlock();
+	return cloud;
+}
+
 void DBDriver::generateGraph(
 		const std::string & fileName,
 		const std::set<int> & idsInput,
@@ -1093,7 +1271,7 @@ void DBDriver::generateGraph(
 									 weightNeighbor,
 									 colorG);
 						 }
-						 else
+						 else if(iter->first != id)
 						 {
 							 //child
 							 fprintf(fout, "   \"%d\\n%d\" -> \"%d\\n%d\" [label=\"C\", fontcolor=%s, fontsize=8];\n",
