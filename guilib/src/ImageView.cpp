@@ -111,7 +111,14 @@ private:
 			{
 				_placeHolder = new QGraphicsRectItem (this);
 				_placeHolder->setVisible(false);
-				_placeHolder->setBrush(QBrush(QColor ( 0, 0, 0, 170 ))); // Black transparent background
+				if(qGray(pen().color().rgb() > 255/2))
+				{
+					_placeHolder->setBrush(QBrush(QColor ( 0,0,0, 170 )));
+				}
+				else
+				{
+					_placeHolder->setBrush(QBrush(QColor ( 255, 255, 255, 170 )));
+				}
 				QGraphicsTextItem * text = new QGraphicsTextItem(_placeHolder);
 				text->setDefaultTextColor(this->pen().color().rgb());
 				text->setPlainText(_text);
@@ -148,6 +155,8 @@ ImageView::ImageView(QWidget * parent) :
 		QWidget(parent),
 		_savedFileName((QDir::homePath()+ "/") + "picture" + ".png"),
 		_alpha(50),
+		_featuresSize(0.0f),
+		_defaultBgColor(Qt::black),
 		_imageItem(0),
 		_imageDepthItem(0)
 {
@@ -170,6 +179,7 @@ ImageView::ImageView(QWidget * parent) :
 	_showFeatures = _menu->addAction(tr("Show features"));
 	_showFeatures->setCheckable(true);
 	_showFeatures->setChecked(true);
+	_setFeaturesSize = _menu->addAction(tr("Set features size..."));
 	_showLines = _menu->addAction(tr("Show lines"));
 	_showLines->setCheckable(true);
 	_showLines->setChecked(true);
@@ -200,8 +210,10 @@ void ImageView::saveSettings(QSettings & settings, const QString & group) const
 	settings.setValue("image_shown", this->isImageShown());
 	settings.setValue("depth_shown", this->isImageDepthShown());
 	settings.setValue("features_shown", this->isFeaturesShown());
+	settings.setValue("features_size", this->getFeaturesSize());
 	settings.setValue("lines_shown", this->isLinesShown());
 	settings.setValue("alpha", this->getAlpha());
+	settings.setValue("bg_color", this->getDefaultBackgroundColor());
 	settings.setValue("graphics_view", this->isGraphicsViewMode());
 	settings.setValue("graphics_view_scale", this->isGraphicsViewScaled());
 	if(!group.isEmpty())
@@ -219,8 +231,10 @@ void ImageView::loadSettings(QSettings & settings, const QString & group)
 	this->setImageShown(settings.value("image_shown", this->isImageShown()).toBool());
 	this->setImageDepthShown(settings.value("depth_shown", this->isImageDepthShown()).toBool());
 	this->setFeaturesShown(settings.value("features_shown", this->isFeaturesShown()).toBool());
+	this->setFeaturesSize(settings.value("features_size", this->getFeaturesSize()).toInt());
 	this->setLinesShown(settings.value("lines_shown", this->isLinesShown()).toBool());
 	this->setAlpha(settings.value("alpha", this->getAlpha()).toInt());
+	this->setDefaultBackgroundColor(settings.value("bg_color", this->getDefaultBackgroundColor()).value<QColor>());
 	this->setGraphicsViewMode(settings.value("graphics_view", this->isGraphicsViewMode()).toBool());
 	this->setGraphicsViewScaled(settings.value("graphics_view_scale", this->isGraphicsViewScaled()).toBool());
 	if(!group.isEmpty())
@@ -257,6 +271,11 @@ bool ImageView::isGraphicsViewMode() const
 bool ImageView::isGraphicsViewScaled() const
 {
 	return _graphicsViewScaled->isChecked();
+}
+
+const QColor & ImageView::getDefaultBackgroundColor() const
+{
+	return _defaultBgColor;
 }
 
 const QColor & ImageView::getBackgroundColor() const
@@ -414,6 +433,12 @@ void ImageView::setGraphicsViewScaled(bool scaled)
 	{
 		this->update();
 	}
+}
+
+void ImageView::setDefaultBackgroundColor(const QColor & color)
+{
+	_defaultBgColor = color;
+	setBackgroundColor(color);
 }
 
 void ImageView::setBackgroundColor(const QColor & color)
@@ -620,6 +645,16 @@ void ImageView::contextMenuEvent(QContextMenuEvent * e)
 			emit configChanged();
 		}
 	}
+	else if(action == _setFeaturesSize)
+	{
+		bool ok = false;
+		int value = QInputDialog::getInt(this, tr("Set features size"), tr("Size (0 means actual keypoint size)"), _featuresSize, 0, 999, 1, &ok);
+		if(ok)
+		{
+			this->setFeaturesSize(value);
+			emit configChanged();
+		}
+	}
 
 	if(action == _showImage || action ==_showImageDepth)
 	{
@@ -651,12 +686,28 @@ void ImageView::updateOpacity()
 
 void ImageView::setFeatures(const std::multimap<int, cv::KeyPoint> & refWords, const cv::Mat & depth, const QColor & color)
 {
-	qDeleteAll(_features);
-	_features.clear();
+	clearFeatures();
+
+	float xRatio = 0;
+	float yRatio = 0;
+	if (this->sceneRect().isValid() && !depth.empty() && int(this->sceneRect().height()) % depth.rows == 0 && int(this->sceneRect().width()) % depth.cols == 0)
+	{
+		UDEBUG("depth=%dx%d sceneRect=%fx%f", depth.cols, depth.rows, this->sceneRect().width(), this->sceneRect().height());
+		xRatio = float(depth.cols)/float(this->sceneRect().width());
+		yRatio = float(depth.rows)/float(this->sceneRect().height());
+		UDEBUG("xRatio=%f yRatio=%f", xRatio, yRatio);
+	}
 
 	for(std::multimap<int, cv::KeyPoint>::const_iterator iter = refWords.begin(); iter != refWords.end(); ++iter )
 	{
-		addFeature(iter->first, iter->second, depth.empty()?0:util2d::getDepth(depth, iter->second.pt.x, iter->second.pt.y, false), color);
+		if (xRatio > 0 && yRatio > 0)
+		{
+			addFeature(iter->first, iter->second, util2d::getDepth(depth, iter->second.pt.x*xRatio, iter->second.pt.y*yRatio, false), color);
+		}
+		else
+		{
+			addFeature(iter->first, iter->second, 0, color);
+		}
 	}
 
 	if(!_graphicsView->isVisible())
@@ -667,12 +718,28 @@ void ImageView::setFeatures(const std::multimap<int, cv::KeyPoint> & refWords, c
 
 void ImageView::setFeatures(const std::vector<cv::KeyPoint> & features, const cv::Mat & depth, const QColor & color)
 {
-	qDeleteAll(_features);
-	_features.clear();
+	clearFeatures();
+
+	float xRatio = 0;
+	float yRatio = 0;
+	if (this->sceneRect().isValid() && !depth.empty() && int(this->sceneRect().height()) % depth.rows == 0 && int(this->sceneRect().width()) % depth.cols == 0)
+	{
+		UDEBUG("depth=%dx%d sceneRect=%fx%f", depth.cols, depth.rows, this->sceneRect().width(), this->sceneRect().height());
+		xRatio = float(depth.cols) / float(this->sceneRect().width());
+		yRatio = float(depth.rows) / float(this->sceneRect().height());
+		UDEBUG("xRatio=%f yRatio=%f", xRatio, yRatio);
+	}
 
 	for(unsigned int i = 0; i< features.size(); ++i )
 	{
-		addFeature(i, features[i], depth.empty()?0:util2d::getDepth(depth, features[i].pt.x, features[i].pt.y, false), color);
+		if(xRatio > 0 && yRatio > 0)
+		{
+			addFeature(i, features[i], util2d::getDepth(depth, features[i].pt.x*xRatio, features[i].pt.y*yRatio, false), color);
+		}
+		else
+		{
+			addFeature(i, features[i], 0, color);
+		}
 	}
 
 	if(!_graphicsView->isVisible())
@@ -685,6 +752,10 @@ void ImageView::addFeature(int id, const cv::KeyPoint & kpt, float depth, QColor
 {
 	color.setAlpha(this->getAlpha());
 	rtabmap::KeypointItem * item = new rtabmap::KeypointItem(id, kpt, depth, color);
+	if(_featuresSize>0.0f)
+	{
+		item->setRect(kpt.pt.x-_featuresSize/2.0f, kpt.pt.y-_featuresSize/2.0f, _featuresSize, _featuresSize);
+	}
 	_features.insert(id, item);
 	item->setVisible(isFeaturesShown());
 	item->setZValue(1);
@@ -741,15 +812,16 @@ void ImageView::setImageDepth(const QImage & imageDepth)
 {
 	_imageDepth = QPixmap::fromImage(imageDepth);
 
+	UASSERT(_imageDepth.width() && _imageDepth.height());
+
 	if( _image.width() > 0 &&
 		_image.width() > _imageDepth.width() &&
 		_image.height() > _imageDepth.height() &&
 		_image.width() % _imageDepth.width() == 0 &&
-		_image.height() % _imageDepth.height() == 0 &&
-		_image.width() / _imageDepth.width() == _image.height() / _imageDepth.height())
+		_image.height() % _imageDepth.height() == 0)
 	{
 		// scale depth to rgb
-		_imageDepth = _imageDepth.scaledToWidth(_image.width());
+		_imageDepth = _imageDepth.scaled(_image.size());
 	}
 
 	if(_graphicsView->isVisible())
@@ -836,6 +908,26 @@ void ImageView::setAlpha(int alpha)
 	}
 }
 
+void ImageView::setFeaturesSize(int size)
+{
+	_featuresSize = size;
+	for(QMultiMap<int, KeypointItem*>::iterator iter=_features.begin(); iter!=_features.end(); ++iter)
+	{
+		const cv::KeyPoint & kpt = iter.value()->keypoint();
+		if(size <= 0.0f)
+		{
+			size = kpt.size==0?3:kpt.size;
+		}
+		float sizef = size;
+		iter.value()->setRect(kpt.pt.x-sizef/2.0f, kpt.pt.y-sizef/2.0f, sizef, sizef);
+	}
+
+	if(!_graphicsView->isVisible())
+	{
+		this->update();
+	}
+}
+
 void ImageView::setSceneRect(const QRectF & rect)
 {
 	_graphicsView->scene()->setSceneRect(rect);
@@ -866,10 +958,20 @@ void ImageView::clearLines()
 	}
 }
 
-void ImageView::clear()
+void ImageView::clearFeatures()
 {
 	qDeleteAll(_features);
 	_features.clear();
+
+	if(!_graphicsView->isVisible())
+	{
+		this->update();
+	}
+}
+
+void ImageView::clear()
+{
+	clearFeatures();
 
 	qDeleteAll(_lines);
 	_lines.clear();

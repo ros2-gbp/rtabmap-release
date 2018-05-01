@@ -25,8 +25,8 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifndef KEYPOINTITEM_H_
-#define KEYPOINTITEM_H_
+#ifndef RTABMAP_KEYPOINTITEM_H_
+#define RTABMAP_KEYPOINTITEM_H_
 
 #include "rtabmap/gui/RtabmapGuiExp.h" // DLL export/import defines
 
@@ -45,6 +45,7 @@ public:
 	virtual ~KeypointItem();
 
 	void setColor(const QColor & color);
+	const cv::KeyPoint & keypoint() const {return _kpt;}
 
 protected:
 	virtual void hoverEnterEvent ( QGraphicsSceneHoverEvent * event );

@@ -42,6 +42,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/utilite/UStl.h"
 #include <opencv2/core/core.hpp>
 #include <opencv2/features2d/features2d.hpp>
+#include <pcl/pcl_config.h>
 
 namespace rtabmap {
 
@@ -55,6 +56,7 @@ class Registration;
 class RegistrationInfo;
 class RegistrationIcp;
 class Stereo;
+class OccupancyGrid;
 
 class RTABMAP_EXP Memory
 {
@@ -74,12 +76,13 @@ public:
 	bool update(const SensorData & data,
 			const Transform & pose,
 			const cv::Mat & covariance,
+			const std::vector<float> & velocity = std::vector<float>(), // vx,vy,vz,vroll,vpitch,vyaw
 			Statistics * stats = 0);
 	bool init(const std::string & dbUrl,
 			bool dbOverwritten = false,
 			const ParametersMap & parameters = ParametersMap(),
 			bool postInitClosingEvents = false);
-	void close(bool databaseSaved = true, bool postInitClosingEvents = false);
+	void close(bool databaseSaved = true, bool postInitClosingEvents = false, const std::string & ouputDatabasePath = "");
 	std::map<int, float> computeLikelihood(const Signature * signature,
 			const std::list<int> & ids);
 	int incrementMapId(std::map<int, int> * reducedIds = 0);
@@ -89,11 +92,34 @@ public:
 	std::set<int> reactivateSignatures(const std::list<int> & ids, unsigned int maxLoaded, double & timeDbAccess);
 
 	int cleanup();
+	void saveStatistics(const Statistics & statistics);
+	void savePreviewImage(const cv::Mat & image) const;
+	cv::Mat loadPreviewImage() const;
+	void saveOptimizedPoses(const std::map<int, Transform> & optimizedPoses, const Transform & lastlocalizationPose) const;
+	std::map<int, Transform> loadOptimizedPoses(Transform * lastlocalizationPose) const;
+	void save2DMap(const cv::Mat & map, float xMin, float yMin, float cellSize) const;
+	cv::Mat load2DMap(float & xMin, float & yMin, float & cellSize) const;
+	void saveOptimizedMesh(
+			const cv::Mat & cloud,
+			const std::vector<std::vector<std::vector<unsigned int> > > & polygons = std::vector<std::vector<std::vector<unsigned int> > >(),      // Textures -> polygons -> vertices
+#if PCL_VERSION_COMPARE(>=, 1, 8, 0)
+			const std::vector<std::vector<Eigen::Vector2f, Eigen::aligned_allocator<Eigen::Vector2f> > > & texCoords = std::vector<std::vector<Eigen::Vector2f, Eigen::aligned_allocator<Eigen::Vector2f> > >(), // Textures -> uv coords for each vertex of the polygons
+#else
+			const std::vector<std::vector<Eigen::Vector2f> > & texCoords = std::vector<std::vector<Eigen::Vector2f> >(), // Textures -> uv coords for each vertex of the polygons
+#endif
+			const cv::Mat & textures = cv::Mat()) const; // concatenated textures (assuming square textures with all same size)
+	cv::Mat loadOptimizedMesh(
+			std::vector<std::vector<std::vector<unsigned int> > > * polygons = 0,
+#if PCL_VERSION_COMPARE(>=, 1, 8, 0)
+			std::vector<std::vector<Eigen::Vector2f, Eigen::aligned_allocator<Eigen::Vector2f> > > * texCoords = 0,
+#else
+			std::vector<std::vector<Eigen::Vector2f> > * texCoords = 0,
+#endif
+			cv::Mat * textures = 0) const;
 	void emptyTrash();
 	void joinTrashThread();
 	bool addLink(const Link & link, bool addInDatabase = false);
-	void updateLink(int fromId, int toId, const Transform & transform, float rotVariance, float transVariance);
-	void updateLink(int fromId, int toId, const Transform & transform, const cv::Mat & covariance);
+	void updateLink(const Link & link, bool updateInDatabase = false);
 	void removeAllVirtualLinks();
 	void removeVirtualLinks(int signatureId);
 	std::map<int, int> getNeighborsId(
@@ -103,6 +129,8 @@ public:
 			bool incrementMarginOnLoop = false,
 			bool ignoreLoopIds = false,
 			bool ignoreIntermediateNodes = false,
+			bool ignoreLocalSpaceLoopIds = false,
+			const std::set<int> & nodesSet = std::set<int>(),
 			double * dbAccessTime = 0) const;
 	std::map<int, float> getNeighborsIdRadius(
 			int signatureId,
@@ -110,6 +138,7 @@ public:
 			const std::map<int, Transform> & optimizedPoses,
 			int maxGraphDepth) const;
 	void deleteLocation(int locationId, std::list<int> * deletedWords = 0);
+	void saveLocationData(int locationId);
 	void removeLink(int idA, int idB);
 	void removeRawData(int id, bool image = true, bool scan = true, bool userData = true);
 
@@ -132,6 +161,13 @@ public:
 	int getSignatureIdByLabel(const std::string & label, bool lookInDatabase = true) const;
 	bool labelSignature(int id, const std::string & label);
 	std::map<int, std::string> getAllLabels() const;
+	/**
+	 * Set user data. Detect automatically if raw or compressed. If raw, the data is
+	 * compressed too. A matrix of type CV_8UC1 with 1 row is considered as compressed.
+	 * If you have one dimension unsigned 8 bits raw data, make sure to transpose it
+	 * (to have multiple rows instead of multiple columns) in order to be detected as
+	 * not compressed.
+	 */
 	bool setUserData(int id, const cv::Mat & data);
 	int getDatabaseMemoryUsed() const; // in bytes
 	std::string getDatabaseVersion() const;
@@ -145,6 +181,8 @@ public:
 			std::string & label,
 			double & stamp,
 			Transform & groundTruth,
+			std::vector<float> & velocity,
+			GPS & gps,
 			bool lookInDatabase = false) const;
 	cv::Mat getImageCompressed(int signatureId) const;
 	SensorData getNodeData(int nodeId, bool uncompressedData = false) const;
@@ -155,7 +193,7 @@ public:
 	void getNodeCalibration(int nodeId,
 			std::vector<CameraModel> & models,
 			StereoCameraModel & stereoModel);
-	SensorData getSignatureDataConst(int locationId) const;
+	SensorData getSignatureDataConst(int locationId, bool images = true, bool scan = true, bool userData = true, bool occupancyGrid = true) const;
 	std::set<int> getAllSignatureIds() const;
 	bool memoryChanged() const {return _memoryChanged;}
 	bool isIncremental() const {return _incrementalMemory;}
@@ -185,9 +223,8 @@ public:
 			std::multimap<int, Link> & links,
 			bool lookInDatabase = false);
 
-	Transform computeTransform(Signature & fromS, Signature & toS, Transform guess, RegistrationInfo * info = 0) const;
-	Transform computeTransform(int fromId, int toId, Transform guess, RegistrationInfo * info = 0);
-	Transform computeIcpTransform(int fromId, int toId, Transform guess, RegistrationInfo * info = 0);
+	Transform computeTransform(Signature & fromS, Signature & toS, Transform guess, RegistrationInfo * info = 0, bool useKnownCorrespondencesIfPossible = false) const;
+	Transform computeTransform(int fromId, int toId, Transform guess, RegistrationInfo * info = 0, bool useKnownCorrespondencesIfPossible = false);
 	Transform computeIcpTransformMulti(
 			int newId,
 			int oldId,
@@ -198,6 +235,7 @@ private:
 	void preUpdate();
 	void addSignatureToStm(Signature * signature, const cv::Mat & covariance);
 	void clear();
+	void loadDataFromDb(bool postInitClosingEvents);
 	void moveToTrash(Signature * s, bool keepLinkedToGraph = true, std::list<int> * deletedWords = 0);
 
 	void moveSignatureToWMFromSTM(int id, int * reducedTo = 0);
@@ -235,6 +273,7 @@ private:
 	bool _rawDescriptorsKept;
 	bool _saveDepth16Format;
 	bool _notLinkedNodesKeptInDb;
+	bool _saveIntermediateNodeData;
 	bool _incrementalMemory;
 	bool _reduceGraph;
 	int _maxStMemSize;
@@ -244,14 +283,23 @@ private:
 	bool _generateIds;
 	bool _badSignaturesIgnored;
 	bool _mapLabelsAdded;
+	bool _depthAsMask;
 	int _imagePreDecimation;
 	int _imagePostDecimation;
+	bool _compressionParallelized;
 	float _laserScanDownsampleStepSize;
+	float _laserScanVoxelSize;
+	int _laserScanNormalK;
+	int _laserScanNormalRadius;
 	bool _reextractLoopClosureFeatures;
 	float _rehearsalMaxDistance;
 	float _rehearsalMaxAngle;
 	bool _rehearsalWeightIgnoredWhileMoving;
 	bool _useOdometryFeatures;
+	bool _createOccupancyGrid;
+	int _visMaxFeatures;
+	int _visCorType;
+	bool _imagesAlreadyRectified;
 
 	int _idCount;
 	int _idMapCount;
@@ -260,6 +308,7 @@ private:
 	bool _memoryChanged; // False by default, become true only when Memory::update() is called.
 	bool _linksChanged; // False by default, become true when links are modified.
 	int _signaturesAdded;
+	GPS _gpsOrigin;
 
 	std::map<int, Signature *> _signatures; // TODO : check if a signature is already added? although it is not supposed to occur...
 	std::set<int> _stMem; // id
@@ -273,7 +322,9 @@ private:
 	bool _parallelized;
 
 	Registration * _registrationPipeline;
-	RegistrationIcp * _registrationIcp;
+	RegistrationIcp * _registrationIcpMulti;
+
+	OccupancyGrid * _occupancy;
 };
 
 } // namespace rtabmap

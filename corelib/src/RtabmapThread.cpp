@@ -51,9 +51,7 @@ RtabmapThread::RtabmapThread(Rtabmap * rtabmap) :
 		_previousStamp(0.0),
 		_rtabmap(rtabmap),
 		_paused(false),
-		lastPose_(Transform::getIdentity()),
-		_rotVariance(0),
-		_transVariance(0)
+		lastPose_(Transform::getIdentity())
 
 {
 	UASSERT(rtabmap != 0);
@@ -87,9 +85,9 @@ void RtabmapThread::clearBufferedData()
 	_dataMutex.lock();
 	{
 		_dataBuffer.clear();
+		_newMapEvents.clear();
 		lastPose_.setIdentity();
-		_rotVariance = 0;
-		_transVariance = 0;
+		covariance_ = cv::Mat();
 		_previousStamp = 0;
 	}
 	_dataMutex.unlock();
@@ -117,12 +115,12 @@ void RtabmapThread::createIntermediateNodes(bool enabled)
 	_createIntermediateNodes = enabled;
 }
 
-void RtabmapThread::close(bool databaseSaved)
+void RtabmapThread::close(bool databaseSaved, const std::string & ouputDatabasePath)
 {
 	this->join(true);
 	if(_rtabmap)
 	{
-		_rtabmap->close(databaseSaved);
+		_rtabmap->close(databaseSaved, ouputDatabasePath);
 		delete _rtabmap;
 		_rtabmap = 0;
 	}
@@ -171,6 +169,7 @@ void RtabmapThread::publishMap(bool optimized, bool full, bool graphOnly) const
 
 void RtabmapThread::mainLoopBegin()
 {
+	ULogger::registerCurrentThread("Rtabmap");
 	if(_rtabmap == 0)
 	{
 		UERROR("Cannot start rtabmap thread if no rtabmap object is set! Stopping the thread...");
@@ -194,9 +193,9 @@ void RtabmapThread::mainLoop()
 	{
 		if(!_state.empty() && !_stateParam.empty())
 		{
-			state = _state.top();
+			state = _state.front();
 			_state.pop();
-			parameters = _stateParam.top();
+			parameters = _stateParam.front();
 			_stateParam.pop();
 		}
 	}
@@ -240,7 +239,7 @@ void RtabmapThread::mainLoop()
 			UWARN("Closing... %d data still buffered! They will be cleared.", (int)_dataBuffer.size());
 			this->clearBufferedData();
 		}
-		_rtabmap->close(uStr2Bool(parameters.at("saved")));
+		_rtabmap->close(uStr2Bool(parameters.at("saved")), parameters.at("outputPath"));
 		break;
 	case kStateDumpingMemory:
 		_rtabmap->dumpData();
@@ -272,15 +271,6 @@ void RtabmapThread::mainLoop()
 		break;
 	case kStateTriggeringMap:
 		_rtabmap->triggerNewMap();
-		break;
-	case kStateAddingUserData:
-		_userDataMutex.lock();
-		{
-			userData = _userData;
-			_userData = cv::Mat();
-		}
-		_userDataMutex.unlock();
-		_rtabmap->setUserData(0, userData);
 		break;
 	case kStateSettingGoal:
 		id = atoi(parameters.at("id").c_str());
@@ -323,7 +313,7 @@ void RtabmapThread::mainLoop()
 }
 
 
-void RtabmapThread::handleEvent(UEvent* event)
+bool RtabmapThread::handleEvent(UEvent* event)
 {
 	if(this->isRunning())
 	{
@@ -335,9 +325,22 @@ void RtabmapThread::handleEvent(UEvent* event)
 			{
 				if (_rtabmap->isRGBDMode())
 				{
-					if (!e->info().odomPose.isNull())
+					if (!e->info().odomPose.isNull() || (_rtabmap->getMemory() && !_rtabmap->getMemory()->isIncremental()))
 					{
-						this->addData(OdometryEvent(e->data(), e->info().odomPose, e->info().odomCovariance));
+						OdometryInfo infoCov;
+						infoCov.reg.covariance = e->info().odomCovariance;
+						if(e->info().odomVelocity.size() == 6)
+						{
+							infoCov.transform = Transform(
+									e->info().odomVelocity[0],
+									e->info().odomVelocity[1],
+									e->info().odomVelocity[2],
+									e->info().odomVelocity[3],
+									e->info().odomVelocity[4],
+									e->info().odomVelocity[5]);
+							infoCov.interval = 1.0;
+						}
+						this->addData(OdometryEvent(e->data(), e->info().odomPose, infoCov));
 					}
 					else
 					{
@@ -346,7 +349,9 @@ void RtabmapThread::handleEvent(UEvent* event)
 				}
 				else
 				{ 
-					this->addData(OdometryEvent(e->data(), Transform(), 1, 1));
+					OdometryInfo infoCov;
+					infoCov.reg.covariance = e->info().odomCovariance;
+					this->addData(OdometryEvent(e->data(), e->info().odomPose, infoCov));
 				}
 				
 			}
@@ -355,7 +360,7 @@ void RtabmapThread::handleEvent(UEvent* event)
 		{
 			UDEBUG("OdometryEvent");
 			OdometryEvent * e = (OdometryEvent*)event;
-			if(!e->pose().isNull())
+			if(!e->pose().isNull() || (_rtabmap->getMemory() && !_rtabmap->getMemory()->isIncremental()))
 			{
 				this->addData(*e);
 			}
@@ -384,10 +389,6 @@ void RtabmapThread::handleEvent(UEvent* event)
 						"user data with this new one. Note that UserDataEvent should be used only "
 						"if the rate of UserDataEvent is lower than RTAB-Map's detection rate (%f Hz).", _rate);
 				}
-				else
-				{
-					pushNewState(kStateAddingUserData);
-				}
 			}
 		}
 		else if(event->getClassName().compare("RtabmapEventCmd") == 0)
@@ -408,6 +409,7 @@ void RtabmapThread::handleEvent(UEvent* event)
 				UASSERT(rtabmapEvent->value1().isUndef() || rtabmapEvent->value1().isBool());
 				ParametersMap param;
 				param.insert(ParametersPair("saved", uBool2Str(rtabmapEvent->value1().isUndef() || rtabmapEvent->value1().toBool())));
+				param.insert(ParametersPair("outputPath", rtabmapEvent->value2().toStr()));
 				pushNewState(kStateClose, param);
 			}
 			else if(cmd == RtabmapEventCmd::kCmdResetMemory)
@@ -515,6 +517,7 @@ void RtabmapThread::handleEvent(UEvent* event)
 			pushNewState(kStateChangingParameters, ((ParamEvent*)event)->getParameters());
 		}
 	}
+	return false;
 }
 
 //============================================================
@@ -528,7 +531,7 @@ void RtabmapThread::process()
 		if(_rtabmap->getMemory())
 		{
 			bool wasPlanning = _rtabmap->getPath().size()>0;
-			if(_rtabmap->process(data.data(), data.pose(), data.covariance()))
+			if(_rtabmap->process(data.data(), data.pose(), data.covariance(), data.velocity()))
 			{
 				Statistics stats = _rtabmap->getStatistics();
 				stats.addStatistic(Statistics::kMemoryImages_buffered(), (float)_dataBuffer.size());
@@ -558,7 +561,7 @@ void RtabmapThread::addData(const OdometryEvent & odomEvent)
 		bool ignoreFrame = false;
 		if(_rate>0.0f)
 		{
-			if((_previousStamp>0.0 && odomEvent.data().stamp()>_previousStamp && odomEvent.data().stamp() - _previousStamp < 1.0f/_rate) ||
+			if((_previousStamp>=0.0 && odomEvent.data().stamp()>_previousStamp && odomEvent.data().stamp() - _previousStamp < 1.0f/_rate) ||
 				((_previousStamp<=0.0 || odomEvent.data().stamp()<=_previousStamp) && _frameRateTimer->getElapsedTime() < 1.0f/_rate))
 			{
 				ignoreFrame = true;
@@ -566,26 +569,29 @@ void RtabmapThread::addData(const OdometryEvent & odomEvent)
 		}
 		if(!lastPose_.isIdentity() &&
 						(odomEvent.pose().isIdentity() ||
-						odomEvent.info().variance>=9999 ||
-						odomEvent.rotVariance()>=9999 ||
-						odomEvent.transVariance()>=9999))
+						odomEvent.info().reg.covariance.at<double>(0,0)>=9999))
 		{
-			UWARN("Odometry is reset (identity pose or high variance >=9999 detected). Increment map id!");
-			pushNewState(kStateTriggeringMap);
-			_rotVariance = 0;
-			_transVariance = 0;
+			if(odomEvent.pose().isIdentity())
+			{
+				UWARN("Odometry is reset (identity pose detected). Increment map id! (stamp=%fs)", odomEvent.data().stamp());
+			}
+			else
+			{
+				UWARN("Odometry is reset (high variance (%f >=9999 detected, stamp=%fs). Increment map id!", odomEvent.info().reg.covariance.at<double>(0,0), odomEvent.data().stamp());
+			}
+			_newMapEvents.push_back(odomEvent.data().stamp());
+			covariance_ = cv::Mat();
 		}
 
-		double maxRotVar = odomEvent.rotVariance();
-		double maxTransVar = odomEvent.transVariance();
-		// FIXME: should merge the transformations/variances like Link::merge();
-		if(maxRotVar > _rotVariance)
+		if(uIsFinite(odomEvent.info().reg.covariance.at<double>(0,0)) &&
+			odomEvent.info().reg.covariance.at<double>(0,0) != 1.0 &&
+			odomEvent.info().reg.covariance.at<double>(0,0)>0.0)
 		{
-			_rotVariance = maxRotVar;
-		}
-		if(maxTransVar > _transVariance)
-		{
-			_transVariance = maxTransVar;
+			// Use largest covariance error (to be independent of the odometry frame rate)
+			if(covariance_.empty() || odomEvent.info().reg.covariance.at<double>(0,0) > covariance_.at<double>(0,0))
+			{
+				covariance_ = odomEvent.info().reg.covariance;
+			}
 		}
 
 		if(ignoreFrame && !_createIntermediateNodes)
@@ -601,34 +607,34 @@ void RtabmapThread::addData(const OdometryEvent & odomEvent)
 		lastPose_ = odomEvent.pose();
 
 		bool notify = true;
-		
-		if(_rotVariance <= 0)
+
+		if(covariance_.empty())
 		{
-			_rotVariance = 1.0;
+			covariance_ = cv::Mat::eye(6,6,CV_64FC1);
 		}
-		if(_transVariance <= 0)
-		{
-			_transVariance = 1.0;
-		}
+		OdometryInfo odomInfo = odomEvent.info().copyWithoutData();
+		odomInfo.reg.covariance = covariance_;
 		if(ignoreFrame)
 		{
 			// set negative id so rtabmap will detect it as an intermediate node
 			SensorData tmp = odomEvent.data();
 			tmp.setId(-1);
-			tmp.setFeatures(std::vector<cv::KeyPoint>(), cv::Mat());// remove features
-			_dataBuffer.push_back(OdometryEvent(tmp, odomEvent.pose(), _rotVariance, _transVariance));
+			tmp.setFeatures(std::vector<cv::KeyPoint>(), std::vector<cv::Point3f>(), cv::Mat());// remove features
+			_dataBuffer.push_back(OdometryEvent(tmp, odomEvent.pose(), odomInfo));
 		}
 		else
 		{
-			_dataBuffer.push_back(OdometryEvent(odomEvent.data(), odomEvent.pose(), _rotVariance, _transVariance));
+			_dataBuffer.push_back(OdometryEvent(odomEvent.data(), odomEvent.pose(), odomInfo));
 		}
-		UINFO("Added data %d (variance=%f)", odomEvent.data().id(), _rotVariance);
+		UINFO("Added data %d", odomEvent.data().id());
 
-		_rotVariance = 0;
-		_transVariance = 0;
+		covariance_ = cv::Mat();
 		while(_dataBufferMaxSize > 0 && _dataBuffer.size() > _dataBufferMaxSize)
 		{
-			ULOGGER_WARN("Data buffer is full, the oldest data is removed to add the new one.");
+			if(_rate > 0.0f)
+			{
+				ULOGGER_WARN("Data buffer is full, the oldest data is removed to add the new one.");
+			}
 			_dataBuffer.pop_front();
 			notify = false;
 		}
@@ -649,17 +655,41 @@ bool RtabmapThread::getData(OdometryEvent & data)
 	ULOGGER_INFO("wake-up");
 
 	bool dataFilled = false;
-
+	bool triggerNewMap = false;
 	_dataMutex.lock();
 	{
 		if(_state.empty() && !_dataBuffer.empty())
 		{
 			data = _dataBuffer.front();
 			_dataBuffer.pop_front();
+
+			_userDataMutex.lock();
+			{
+				if(!_userData.empty())
+				{
+					data.data().setUserData(_userData);
+					_userData = cv::Mat();
+				}
+			}
+			_userDataMutex.unlock();
+
+			while(_newMapEvents.size() && _newMapEvents.front() <= data.data().stamp())
+			{
+				UWARN("Triggering new map %f<=%f...", _newMapEvents.front() , data.data().stamp());
+				triggerNewMap = true;
+				_newMapEvents.pop_front();
+			}
+
 			dataFilled = true;
 		}
 	}
 	_dataMutex.unlock();
+
+	if(triggerNewMap)
+	{
+		_rtabmap->triggerNewMap();
+	}
+
 	return dataFilled;
 }
 
