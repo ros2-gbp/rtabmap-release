@@ -28,7 +28,6 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/core/OdometryFovis.h"
 #include "rtabmap/core/OdometryInfo.h"
 #include "rtabmap/core/util2d.h"
-#include "rtabmap/core/Version.h"
 #include "rtabmap/utilite/ULogger.h"
 #include "rtabmap/utilite/UTimer.h"
 #include "rtabmap/utilite/UStl.h"
@@ -40,13 +39,16 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 namespace rtabmap {
 
 OdometryFovis::OdometryFovis(const ParametersMap & parameters) :
-	Odometry(parameters),
+	Odometry(parameters)
+#ifdef RTABMAP_FOVIS
+    ,
 	fovis_(0),
 	rect_(0),
 	stereoCalib_(0),
 	depthImage_(0),
 	stereoDepth_(0),
 	lost_(false)
+#endif
 {
 	fovisParameters_ = Parameters::filterParameters(parameters, "OdomFovis");
 	if(parameters.find(Parameters::kOdomVisKeyFrameThr()) != parameters.end())
@@ -121,6 +123,7 @@ Transform OdometryFovis::computeTransform(
 		const Transform & guess,
 		OdometryInfo * info)
 {
+	UDEBUG("");
 	Transform t;
 
 #ifdef RTABMAP_FOVIS
@@ -140,7 +143,12 @@ Transform OdometryFovis::computeTransform(
 			data.stereoCameraModel().left().isValidForReprojection() &&
 			data.stereoCameraModel().right().isValidForReprojection())))
 	{
-		UERROR("Invalid camera model!");
+		UERROR("Invalid camera model! Mono cameras=%d (reproj=%d), Stereo camera=%d (reproj=%d|%d)",
+				(int)data.cameraModels().size(),
+				data.cameraModels().size() && data.cameraModels()[0].isValidForReprojection()?1:0,
+				data.stereoCameraModel().isValidForProjection()?1:0,
+				data.stereoCameraModel().left().isValidForReprojection()?1:0,
+				data.stereoCameraModel().right().isValidForReprojection()?1:0);
 		return t;
 	}
 
@@ -203,6 +211,7 @@ Transform OdometryFovis::computeTransform(
 	Transform localTransform = Transform::getIdentity();
 	if(data.cameraModels().size() == 1) //depth
 	{
+		UDEBUG("");
 		fovis::CameraIntrinsicsParameters rgb_params;
 		memset(&rgb_params, 0, sizeof(fovis::CameraIntrinsicsParameters));
 		rgb_params.width = data.cameraModels()[0].imageWidth();
@@ -261,6 +270,7 @@ Transform OdometryFovis::computeTransform(
 	}
 	else // stereo
 	{
+		UDEBUG("");
 		// initialize left camera parameters
 		fovis::CameraIntrinsicsParameters left_parameters;
 		left_parameters.width = data.stereoCameraModel().left().imageWidth();
@@ -329,6 +339,7 @@ Transform OdometryFovis::computeTransform(
 		fovis_ = new fovis::VisualOdometry(rect_, options);
 	}
 
+	UDEBUG("");
 	fovis_->processFrame(gray.data, depthSource);
 
 	// get the motion estimate for this frame to the previous frame.
@@ -381,9 +392,9 @@ Transform OdometryFovis::computeTransform(
 		info->type = (int)kTypeFovis;
 		info->keyFrameAdded = fovis_->getChangeReferenceFrames();
 		info->features = fovis_->getTargetFrame()->getNumDetectedKeypoints();
-		info->matches = fovis_->getMotionEstimator()->getNumMatches();
-		info->inliers = fovis_->getMotionEstimator()->getNumInliers();
-		info->covariance = covariance;
+		info->reg.matches = fovis_->getMotionEstimator()->getNumMatches();
+		info->reg.inliers = fovis_->getMotionEstimator()->getNumInliers();
+		info->reg.covariance = covariance;
 
 		if(this->isInfoDataFilled())
 		{

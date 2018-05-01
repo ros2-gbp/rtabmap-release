@@ -62,9 +62,13 @@ private:
 	USemaphore _dataAdded;
 	UMutex _dataMutex;
 	std::list<SensorData> _dataBuffer;
+	std::list<SensorData> _imuBuffer;
 	Odometry * _odometry;
 	unsigned int _dataBufferMaxSize;
 	bool _resetOdometry;
+	Transform _resetPose;
+	double _lastImuStamp;
+	double _imuEstimatedDelay;
 };
 
 } // namespace rtabmap

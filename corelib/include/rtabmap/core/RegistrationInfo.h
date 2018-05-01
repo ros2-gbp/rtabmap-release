@@ -35,27 +35,48 @@ class RegistrationInfo
 {
 public:
 	RegistrationInfo() :
+		totalTime(0.0),
 		inliers(0),
 		matches(0),
 		icpInliersRatio(0),
 		icpTranslation(0.0f),
-		icpRotation(0.0f)
+		icpRotation(0.0f),
+		icpStructuralComplexity(0.0f)
+
 	{
+	}
+
+	RegistrationInfo copyWithoutData() const
+	{
+		RegistrationInfo output;
+		output.totalTime = totalTime;
+		output.covariance = covariance.clone();
+		output.rejectedMsg = rejectedMsg;
+		output.inliers = inliers;
+		output.matches = matches;
+		output.icpInliersRatio = icpInliersRatio;
+		output.icpTranslation = icpTranslation;
+		output.icpRotation = icpRotation;
+		output.icpStructuralComplexity = icpStructuralComplexity;
+		return output;
 	}
 
 	cv::Mat covariance;
 	std::string rejectedMsg;
+	double totalTime;
 
 	// RegistrationVis
 	int inliers;
 	std::vector<int> inliersIDs;
 	int matches;
 	std::vector<int> matchesIDs;
+	std::vector<int> projectedIDs; // "From" IDs
 
 	// RegistrationIcp
 	float icpInliersRatio;
 	float icpTranslation;
 	float icpRotation;
+	float icpStructuralComplexity;
 };
 
 }

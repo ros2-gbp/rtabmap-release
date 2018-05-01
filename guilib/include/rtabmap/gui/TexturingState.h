@@ -25,41 +25,56 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifndef CORELIB_INCLUDE_RTABMAP_CORE_LASERSCANINFO_H_
-#define CORELIB_INCLUDE_RTABMAP_CORE_LASERSCANINFO_H_
 
-#include <rtabmap/utilite/ULogger.h>
+#ifndef RTABMAP_TEXTURINGSTATE_H_
+#define RTABMAP_TEXTURINGSTATE_H_
+
+#include "rtabmap/gui/ProgressDialog.h"
+#include "rtabmap/core/ProgressState.h"
+#include <QApplication>
 
 namespace rtabmap {
 
-class LaserScanInfo
+class TexturingState : public QObject, public ProgressState
 {
+	Q_OBJECT
+
 public:
-	LaserScanInfo() :
-		maxPoints_(0),
-		maxRange_(0),
-		localTransform_(Transform::getIdentity())
+	TexturingState(ProgressDialog * dialog, bool incrementOnMsgReceived): dialog_(dialog)
 	{
+		_increment = incrementOnMsgReceived;
+		connect(dialog_, SIGNAL(canceled()), this, SLOT(cancel()));
+	}
+	virtual ~TexturingState() {}
+	virtual bool callback(const std::string & msg) const
+	{
+		if(!msg.empty())
+		{
+			dialog_->appendText(msg.c_str());
+			if(_increment)
+			{
+				dialog_->incrementStep();
+			}
+		}
+		QApplication::processEvents();
+		if(!isCanceled())
+		{
+			return ProgressState::callback(msg);
+		}
+		return false;
 	}
 
-	LaserScanInfo(int maxPoints, float maxRange, const Transform & localTransform = Transform::getIdentity()) :
-		maxPoints_(maxPoints),
-		maxRange_(maxRange),
-		localTransform_(localTransform)
+public slots:
+	void cancel()
 	{
-		UASSERT(!localTransform.isNull());
+		setCanceled(true);
 	}
-
-	int maxPoints() const {return maxPoints_;}
-	float maxRange() const {return maxRange_;}
-	Transform localTransform() const {return localTransform_;}
 
 private:
-	int maxPoints_;
-	float maxRange_;
-	Transform localTransform_;
+	ProgressDialog * dialog_;
+	bool _increment;
 };
 
 }
 
-#endif /* CORELIB_INCLUDE_RTABMAP_CORE_LASERSCANINFO_H_ */
+#endif /* GUILIB_SRC_TEXTURINGSTATE_H_ */

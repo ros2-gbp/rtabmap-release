@@ -81,16 +81,13 @@ void StatItem::clearCache()
 {
 	_x.clear();
 	_y.clear();
+	_value->clear();
 }
 
 void StatItem::addValue(float y)
 {
 	if(_cacheOn)
 	{
-		if(_y.size() % 100)
-		{
-			_y.reserve(_y.size()+100);
-		}
 		_y.push_back(y);
 	}
 	_value->setText(QString::number(y, 'g', 3));
@@ -106,15 +103,7 @@ void StatItem::addValue(float x, float y)
 			clearCache();
 		}
 
-		if(_y.size() % 100)
-		{
-			_y.reserve(_y.size()+100);
-		}
 		_y.push_back(y);
-		if(_x.size() % 100)
-		{
-			_x.reserve(_x.size()+100);
-		}
 		_x.push_back(x);
 	}
 
