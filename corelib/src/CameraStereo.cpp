@@ -379,7 +379,7 @@ bool CameraStereoDC1394::init(const std::string & calibrationFolder, const std::
 			// look for calibration files
 			if(!calibrationFolder.empty())
 			{
-				if(!stereoModel_.load(calibrationFolder, cameraName.empty()?device_->guid():cameraName))
+				if(!stereoModel_.load(calibrationFolder, cameraName.empty()?device_->guid():cameraName, false))
 				{
 					UWARN("Missing calibration files for camera \"%s\" in \"%s\" folder, you should calibrate the camera!",
 							cameraName.empty()?device_->guid().c_str():cameraName.c_str(), calibrationFolder.c_str());
@@ -1147,7 +1147,7 @@ bool CameraStereoImages::init(const std::string & calibrationFolder, const std::
 	// look for calibration files
 	if(!calibrationFolder.empty() && !cameraName.empty())
 	{
-		if(!stereoModel_.load(calibrationFolder, cameraName))
+		if(!stereoModel_.load(calibrationFolder, cameraName, false) && !stereoModel_.isValidForProjection())
 		{
 			UWARN("Missing calibration files for camera \"%s\" in \"%s\" folder, you should calibrate the camera!",
 					cameraName.c_str(), calibrationFolder.c_str());
@@ -1255,7 +1255,7 @@ SensorData CameraStereoImages::captureImage(CameraInfo * info)
 				stereoModel_.setImageSize(leftImage.size());
 			}
 
-			data = SensorData(left.laserScanRaw(), left.laserScanInfo(), leftImage, rightImage, stereoModel_, left.id()/(camera2_?1:2), left.stamp());
+			data = SensorData(left.laserScanRaw(), leftImage, rightImage, stereoModel_, left.id()/(camera2_?1:2), left.stamp());
 			data.setGroundTruth(left.groundTruth());
 		}
 	}
@@ -1372,7 +1372,7 @@ bool CameraStereoVideo::init(const std::string & calibrationFolder, const std::s
 	// look for calibration files
 	if(!calibrationFolder.empty() && !cameraName_.empty())
 	{
-		if(!stereoModel_.load(calibrationFolder, cameraName_))
+		if(!stereoModel_.load(calibrationFolder, cameraName_, false))
 		{
 			UWARN("Missing calibration files for camera \"%s\" in \"%s\" folder, you should calibrate the camera!",
 				cameraName_.c_str(), calibrationFolder.c_str());

@@ -126,14 +126,14 @@ std::vector<cv::Point2f> calcStereoCorrespondences(
 		cv::Size winSize,
 		int maxLevel,
 		int iterations,
-		int minDisparity,
-		int maxDisparity,
+		float minDisparityF,
+		float maxDisparityF,
 		bool ssdApproach)
 {
 	UDEBUG("winSize=(%d,%d)", winSize.width, winSize.height);
 	UDEBUG("maxLevel=%d", maxLevel);
-	UDEBUG("minDisparity=%d", minDisparity);
-	UDEBUG("maxDisparity=%d", maxDisparity);
+	UDEBUG("minDisparity=%f", minDisparityF);
+	UDEBUG("maxDisparity=%f", maxDisparityF);
 	UDEBUG("iterations=%d", iterations);
 	UDEBUG("ssdApproach=%d", ssdApproach?1:0);
 
@@ -164,6 +164,8 @@ std::vector<cv::Point2f> calcStereoCorrespondences(
 	int totalIterations = 0;
 	int noSubPixel = 0;
 	int added = 0;
+	int minDisparity = std::floor(minDisparityF);
+	int maxDisparity = std::floor(maxDisparityF);
 	for(unsigned int i=0; i<leftCorners.size(); ++i)
 	{
 		int oi=0;
@@ -316,7 +318,8 @@ std::vector<cv::Point2f> calcStereoCorrespondences(
 					cache.insert(std::make_pair(previousXc, previousVc));
 				}
 
-				if(xc < leftCorners[i].x+float(d)-1.0f || xc > leftCorners[i].x+float(d)+1.0f)
+				if(/*xc < leftCorners[i].x+float(d)-1.0f || xc > leftCorners[i].x+float(d)+1.0f ||*/
+					float(leftCorners[i].x - xc) <= minDisparityF)
 				{
 					reject = true;
 					break;
@@ -939,7 +942,7 @@ float getDepth(
 		const cv::Mat & depthImage,
 		float x, float y,
 		bool smoothing,
-		float maxZError,
+		float depthErrorRatio,
 		bool estWithNeighborsIfNull)
 {
 	UASSERT(!depthImage.empty());
@@ -1021,10 +1024,15 @@ float getDepth(
 							tmp = d;
 							++count;
 						}
-						else if(fabs(d - tmp/float(count)) < maxZError)
+						else
 						{
-							tmp += d;
-							++count;
+							float depthError = depthErrorRatio * tmp;
+							if(fabs(d - tmp/float(count)) < depthError)
+
+							{
+								tmp += d;
+								++count;
+							}
 						}
 					}
 				}
@@ -1062,8 +1070,10 @@ float getDepth(
 							d = depthImage.at<float>(vv,uu);
 						}
 
+						float depthError = depthErrorRatio * depth;
+
 						// ignore if not valid or depth difference is too high
-						if(d != 0.0f && uIsFinite(d) && fabs(d - depth) < maxZError)
+						if(d != 0.0f && uIsFinite(d) && fabs(d - depth) < depthError)
 						{
 							if(uu == u || vv == v)
 							{
@@ -2009,7 +2019,7 @@ cv::Mat exposureFusion(const std::vector<cv::Mat> & images)
 	fusion.convertTo(rgb8, CV_8UC3, 255.0);
 	fusion = rgb8;
 #else
-	UWARN("Exposure fusion is only avaiable when rtabmap is built with OpenCV3.");
+	UWARN("Exposure fusion is only available when rtabmap is built with OpenCV3.");
 	if (images.size())
 	{
 		fusion = images[0].clone();

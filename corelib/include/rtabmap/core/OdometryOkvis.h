@@ -25,60 +25,42 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifndef GUILIB_SRC_DEPTHCALIBRATIONDIALOG_H_
-#define GUILIB_SRC_DEPTHCALIBRATIONDIALOG_H_
+#ifndef ODOMETRYOKVIS_H_
+#define ODOMETRYOKVIS_H_
 
-#include <QDialog>
-#include <QMap>
-#include <QtCore/QSettings>
-#include <rtabmap/core/Signature.h>
-#include <rtabmap/core/Parameters.h>
+#include <rtabmap/core/Odometry.h>
 
-class Ui_DepthCalibrationDialog;
-
-namespace clams {
-class DiscreteDepthDistortionModel;
+namespace okvis {
+	class ThreadedKFVio;
 }
 
 namespace rtabmap {
 
-class ProgressDialog;
-
-class DepthCalibrationDialog : public QDialog
+class OkvisCallbackHandler;
+class RTABMAP_EXP OdometryOkvis : public Odometry
 {
-	Q_OBJECT
-
 public:
-	DepthCalibrationDialog(QWidget * parent = 0);
-	virtual ~DepthCalibrationDialog();
+	OdometryOkvis(const rtabmap::ParametersMap & parameters = rtabmap::ParametersMap());
+	virtual ~OdometryOkvis();
 
-	void saveSettings(QSettings & settings, const QString & group = "") const;
-	void loadSettings(QSettings & settings, const QString & group = "");
-
-	void calibrate(const std::map<int, Transform> & poses,
-			const QMap<int, Signature> & cachedSignatures,
-			const QString & workingDirectory,
-			const ParametersMap & parameters);
-
-signals:
-	void configChanged();
-
-public slots:
-	void restoreDefaults();
-
-private slots:
-	void saveModel();
-	void cancel();
+	virtual void reset(const Transform & initialPose = Transform::getIdentity());
+	virtual Odometry::Type getType() {return Odometry::kTypeOkvis;}
+	virtual bool canProcessRawImages() const {return true;}
 
 private:
-	Ui_DepthCalibrationDialog * _ui;
-	ProgressDialog * _progressDialog;
-	bool _canceled;
-	clams::DiscreteDepthDistortionModel * _model;
-	QString _workingDirectory;
-	cv::Size _imageSize;
+	virtual Transform computeTransform(SensorData & image, const Transform & guess = Transform(), OdometryInfo * info = 0);
+
+private:
+	std::string configFilename_;
+#ifdef RTABMAP_OKVIS
+	OkvisCallbackHandler * okvisCallbackHandler_;
+	okvis::ThreadedKFVio * okvisEstimator_;
+#endif
+	ParametersMap okvisParameters_;
+	IMU lastImu_; // only used for initialization
+	int imagesProcessed_;
 };
 
-} /* namespace rtabmap */
+}
 
-#endif /* GUILIB_SRC_DEPTHCALIBRATIONDIALOG_H_ */
+#endif /* ODOMETRYOKVIS_H_ */

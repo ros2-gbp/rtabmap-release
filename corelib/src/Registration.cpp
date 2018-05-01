@@ -29,8 +29,11 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap/core/RegistrationVis.h>
 #include <rtabmap/core/RegistrationIcp.h>
 #include <rtabmap/utilite/ULogger.h>
+#include <rtabmap/utilite/UTimer.h>
 
 namespace rtabmap {
+
+double Registration::COVARIANCE_EPSILON = 0.000000001;
 
 Registration * Registration::create(const ParametersMap & parameters)
 {
@@ -61,8 +64,7 @@ Registration * Registration::create(Registration::Type & type, const ParametersM
 }
 
 Registration::Registration(const ParametersMap & parameters, Registration * child) :
-	varianceFromInliersCount_(Parameters::defaultRegVarianceFromInliersCount()),
-	covarianceNormalized_(Parameters::defaultRegVarianceNormalized()),
+	repeatOnce_(Parameters::defaultRegRepeatOnce()),
 	force3DoF_(Parameters::defaultRegForce3DoF()),
 	child_(child)
 {
@@ -78,9 +80,9 @@ Registration::~Registration()
 }
 void Registration::parseParameters(const ParametersMap & parameters)
 {
-	Parameters::parse(parameters, Parameters::kRegVarianceFromInliersCount(), varianceFromInliersCount_);
-	Parameters::parse(parameters, Parameters::kRegVarianceNormalized(), covarianceNormalized_);
+	Parameters::parse(parameters, Parameters::kRegRepeatOnce(), repeatOnce_);
 	Parameters::parse(parameters, Parameters::kRegForce3DoF(), force3DoF_);
+
 	if(child_)
 	{
 		child_->parseParameters(parameters);
@@ -113,6 +115,16 @@ bool Registration::isUserDataRequired() const
 	if(!val && child_)
 	{
 		val = child_->isUserDataRequired();
+	}
+	return val;
+}
+
+bool Registration::canUseGuess() const
+{
+	bool val = canUseGuessImpl();
+	if(!val && child_)
+	{
+		val = child_->canUseGuess();
 	}
 	return val;
 }
@@ -182,6 +194,7 @@ Transform Registration::computeTransformationMod(
 		Transform guess,
 		RegistrationInfo * infoOut) const
 {
+	UTimer time;
 	RegistrationInfo info;
 	if(infoOut)
 	{
@@ -195,26 +208,6 @@ Transform Registration::computeTransformationMod(
 
 	Transform t = computeTransformationImpl(from, to, guess, info);
 
-	if(info.covariance.empty())
-	{
-		info.covariance = cv::Mat::eye(6,6,CV_64FC1);
-	}
-
-	if(varianceFromInliersCount_)
-	{
-		if(info.icpInliersRatio)
-		{
-			info.covariance = cv::Mat::eye(6,6,CV_64FC1)*(info.icpInliersRatio > 0?1.0/double(info.icpInliersRatio):1.0);
-		}
-		else
-		{
-			info.covariance = cv::Mat::eye(6,6,CV_64FC1)*(info.inliers > 0?1.0/double(info.inliers):1.0);
-		}
-	}
-
-
-	normalizeCovariance(info.covariance, t);
-
 	if(child_)
 	{
 		if(!t.isNull())
@@ -227,48 +220,46 @@ Transform Registration::computeTransformationMod(
 			t = child_->computeTransformationMod(from, to, guess, &info);
 		}
 	}
+	else if(repeatOnce_ && guess.isNull() && !t.isNull() && this->canUseGuess())
+	{
+		// redo with guess to get a more accurate transform
+		t = computeTransformationImpl(from, to, t, info);
+
+		if(!t.isNull() && force3DoF_)
+		{
+			t = t.to3DoF();
+		}
+	}
 	else if(!t.isNull() && force3DoF_)
 	{
 		t = t.to3DoF();
 	}
 
+	if(info.covariance.empty())
+	{
+		info.covariance = cv::Mat::eye(6,6,CV_64FC1);
+	}
+
+	if(info.covariance.at<double>(0,0)<=COVARIANCE_EPSILON)
+		info.covariance.at<double>(0,0) = COVARIANCE_EPSILON; // epsilon if exact transform
+	if(info.covariance.at<double>(1,1)<=COVARIANCE_EPSILON)
+		info.covariance.at<double>(1,1) = COVARIANCE_EPSILON; // epsilon if exact transform
+	if(info.covariance.at<double>(2,2)<=COVARIANCE_EPSILON)
+		info.covariance.at<double>(2,2) = COVARIANCE_EPSILON; // epsilon if exact transform
+	if(info.covariance.at<double>(3,3)<=COVARIANCE_EPSILON)
+		info.covariance.at<double>(3,3) = COVARIANCE_EPSILON; // epsilon if exact transform
+	if(info.covariance.at<double>(4,4)<=COVARIANCE_EPSILON)
+		info.covariance.at<double>(4,4) = COVARIANCE_EPSILON; // epsilon if exact transform
+	if(info.covariance.at<double>(5,5)<=COVARIANCE_EPSILON)
+		info.covariance.at<double>(5,5) = COVARIANCE_EPSILON; // epsilon if exact transform
+
+
 	if(infoOut)
 	{
 		*infoOut = info;
+		infoOut->totalTime = time.ticks();
 	}
 	return t;
-}
-
-void Registration::normalizeCovariance(cv::Mat & covariance, const Transform & transform) const
-{
-	UASSERT(covariance.cols == 6 && covariance.rows == 6);
-
-	if(covarianceNormalized_)
-	{
-		// normalize variance
-		float norm = transform.getNorm();
-		covariance.at<double>(0,0) *= norm;
-		covariance.at<double>(1,1) *= norm;
-		covariance.at<double>(2,2) *= norm;
-		float angle = transform.getAngle()/10.0;
-		covariance.at<double>(3,3) *= angle;
-		covariance.at<double>(4,4) *= angle;
-		covariance.at<double>(5,5) *= angle;
-	}
-
-	double epsilon = 0.000001;
-	if(covariance.at<double>(0,0)<=epsilon)
-		covariance.at<double>(0,0) = epsilon; // epsilon if exact transform
-	if(covariance.at<double>(1,1)<=epsilon)
-		covariance.at<double>(1,1) = epsilon; // epsilon if exact transform
-	if(covariance.at<double>(2,2)<=epsilon)
-		covariance.at<double>(2,2) = epsilon; // epsilon if exact transform
-	if(covariance.at<double>(3,3)<=epsilon)
-		covariance.at<double>(3,3) = epsilon; // epsilon if exact transform
-	if(covariance.at<double>(4,4)<=epsilon)
-		covariance.at<double>(4,4) = epsilon; // epsilon if exact transform
-	if(covariance.at<double>(5,5)<=epsilon)
-		covariance.at<double>(5,5) = epsilon; // epsilon if exact transform
 }
 
 }
