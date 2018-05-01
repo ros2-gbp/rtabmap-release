@@ -39,13 +39,18 @@ namespace rtabmap {
 OdometryF2F::OdometryF2F(const ParametersMap & parameters) :
 	Odometry(parameters),
 	keyFrameThr_(Parameters::defaultOdomKeyFrameThr()),
+	visKeyFrameThr_(Parameters::defaultOdomVisKeyFrameThr()),
 	scanKeyFrameThr_(Parameters::defaultOdomScanKeyFrameThr())
 {
 	registrationPipeline_ = Registration::create(parameters);
 	Parameters::parse(parameters, Parameters::kOdomKeyFrameThr(), keyFrameThr_);
+	Parameters::parse(parameters, Parameters::kOdomVisKeyFrameThr(), visKeyFrameThr_);
 	Parameters::parse(parameters, Parameters::kOdomScanKeyFrameThr(), scanKeyFrameThr_);
 	UASSERT(keyFrameThr_>=0.0f && keyFrameThr_<=1.0f);
+	UASSERT(visKeyFrameThr_>=0);
 	UASSERT(scanKeyFrameThr_>=0.0f && scanKeyFrameThr_<=1.0f);
+
+	parameters_ = parameters;
 }
 
 OdometryF2F::~OdometryF2F()
@@ -80,6 +85,7 @@ Transform OdometryF2F::computeTransform(
 		return output;
 	}
 
+	bool addKeyFrame = false;
 	RegistrationInfo regInfo;
 
 	UASSERT(!this->getPose().isNull());
@@ -92,12 +98,81 @@ Transform OdometryF2F::computeTransform(
 	Signature newFrame(data);
 	if(refFrame_.sensorData().isValid())
 	{
+		float maxCorrespondenceDistance = 0.0f;
+		float pmOutlierRatio = 0.0f;
+		if(guess.isNull() &&
+			!registrationPipeline_->isImageRequired() &&
+			registrationPipeline_->isScanRequired() &&
+			this->framesProcessed() < 2)
+		{
+			// only on initialization (first frame to register), increase icp max correspondences in case the robot is already moving
+			maxCorrespondenceDistance = Parameters::defaultIcpMaxCorrespondenceDistance();
+			pmOutlierRatio = Parameters::defaultIcpPMOutlierRatio();
+			Parameters::parse(parameters_, Parameters::kIcpMaxCorrespondenceDistance(), maxCorrespondenceDistance);
+			Parameters::parse(parameters_, Parameters::kIcpPMOutlierRatio(), pmOutlierRatio);
+			ParametersMap params;
+			params.insert(ParametersPair(Parameters::kIcpMaxCorrespondenceDistance(), uNumber2Str(maxCorrespondenceDistance*3.0f)));
+			params.insert(ParametersPair(Parameters::kIcpPMOutlierRatio(), uNumber2Str(0.95f)));
+			registrationPipeline_->parseParameters(params);
+		}
+
 		Signature tmpRefFrame = refFrame_;
 		output = registrationPipeline_->computeTransformationMod(
 				tmpRefFrame,
 				newFrame,
-				!guess.isNull()?motionSinceLastKeyFrame*guess:Transform(),
+				// special case for ICP-only odom, set guess to identity if we just started or reset
+				!guess.isNull()?motionSinceLastKeyFrame*guess:!registrationPipeline_->isImageRequired()&&this->framesProcessed()<2?motionSinceLastKeyFrame:Transform(),
 				&regInfo);
+
+		if(maxCorrespondenceDistance>0.0f)
+		{
+			// set it back
+			ParametersMap params;
+			params.insert(ParametersPair(Parameters::kIcpMaxCorrespondenceDistance(), uNumber2Str(maxCorrespondenceDistance)));
+			params.insert(ParametersPair(Parameters::kIcpPMOutlierRatio(), uNumber2Str(pmOutlierRatio)));
+			registrationPipeline_->parseParameters(params);
+		}
+
+		if(output.isNull() && !guess.isNull() && registrationPipeline_->isImageRequired())
+		{
+			tmpRefFrame = refFrame_;
+			// reset matches, but keep already extracted features in newFrame.sensorData()
+			newFrame.setWords(std::multimap<int, cv::KeyPoint>());
+			newFrame.setWords3(std::multimap<int, cv::Point3f>());
+			newFrame.setWordsDescriptors(std::multimap<int, cv::Mat>());
+			UWARN("Failed to find a transformation with the provided guess (%s), trying again without a guess.", guess.prettyPrint().c_str());
+			// If optical flow is used, switch temporary to feature matching
+			int visCorTypeBackup = Parameters::defaultVisCorType();
+			Parameters::parse(parameters_, Parameters::kVisCorType(), visCorTypeBackup);
+			if(visCorTypeBackup == 1)
+			{
+				ParametersMap params;
+				params.insert(ParametersPair(Parameters::kVisCorType(), "0"));
+				registrationPipeline_->parseParameters(params);
+			}
+
+			output = registrationPipeline_->computeTransformationMod(
+				tmpRefFrame,
+				newFrame,
+				Transform(), // null guess
+				&regInfo);
+
+			if(visCorTypeBackup == 1)
+			{
+				ParametersMap params;
+				params.insert(ParametersPair(Parameters::kVisCorType(), "1"));
+				registrationPipeline_->parseParameters(params);
+			}
+
+			if(output.isNull())
+			{
+				UWARN("Trial with no guess still fail.");
+			}
+			else
+			{
+				UWARN("Trial with no guess succeeded.");
+			}
+		}
 
 		if(info && this->isInfoDataFilled())
 		{
@@ -128,7 +203,12 @@ Transform OdometryF2F::computeTransform(
 			{
 				info->localMap.insert(std::make_pair(iter->first, util3d::transformPoint(iter->second, t)));
 			}
+			info->localMapSize = tmpRefFrame.getWords3().size();
 			info->words = newFrame.getWords();
+
+			info->localScanMapSize = tmpRefFrame.sensorData().laserScanRaw().size();
+
+			info->localScanMap = util3d::transformLaserScan(tmpRefFrame.sensorData().laserScanRaw(), tmpRefFrame.sensorData().laserScanRaw().localTransform().inverse()*t*tmpRefFrame.sensorData().laserScanRaw().localTransform());
 		}
 	}
 	else
@@ -136,7 +216,7 @@ Transform OdometryF2F::computeTransform(
 		//return Identity
 		output = Transform::getIdentity();
 		// a very high variance tells that the new pose is not linked with the previous one
-		regInfo.variance = 9999;
+		regInfo.covariance = cv::Mat::eye(6,6,CV_64FC1)*9999.0;
 	}
 
 	if(!output.isNull())
@@ -144,12 +224,16 @@ Transform OdometryF2F::computeTransform(
 		output = motionSinceLastKeyFrame.inverse() * output;
 
 		// new key-frame?
-		if( (registrationPipeline_->isImageRequired() && (keyFrameThr_ == 0 || float(regInfo.inliers) <= keyFrameThr_*float(refFrame_.sensorData().keypoints().size()))) ||
-			(registrationPipeline_->isScanRequired() && (scanKeyFrameThr_ == 0 || regInfo.icpInliersRatio <= scanKeyFrameThr_)))
+		if( (registrationPipeline_->isImageRequired() &&
+				(keyFrameThr_ == 0.0f ||
+				 visKeyFrameThr_ == 0 ||
+				 float(regInfo.inliers) <= keyFrameThr_*float(refFrame_.sensorData().keypoints().size()) ||
+				 regInfo.inliers <= visKeyFrameThr_)) ||
+			(registrationPipeline_->isScanRequired() && (scanKeyFrameThr_ == 0.0f || regInfo.icpInliersRatio <= scanKeyFrameThr_)))
 		{
 			UDEBUG("Update key frame");
 			int features = newFrame.getWordsDescriptors().size();
-			if(features == 0)
+			if(registrationPipeline_->isImageRequired() && features == 0)
 			{
 				newFrame = Signature(data);
 				// this will generate features only for the first frame or if optical flow was used (no 3d words)
@@ -162,8 +246,8 @@ Transform OdometryF2F::computeTransform(
 
 			if((features >= registrationPipeline_->getMinVisualCorrespondences()) &&
 			   (registrationPipeline_->getMinGeometryCorrespondencesRatio()==0.0f ||
-					   (newFrame.sensorData().laserScanRaw().cols &&
-					   (newFrame.sensorData().laserScanMaxPts() == 0 || float(newFrame.sensorData().laserScanRaw().cols)/float(newFrame.sensorData().laserScanMaxPts())>=registrationPipeline_->getMinGeometryCorrespondencesRatio()))))
+					   (newFrame.sensorData().laserScanRaw().size() &&
+					   (newFrame.sensorData().laserScanRaw().maxPoints() == 0 || float(newFrame.sensorData().laserScanRaw().size())/float(newFrame.sensorData().laserScanRaw().maxPoints())>=registrationPipeline_->getMinGeometryCorrespondencesRatio()))))
 			{
 				refFrame_ = newFrame;
 
@@ -173,6 +257,8 @@ Transform OdometryF2F::computeTransform(
 
 				//reset motion
 				lastKeyFramePose_.setNull();
+
+				addKeyFrame = true;
 			}
 			else
 			{
@@ -187,13 +273,13 @@ Transform OdometryF2F::computeTransform(
 					UWARN("Too low 2D features (%d), keeping last key frame...", features);
 				}
 
-				if(registrationPipeline_->getMinGeometryCorrespondencesRatio()>0.0f && newFrame.sensorData().laserScanRaw().cols==0)
+				if(registrationPipeline_->getMinGeometryCorrespondencesRatio()>0.0f && newFrame.sensorData().laserScanRaw().size()==0)
 				{
-					UWARN("Too low scan points (%d), keeping last key frame...", newFrame.sensorData().laserScanRaw().cols);
+					UWARN("Too low scan points (%d), keeping last key frame...", newFrame.sensorData().laserScanRaw().size());
 				}
-				else if(registrationPipeline_->getMinGeometryCorrespondencesRatio()>0.0f && newFrame.sensorData().laserScanMaxPts() != 0 && float(newFrame.sensorData().laserScanRaw().cols)/float(newFrame.sensorData().laserScanMaxPts())<registrationPipeline_->getMinGeometryCorrespondencesRatio())
+				else if(registrationPipeline_->getMinGeometryCorrespondencesRatio()>0.0f && newFrame.sensorData().laserScanRaw().maxPoints() != 0 && float(newFrame.sensorData().laserScanRaw().size())/float(newFrame.sensorData().laserScanRaw().maxPoints())<registrationPipeline_->getMinGeometryCorrespondencesRatio())
 				{
-					UWARN("Too low scan points ratio (%d < %d), keeping last key frame...", float(newFrame.sensorData().laserScanRaw().cols)/float(newFrame.sensorData().laserScanMaxPts()), registrationPipeline_->getMinGeometryCorrespondencesRatio());
+					UWARN("Too low scan points ratio (%d < %d), keeping last key frame...", float(newFrame.sensorData().laserScanRaw().size())/float(newFrame.sensorData().laserScanRaw().maxPoints()), registrationPipeline_->getMinGeometryCorrespondencesRatio());
 				}
 			}
 		}
@@ -203,16 +289,21 @@ Transform OdometryF2F::computeTransform(
 		UWARN("Registration failed: \"%s\"", regInfo.rejectedMsg.c_str());
 	}
 
-	data.setFeatures(newFrame.sensorData().keypoints(), newFrame.sensorData().descriptors());
+	data.setFeatures(newFrame.sensorData().keypoints(), newFrame.sensorData().keypoints3D(), newFrame.sensorData().descriptors());
 
 	if(info)
 	{
-		info->type = 1;
-		info->variance = regInfo.variance;
-		info->inliers = regInfo.inliers;
-		info->icpInliersRatio = regInfo.icpInliersRatio;
-		info->matches = regInfo.matches;
+		info->type = kTypeF2F;
 		info->features = newFrame.sensorData().keypoints().size();
+		info->keyFrameAdded = addKeyFrame;
+		if(this->isInfoDataFilled())
+		{
+			info->reg = regInfo;
+		}
+		else
+		{
+			info->reg = regInfo.copyWithoutData();
+		}
 	}
 
 	UINFO("Odom update time = %fs lost=%s inliers=%d, ref frame corners=%d, transform accepted=%s",

@@ -42,7 +42,8 @@ namespace rtabmap {
 
 ProgressDialog::ProgressDialog(QWidget *parent, Qt::WindowFlags flags) :
 		QDialog(parent, flags),
-		_delayedClosingTime(1)
+		_delayedClosingTime(1),
+		_canceled(false)
 {
 	_text = new QLabel(this);
 	_text->setWordWrap(true);
@@ -53,12 +54,16 @@ ProgressDialog::ProgressDialog(QWidget *parent, Qt::WindowFlags flags) :
 	_detailedText->setLineWrapMode(QTextEdit::NoWrap);
 	_closeButton = new QPushButton(this);
 	_closeButton->setText("Close");
+	_cancelButton = new QPushButton(this);
+	_cancelButton->setText("Cancel");
+	_cancelButton-> setVisible(false);
 	_closeWhenDoneCheckBox = new QCheckBox(this);
 	_closeWhenDoneCheckBox->setChecked(true);
 	_closeWhenDoneCheckBox->setText("Close when done.");
 	_endMessage = "Finished!";
 	this->clear();
 	connect(_closeButton, SIGNAL(clicked()), this, SLOT(close()));
+	connect(_cancelButton, SIGNAL(clicked()), this, SLOT(cancel()));
 
 	QVBoxLayout * layout = new QVBoxLayout(this);
 	layout->addWidget(_text);
@@ -67,6 +72,8 @@ ProgressDialog::ProgressDialog(QWidget *parent, Qt::WindowFlags flags) :
 	QHBoxLayout * hLayout = new QHBoxLayout();
 	layout->addLayout(hLayout);
 	hLayout->addWidget(_closeWhenDoneCheckBox);
+	hLayout->addStretch();
+	hLayout->addWidget(_cancelButton);
 	hLayout->addWidget(_closeButton);
 	this->setLayout(layout);
 
@@ -87,8 +94,14 @@ void ProgressDialog::setAutoClose(bool on, int delayedClosingTimeSec)
 	_closeWhenDoneCheckBox->setChecked(on);
 }
 
+void ProgressDialog::setCancelButtonVisible(bool visible)
+{
+	_cancelButton->setVisible(visible);
+}
+
 void ProgressDialog::appendText(const QString & text, const QColor & color)
 {
+	UDEBUG(text.toStdString().c_str());
 	_text->setText(text);
 	QString html = tr("<html><font color=\"#999999\">%1 </font><font color=\"%2\">%3</font></html>").arg(QTime::currentTime().toString("HH:mm:ss")).arg(color.name()).arg(text);
 	_detailedText->append(html);
@@ -122,28 +135,28 @@ void ProgressDialog::setMaximumSteps(int steps)
 	_progressBar->setMaximum(steps);
 }
 
-void ProgressDialog::incrementStep()
+void ProgressDialog::incrementStep(int steps)
 {
 	//incremental progress bar (if we don't know how many items will be added)
-	if(_progressBar->value() == _progressBar->maximum()-1)
+	if(_progressBar->value() >= _progressBar->maximum()-steps)
 	{
-		_progressBar->setMaximum(_progressBar->maximum()+1);
+		_progressBar->setMaximum(_progressBar->maximum()+steps+1);
 	}
-	_progressBar->setValue(_progressBar->value()+1);
+	_progressBar->setValue(_progressBar->value()+steps);
 }
 
 void ProgressDialog::clear()
 {
 	_text->clear();
-	_progressBar->reset();
 	_detailedText->clear();
-	_closeButton->setEnabled(false);
+	resetProgress();
 }
 
 void ProgressDialog::resetProgress()
 {
 	_progressBar->reset();
 	_closeButton->setEnabled(false);
+	_canceled = false;
 }
 
 void ProgressDialog::closeDialog()
@@ -158,12 +171,19 @@ void ProgressDialog::closeEvent(QCloseEvent *event)
 {
 	if(_progressBar->value() == _progressBar->maximum())
 	{
+		_canceled = false;
 		event->accept();
 	}
 	else
 	{
 		event->ignore();
 	}
+}
+
+void ProgressDialog::cancel()
+{
+	_canceled = true;
+	emit canceled();
 }
 
 }

@@ -32,17 +32,26 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <android/log.h>
 #include <rtabmap/utilite/UEventsHandler.h>
 #include <rtabmap/utilite/ULogger.h>
+#include <rtabmap/core/CameraModel.h>
 #include <tango-gl/util.h>
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
+#include <pcl/Vertices.h>
+#include <pcl/pcl_base.h>
 
 class LogHandler : public UEventsHandler
 {
 public:
 	LogHandler()
 	{
+		ULogger::setLevel(ULogger::kDebug);
+		ULogger::setEventLevel(ULogger::kDebug);
+		ULogger::setPrintThreadId(true);
+
 		registerToEventsManager();
 	}
 protected:
-	virtual void handleEvent(UEvent * event)
+	virtual bool handleEvent(UEvent * event)
 	{
 		if(event->getClassName().compare("ULogEvent") == 0)
 		{
@@ -65,25 +74,31 @@ protected:
 			}
 
 		}
+		return false;
 	}
 };
 
 static const rtabmap::Transform opengl_world_T_tango_world(
-		1.0f, 0.0f,  0.0f, 0.0f,
-		0.0f, 0.0f, 1.0f, 0.0f,
+		1.0f,  0.0f,  0.0f, 0.0f,
+		0.0f,  0.0f,  1.0f, 0.0f,
 		0.0f, -1.0f,  0.0f, 0.0f);
 
-static const rtabmap::Transform depth_camera_T_opengl_camera(
-		1.0f, 0.0f, 0.0f, 0.0f,
-		0.0f, -1.0f, 0.0f, 0.0f,
-		0.0f, 0.0f, -1.0f, 0.0f);
+static const rtabmap::Transform rtabmap_world_T_tango_world(
+		 0.0f, 1.0f, 0.0f, 0.0f,
+	    -1.0f, 0.0f, 0.0f, 0.0f,
+		 0.0f, 0.0f, 1.0f, 0.0f);
+
+static const rtabmap::Transform tango_device_T_rtabmap_device(
+		 0.0f, -1.0f, 0.0f, 0.0f,
+	     0.0f,  0.0f, 1.0f, 0.0f,
+		-1.0f,  0.0f, 0.0f, 0.0f);
 
 static const rtabmap::Transform opengl_world_T_rtabmap_world(
-		0.0f, -1.0f,  0.0f, 0.0f,
-		0.0f, 0.0f, 1.0f, 0.0f,
-		-1.0f, 0.0f,  0.0f, 0.0f);
+		 0.0f, -1.0f, 0.0f, 0.0f,
+		 0.0f,  0.0f, 1.0f, 0.0f,
+		-1.0f,  0.0f, 0.0f, 0.0f);
 
-static const rtabmap::Transform rtabmap_world_T_opengl_world(
+static const rtabmap::Transform rtabmap_device_T_opengl_device(
 		 0.0f, 0.0f, -1.0f, 0.0f,
 		-1.0f, 0.0f,  0.0f, 0.0f,
 		 0.0f, 1.0f,  0.0f, 0.0f);
@@ -128,5 +143,34 @@ inline rtabmap::Transform glmToTransform(const glm::mat4 & mat)
 
 	return transform;
 }
+
+class Mesh
+{
+public:
+	Mesh() :
+		cloud(new pcl::PointCloud<pcl::PointXYZRGB>),
+		normals(new pcl::PointCloud<pcl::Normal>),
+		indices(new std::vector<int>),
+		visible(true)
+	{
+		gains[0] = gains[1] = gains[2] = 1.0f;
+	}
+
+	pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud; // organized cloud
+	pcl::PointCloud<pcl::Normal>::Ptr normals;
+	pcl::IndicesPtr indices;
+	std::vector<pcl::Vertices> polygons;
+	std::vector<pcl::Vertices> polygonsLowRes;
+	rtabmap::Transform pose; // in rtabmap coordinates
+	bool visible;
+	rtabmap::CameraModel cameraModel;
+	double gains[3]; // RGB gains
+#if PCL_VERSION_COMPARE(>=, 1, 8, 0)
+    	std::vector<Eigen::Vector2f, Eigen::aligned_allocator<Eigen::Vector2f> > texCoords;
+#else
+    	std::vector<Eigen::Vector2f> texCoords;
+#endif
+	cv::Mat texture;
+};
 
 #endif /* UTIL_H_ */

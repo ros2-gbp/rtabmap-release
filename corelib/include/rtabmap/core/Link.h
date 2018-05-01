@@ -46,20 +46,14 @@ public:
 		kUserClosure,
 		kVirtualClosure,
 		kNeighborMerged,
-		kUndef};
+		kPosePrior,
+		kUndef = 99};
 	Link();
 	Link(int from,
 			int to,
 			Type type,
 			const Transform & transform,
-			const cv::Mat & infMatrix = cv::Mat::eye(6,6,CV_64FC1),
-			const cv::Mat & userData = cv::Mat());
-	Link(int from,
-			int to,
-			Type type,
-			const Transform & transform,
-			double rotVariance,
-			double transVariance,
+			const cv::Mat & infMatrix = cv::Mat::eye(6,6,CV_64FC1), // information matrix: inverse of covariance matrix
 			const cv::Mat & userData = cv::Mat());
 
 	bool isValid() const {return from_ > 0 && to_ > 0 && !transform_.isNull() && type_!=kUndef;}
@@ -76,11 +70,7 @@ public:
 	void setTo(int to) {to_ = to;}
 	void setTransform(const Transform & transform) {transform_ = transform;}
 	void setType(Type type) {type_ = type;}
-	void setInfMatrix(const cv::Mat & infMatrix);
-	void setVariance(double rotVariance, double transVariance);
 
-	void setUserDataRaw(const cv::Mat & userDataRaw); // only set raw
-	void setUserData(const cv::Mat & userData); // detect automatically if raw or compressed. If raw, the data is compressed too.
 	const cv::Mat & userDataRaw() const {return _userDataRaw;}
 	const cv::Mat & userDataCompressed() const {return _userDataCompressed;}
 	void uncompressUserData();
@@ -88,6 +78,9 @@ public:
 
 	Link merge(const Link & link, Type outputType) const;
 	Link inverse() const;
+
+private:
+	void setInfMatrix(const cv::Mat & infMatrix);
 
 private:
 	int from_;

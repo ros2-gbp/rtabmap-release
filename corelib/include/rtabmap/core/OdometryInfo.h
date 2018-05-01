@@ -30,6 +30,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <map>
 #include "rtabmap/core/Transform.h"
+#include "rtabmap/core/RegistrationInfo.h"
+#include "rtabmap/core/CameraModel.h"
+#include "rtabmap/core/LaserScan.h"
 #include <opencv2/features2d/features2d.hpp>
 
 namespace rtabmap {
@@ -39,18 +42,20 @@ class OdometryInfo
 public:
 	OdometryInfo() :
 		lost(true),
-		matches(0),
-		inliers(0),
-		icpInliersRatio(0.0f),
-		variance(0.0f),
 		features(0),
 		localMapSize(0),
 		localScanMapSize(0),
+		localKeyFrames(0),
+		localBundleOutliers(0),
+		localBundleConstraints(0),
+		localBundleTime(0),
+		keyFrameAdded(false),
 		timeEstimation(0.0f),
 		timeParticleFiltering(0.0f),
 		stamp(0),
 		interval(0),
 		distanceTravelled(0.0f),
+		memoryUsage(0),
 		type(0)
 	{}
 
@@ -58,31 +63,42 @@ public:
 	{
 		OdometryInfo output;
 		output.lost = lost;
-		output.matches = matches;
-		output.inliers = inliers;
-		output.icpInliersRatio = icpInliersRatio;
-		output.variance = variance;
+		output.reg = reg.copyWithoutData();
 		output.features = features;
 		output.localMapSize = localMapSize;
 		output.localScanMapSize = localScanMapSize;
+		output.localKeyFrames = localKeyFrames;
+		output.localBundleOutliers = localBundleOutliers;
+		output.localBundleConstraints = localBundleConstraints;
+		output.localBundleTime = localBundleTime;
+		output.localBundlePoses = localBundlePoses;
+		output.localBundleModels = localBundleModels;
+		output.keyFrameAdded = keyFrameAdded;
 		output.timeEstimation = timeEstimation;
 		output.timeParticleFiltering = timeParticleFiltering;
 		output.stamp = stamp;
+		output.interval = interval;
 		output.transform = transform;
 		output.transformFiltered = transformFiltered;
 		output.transformGroundTruth = transformGroundTruth;
 		output.distanceTravelled = distanceTravelled;
+		output.memoryUsage = memoryUsage;
+		output.type = type;
 		return output;
 	}
 
 	bool lost;
-	int matches;
-	int inliers;
-	float icpInliersRatio;
-	float variance;
+	RegistrationInfo reg;
 	int features;
 	int localMapSize;
 	int localScanMapSize;
+	int localKeyFrames;
+	int localBundleOutliers;
+	int localBundleConstraints;
+	float localBundleTime;
+	std::map<int, Transform> localBundlePoses;
+	std::map<int, CameraModel> localBundleModels;
+	bool keyFrameAdded;
 	float timeEstimation;
 	float timeParticleFiltering;
 	double stamp;
@@ -91,15 +107,14 @@ public:
 	Transform transformFiltered;
 	Transform transformGroundTruth;
 	float distanceTravelled;
+	int memoryUsage; //MB
 
-	int type; // 0=F2M, 1=F2F
+	int type;
 
 	// F2M
 	std::multimap<int, cv::KeyPoint> words;
-	std::vector<int> wordMatches;
-	std::vector<int> wordInliers;
 	std::map<int, cv::Point3f> localMap;
-	cv::Mat localScanMap;
+	LaserScan localScanMap;
 
 	// F2F
 	std::vector<cv::Point2f> refCorners;

@@ -25,8 +25,8 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifndef PROGRESSDIALOG_H_
-#define PROGRESSDIALOG_H_
+#ifndef RTABMAP_PROGRESSDIALOG_H_
+#define RTABMAP_PROGRESSDIALOG_H_
 
 #include "rtabmap/gui/RtabmapGuiExp.h" // DLL export/import defines
 
@@ -53,27 +53,35 @@ public:
 	int maximumSteps() const;
 	void setMaximumSteps(int steps);
 	void setAutoClose(bool on, int delayedClosingTimeMsec = -1);
+	void setCancelButtonVisible(bool visible);
+	bool isCanceled() const {return _canceled;}
+
+signals:
+	void canceled();
 
 protected:
 	virtual void closeEvent(QCloseEvent * event);
 
 public slots:
 	void appendText(const QString & text ,const QColor & color = Qt::black);
-	void incrementStep();
+	void incrementStep(int steps = 1);
 	void clear();
 	void resetProgress();
 
 private slots:
 	void closeDialog();
+	void cancel();
 
 private:
 	QLabel * _text;
 	QTextEdit * _detailedText;
 	QProgressBar * _progressBar;
 	QPushButton * _closeButton;
+	QPushButton * _cancelButton;
 	QCheckBox * _closeWhenDoneCheckBox;
 	QString _endMessage;
 	int _delayedClosingTime; // sec
+	bool _canceled;
 };
 
 }
