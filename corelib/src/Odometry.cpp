@@ -28,6 +28,11 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap/core/OdometryF2M.h>
 #include "rtabmap/core/Odometry.h"
 #include "rtabmap/core/OdometryF2F.h"
+#include "rtabmap/core/OdometryFovis.h"
+#include "rtabmap/core/OdometryViso2.h"
+#include "rtabmap/core/OdometryDVO.h"
+#include "rtabmap/core/OdometryOkvis.h"
+#include "rtabmap/core/OdometryORBSLAM2.h"
 #include "rtabmap/core/OdometryInfo.h"
 #include "rtabmap/core/util3d.h"
 #include "rtabmap/core/util3d_mapping.h"
@@ -35,6 +40,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/utilite/ULogger.h"
 #include "rtabmap/utilite/UTimer.h"
 #include "rtabmap/utilite/UConversion.h"
+#include "rtabmap/utilite/UProcessInfo.h"
 #include "rtabmap/core/ParticleFilter.h"
 #include "rtabmap/core/util2d.h"
 
@@ -56,8 +62,23 @@ Odometry * Odometry::create(Odometry::Type & type, const ParametersMap & paramet
 	Odometry * odometry = 0;
 	switch(type)
 	{
+	case Odometry::kTypeORBSLAM2:
+		odometry = new OdometryORBSLAM2(parameters);
+		break;
+	case Odometry::kTypeDVO:
+		odometry = new OdometryDVO(parameters);
+		break;
+	case Odometry::kTypeViso2:
+		odometry = new OdometryViso2(parameters);
+		break;
+	case Odometry::kTypeFovis:
+		odometry = new OdometryFovis(parameters);
+		break;
 	case Odometry::kTypeF2F:
 		odometry = new OdometryF2F(parameters);
+		break;
+	case Odometry::kTypeOkvis:
+		odometry = new OdometryOkvis(parameters);
 		break;
 	default:
 		odometry = new OdometryF2M(parameters);
@@ -83,10 +104,13 @@ Odometry::Odometry(const rtabmap::ParametersMap & parameters) :
 		_kalmanMeasurementNoise(Parameters::defaultOdomKalmanMeasurementNoise()),
 		_imageDecimation(Parameters::defaultOdomImageDecimation()),
 		_alignWithGround(Parameters::defaultOdomAlignWithGround()),
+		_publishRAMUsage(Parameters::defaultRtabmapPublishRAMUsage()),
+		_imagesAlreadyRectified(Parameters::defaultRtabmapImagesAlreadyRectified()),
 		_pose(Transform::getIdentity()),
 		_resetCurrentCount(0),
 		previousStamp_(0),
-		distanceTravelled_(0)
+		distanceTravelled_(0),
+		framesProcessed_(0)
 {
 	Parameters::parse(parameters, Parameters::kOdomResetCountdown(), _resetCountdown);
 
@@ -108,6 +132,9 @@ Odometry::Odometry(const rtabmap::ParametersMap & parameters) :
 	Parameters::parse(parameters, Parameters::kOdomKalmanMeasurementNoise(), _kalmanMeasurementNoise);
 	Parameters::parse(parameters, Parameters::kOdomImageDecimation(), _imageDecimation);
 	Parameters::parse(parameters, Parameters::kOdomAlignWithGround(), _alignWithGround);
+	Parameters::parse(parameters, Parameters::kRtabmapPublishRAMUsage(), _publishRAMUsage);
+	Parameters::parse(parameters, Parameters::kRtabmapImagesAlreadyRectified(), _imagesAlreadyRectified);
+
 	if(_imageDecimation == 0)
 	{
 		_imageDecimation = 1;
@@ -152,6 +179,7 @@ void Odometry::reset(const Transform & initialPose)
 	_resetCurrentCount = 0;
 	previousStamp_ = 0;
 	distanceTravelled_ = 0;
+	framesProcessed_ = 0;
 	if(_force3DoF || particleFilters_.size())
 	{
 		float x,y,z, roll,pitch,yaw;
@@ -203,6 +231,15 @@ Transform Odometry::process(SensorData & data, OdometryInfo * info)
 
 Transform Odometry::process(SensorData & data, const Transform & guessIn, OdometryInfo * info)
 {
+	UASSERT_MSG(data.id() >= 0, uFormat("Input data should have ID greater or equal than 0 (id=%d)!", data.id()).c_str());
+
+	if(!_imagesAlreadyRectified && !this->canProcessRawImages())
+	{
+		UERROR("Odometry approach chosen cannot process raw images (not rectified images). Make sure images "
+				"are rectified, and set %s parameter back to true.",
+				Parameters::kRtabmapImagesAlreadyRectified().c_str());
+	}
+
 	// Ground alignment
 	if(_pose.isIdentity() && _alignWithGround)
 	{
@@ -215,11 +252,11 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 			UTimer alignTimer;
 			pcl::IndicesPtr indices(new std::vector<int>);
 			pcl::IndicesPtr ground, obstacles;
-			pcl::PointCloud<pcl::PointXYZ>::Ptr cloud = util3d::cloudFromSensorData(data, 1, 0, 0, indices.get());
-			cloud = util3d::voxelize(cloud, indices, 0.01);
+			pcl::PointCloud<pcl::PointXYZ>::Ptr cloud = util3d::cloudFromSensorData(data, 1, 10, 0, indices.get());
 			bool success = false;
-			if(cloud->size())
+			if(indices->size())
 			{
+				cloud = util3d::voxelize(cloud, indices, 0.01);
 				util3d::segmentObstaclesFromGround<pcl::PointXYZ>(cloud, ground, obstacles, 20, M_PI/4.0f, 0.02, 200, true);
 				if(ground->size())
 				{
@@ -266,9 +303,22 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 		}
 	}
 
-	double dt = previousStamp_>0.0f?data.stamp() - previousStamp_:0.0;
-	Transform guess = dt && guessFromMotion_ && !previousVelocityTransform_.isNull()?Transform::getIdentity():Transform();
-	UASSERT_MSG(dt>0.0 || (dt == 0.0 && previousVelocityTransform_.isNull()), uFormat("dt=%f previous transform=%s", dt, previousVelocityTransform_.prettyPrint().c_str()).c_str());
+	// KITTI datasets start with stamp=0
+	double dt = previousStamp_>0.0f || (previousStamp_==0.0f && framesProcessed()==1)?data.stamp() - previousStamp_:0.0;
+	Transform guess = dt>0.0 && guessFromMotion_ && !previousVelocityTransform_.isNull()?Transform::getIdentity():Transform();
+	if(!(dt>0.0 || (dt == 0.0 && previousVelocityTransform_.isNull())))
+	{
+		if(guessFromMotion_)
+		{
+			UERROR("Guess from motion is set but dt is invalid! Odometry is then computed without guess. (dt=%f previous transform=%s)", dt, previousVelocityTransform_.prettyPrint().c_str());
+		}
+		else if(_filteringStrategy==1)
+		{
+			UERROR("Kalman filtering is enalbed but dt is invalid! Odometry is then computed without Kalman filtering. (dt=%f previous transform=%s)", dt, previousVelocityTransform_.prettyPrint().c_str());
+		}
+		dt=0;
+		previousVelocityTransform_.setNull();
+	}
 	if(!previousVelocityTransform_.isNull())
 	{
 		if(guessFromMotion_)
@@ -300,7 +350,7 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 
 	UTimer time;
 	Transform t;
-	if(_imageDecimation > 1)
+	if(_imageDecimation > 1 && !data.imageRaw().empty())
 	{
 		// Decimation of images with calibrations
 		SensorData decimatedData = data;
@@ -365,6 +415,10 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 		info->stamp = data.stamp();
 		info->interval = dt;
 		info->transform = t;
+		if(_publishRAMUsage)
+		{
+			info->memoryUsage = UProcessInfo::getMemoryUsage()/(1024*1024);
+		}
 
 		if(!data.groundTruth().isNull())
 		{
@@ -496,7 +550,7 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 			}
 		}
 
-		if(data.stamp() == 0)
+		if(data.stamp() == 0 && framesProcessed_ != 0)
 		{
 			UWARN("Null stamp detected");
 		}
@@ -514,11 +568,7 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 			distanceTravelled_ += t.getNorm();
 			info->distanceTravelled = distanceTravelled_;
 		}
-
-		info->varianceLin *= t.getNorm();
-		info->varianceAng *= t.getAngle();
-		info->varianceLin = info->varianceLin>0.0f?info->varianceLin:0.0001f; // epsilon if exact transform
-		info->varianceAng = info->varianceAng>0.0f?info->varianceAng:0.0001f; // epsilon if exact transform
+		++framesProcessed_;
 
 		return _pose *= t; // update
 	}
