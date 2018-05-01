@@ -34,6 +34,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/core/SensorData.h"
 #include "rtabmap/core/Statistics.h"
 #include "rtabmap/core/Link.h"
+#include "rtabmap/core/ProgressState.h"
 
 #include <opencv2/core/core.hpp>
 #include <list>
@@ -58,11 +59,32 @@ public:
 	Rtabmap();
 	virtual ~Rtabmap();
 
-	bool process(const cv::Mat & image, int id=0); // for convenience, an id is automatically generated if id=0
+	/**
+	 * @brief Main loop of rtabmap.
+	 * @param data Sensor data to process.
+	 * @param odomPose Odometry pose, should be non-null for RGB-D SLAM mode.
+	 * @param covariance Odometry covariance.
+	 * @param externalStats External statistics to be saved in the database for convenience
+	 * @return true if data has been added to map.
+	 */
 	bool process(
 			const SensorData & data,
 			Transform odomPose,
-			const cv::Mat & covariance = cv::Mat::eye(6,6,CV_64FC1)); // for convenience
+			const cv::Mat & odomCovariance = cv::Mat::eye(6,6,CV_64FC1),
+			const std::vector<float> & odomVelocity = std::vector<float>(),
+			const std::map<std::string, float> & externalStats = std::map<std::string, float>());
+	// for convenience
+	bool process(
+			const SensorData & data,
+			Transform odomPose,
+			float odomLinearVariance,
+			float odomAngularVariance,
+			const std::vector<float> & odomVelocity = std::vector<float>(),
+			const std::map<std::string, float> & externalStats = std::map<std::string, float>());
+	// for convenience, loop closure detection only
+	bool process(
+			const cv::Mat & image,
+			int id=0, const std::map<std::string, float> & externalStats = std::map<std::string, float>());
 
 	void init(const ParametersMap & parameters, const std::string & databasePath = "");
 	void init(const std::string & configFile = "", const std::string & databasePath = "");
@@ -96,6 +118,7 @@ public:
 	const Statistics & getStatistics() const;
 	//bool getMetricData(int locationId, cv::Mat & rgb, cv::Mat & depth, float & depthConstant, Transform & pose, Transform & localTransform) const;
 	const std::map<int, Transform> & getLocalOptimizedPoses() const {return _optimizedPoses;}
+	const std::multimap<int, Link> & getLocalConstraints() const {return _constraints;}
 	Transform getPose(int locationId) const;
 	Transform getMapCorrection() const {return _mapCorrection;}
 	const Memory * getMemory() const {return _memory;}
@@ -106,6 +129,7 @@ public:
 	float getTimeThreshold() const {return _maxTimeAllowed;} // in ms
 	void setTimeThreshold(float maxTimeAllowed); // in ms
 
+	void setInitialPose(const Transform & initialPose);
 	int triggerNewMap();
 	bool labelLocation(int id, const std::string & label);
 	/**
@@ -141,7 +165,7 @@ public:
 			bool optimized,
 			bool global,
 			std::map<int, Signature> * signatures = 0);
-	int detectMoreLoopClosures(float clusterRadius = 0.5f, float clusterAngle = M_PI/6.0f, int iterations = 1);
+	int detectMoreLoopClosures(float clusterRadius = 0.5f, float clusterAngle = M_PI/6.0f, int iterations = 1, const ProgressState * state = 0);
 	int refineLinks();
 
 	int getPathStatus() const {return _pathStatus;} // -1=failed 0=idle/executing 1=success
@@ -189,10 +213,14 @@ private:
 	bool _publishLastSignatureData;
 	bool _publishPdf;
 	bool _publishLikelihood;
+	bool _publishRAMUsage;
+	bool _computeRMSE;
+	bool _saveWMState;
 	float _maxTimeAllowed; // in ms
 	unsigned int _maxMemoryAllowed; // signatures count in WM
 	float _loopThr;
 	float _loopRatio;
+	bool _verifyLoopClosureHypothesis;
 	unsigned int _maxRetrieved;
 	unsigned int _maxLocalRetrieved;
 	bool _rawDataKept;
@@ -202,6 +230,8 @@ private:
 	bool _rgbdSlamMode;
 	float _rgbdLinearUpdate;
 	float _rgbdAngularUpdate;
+	float _rgbdLinearSpeedUpdate;
+	float _rgbdAngularSpeedUpdate;
 	float _newMapOdomChangeDistance;
 	bool _neighborLinkRefining;
 	bool _proximityByTime;
@@ -224,6 +254,7 @@ private:
 	int _pathStuckIterations;
 	float _pathLinearVelocity;
 	float _pathAngularVelocity;
+	bool _savedLocalizationIgnored;
 
 	std::pair<int, float> _loopClosureHypothesis;
 	std::pair<int, float> _highestHypothesis;
@@ -268,6 +299,5 @@ private:
 
 };
 
-#endif /* RTABMAP_H_ */
-
 } // namespace rtabmap
+#endif /* RTABMAP_H_ */

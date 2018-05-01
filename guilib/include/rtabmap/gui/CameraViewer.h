@@ -25,8 +25,8 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifndef CAMERAVIEWER_H_
-#define CAMERAVIEWER_H_
+#ifndef RTABMAP_CAMERAVIEWER_H_
+#define RTABMAP_CAMERAVIEWER_H_
 
 #include "rtabmap/gui/RtabmapGuiExp.h" // DLL export/import defines
 
@@ -56,7 +56,7 @@ public:
 public slots:
 	void showImage(const rtabmap::SensorData & data);
 protected:
-	virtual void handleEvent(UEvent * event);
+	virtual bool handleEvent(UEvent * event);
 
 private:
 	ImageView* imageView_;

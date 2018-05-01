@@ -33,6 +33,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <opencv2/core/core.hpp>
 #include <rtabmap/core/Transform.h>
 #include <rtabmap/core/Parameters.h>
+#include <vector>
 
 namespace rtabmap
 {
@@ -53,8 +54,8 @@ std::vector<cv::Point2f> RTABMAP_EXP calcStereoCorrespondences(
 		cv::Size winSize = cv::Size(6,3),
 		int maxLevel = 3,
 		int iterations = 5,
-		int minDisparity = 0,
-		int maxDisparity = 64,
+		float minDisparity = 0.0f,
+		float maxDisparity = 64.0f,
 		bool ssdApproach = true); // SSD by default, otherwise it is SAD
 
 // exactly as cv::calcOpticalFlowPyrLK but it should be called with pyramid (from cv::buildOpticalFlowPyramid()) and delta drops the y error.
@@ -106,7 +107,7 @@ float RTABMAP_EXP getDepth(
 		const cv::Mat & depthImage,
 		float x, float y,
 		bool smoothing,
-		float maxZError = 0.02f,
+		float depthErrorRatio = 0.02f, //ratio
 		bool estWithNeighborsIfNull = false);
 
 cv::Rect RTABMAP_EXP computeRoi(const cv::Mat & image, const std::string & roiRatios);
@@ -141,6 +142,15 @@ cv::Mat RTABMAP_EXP fastBilateralFiltering(
 		float sigmaS = 15.0f,
 		float sigmaR = 0.05f,
 		bool earlyDivision = false);
+
+cv::Mat RTABMAP_EXP brightnessAndContrastAuto(
+		const cv::Mat & src,
+		const cv::Mat & mask,
+		float clipLowHistPercent=0,
+		float clipHighHistPercent=0);
+
+cv::Mat RTABMAP_EXP exposureFusion(
+	const std::vector<cv::Mat> & images);
 
 } // namespace util3d
 } // namespace rtabmap

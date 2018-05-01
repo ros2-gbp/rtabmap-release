@@ -35,9 +35,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/core/util3d_correspondences.h"
 #include "rtabmap/core/util3d.h"
 
-#if CV_MAJOR_VERSION < 3
+#include <pcl/common/common.h>
+
 #include "opencv/solvepnp.h"
-#endif
 
 namespace rtabmap
 {
@@ -56,7 +56,7 @@ Transform estimateMotion3DTo2D(
 			int refineIterations,
 			const Transform & guess,
 			const std::map<int, cv::Point3f> & words3B,
-			double * varianceOut,
+			cv::Mat * covariance,
 			std::vector<int> * matchesOut,
 			std::vector<int> * inliersOut)
 {
@@ -65,9 +65,9 @@ Transform estimateMotion3DTo2D(
 	Transform transform;
 	std::vector<int> matches, inliers;
 
-	if(varianceOut)
+	if(covariance)
 	{
-		*varianceOut = 1.0;
+		*covariance = cv::Mat::eye(6,6,CV_64FC1);
 	}
 
 	// find correspondences
@@ -94,8 +94,8 @@ Transform estimateMotion3DTo2D(
 	imagePoints.resize(oi);
 	matches.resize(oi);
 
-	UDEBUG("words3A=%d words2B=%d matches=%d words3B=%d",
-			(int)words3A.size(), (int)words2B.size(), (int)matches.size(), (int)words3B.size());
+	UDEBUG("words3A=%d words2B=%d matches=%d words3B=%d guess=%s",
+			(int)words3A.size(), (int)words2B.size(), (int)matches.size(), (int)words3B.size(), guess.prettyPrint().c_str());
 
 	if((int)matches.size() >= minInliers)
 	{
@@ -138,9 +138,10 @@ Transform estimateMotion3DTo2D(
 			transform = (cameraModel.localTransform() * pnp).inverse();
 
 			// compute variance (like in PCL computeVariance() method of sac_model.h)
-			if(varianceOut && words3B.size())
+			if(covariance && words3B.size())
 			{
 				std::vector<float> errorSqrdDists(inliers.size());
+				std::vector<float> errorSqrdAngles(inliers.size());
 				oi = 0;
 				for(unsigned int i=0; i<inliers.size(); ++i)
 				{
@@ -150,22 +151,33 @@ Transform estimateMotion3DTo2D(
 						const cv::Point3f & objPt = objectPoints[inliers[i]];
 						cv::Point3f newPt = util3d::transformPoint(iter->second, transform);
 						errorSqrdDists[oi] = uNormSquared(objPt.x-newPt.x, objPt.y-newPt.y, objPt.z-newPt.z);
-						//ignore very very far features (stereo)
-						if(errorSqrdDists[oi] < iter->second.x/100.0f)
-						{
-							++oi;
-						}
+
+						Eigen::Vector4f v1(objPt.x - transform.x(), objPt.y - transform.y(), objPt.z - transform.z(), 0);
+						Eigen::Vector4f v2(newPt.x - transform.x(), newPt.y - transform.y(), newPt.z - transform.z(), 0);
+						errorSqrdAngles[oi++] = pcl::getAngle3D(v1, v2);
 					}
 				}
+
 				errorSqrdDists.resize(oi);
+				errorSqrdAngles.resize(oi);
 				if(errorSqrdDists.size())
 				{
 					std::sort(errorSqrdDists.begin(), errorSqrdDists.end());
-					double median_error_sqr = (double)errorSqrdDists[errorSqrdDists.size () >> 1];
-					*varianceOut = 2.1981 * median_error_sqr;
+					//divide by 4 instead of 2 to ignore very very far features (stereo)
+					double median_error_sqr = 2.1981 * (double)errorSqrdDists[errorSqrdDists.size () >> 2];
+					UASSERT(uIsFinite(median_error_sqr));
+					(*covariance)(cv::Range(0,3), cv::Range(0,3)) *= median_error_sqr;
+					std::sort(errorSqrdAngles.begin(), errorSqrdAngles.end());
+					median_error_sqr = 2.1981 * (double)errorSqrdAngles[errorSqrdAngles.size () >> 2];
+					UASSERT(uIsFinite(median_error_sqr));
+					(*covariance)(cv::Range(3,6), cv::Range(3,6)) *= median_error_sqr;
+				}
+				else
+				{
+					UWARN("Not enough close points to compute covariance!");
 				}
 			}
-			else if(varianceOut)
+			else if(covariance)
 			{
 				// compute variance, which is the rms of reprojection errors
 				std::vector<cv::Point2f> imagePointsReproj;
@@ -175,7 +187,8 @@ Transform estimateMotion3DTo2D(
 				{
 					err += uNormSquared(imagePoints.at(inliers[i]).x - imagePointsReproj.at(inliers[i]).x, imagePoints.at(inliers[i]).y - imagePointsReproj.at(inliers[i]).y);
 				}
-				*varianceOut = std::sqrt(err/float(inliers.size()));
+				UASSERT(uIsFinite(err));
+				*covariance *= std::sqrt(err/float(inliers.size()));
 			}
 		}
 	}
@@ -203,7 +216,7 @@ Transform estimateMotion3DTo3D(
 			double inliersDistance,
 			int iterations,
 			int refineIterations,
-			double * varianceOut,
+			cv::Mat * covariance,
 			std::vector<int> * matchesOut,
 			std::vector<int> * inliersOut)
 {
@@ -222,14 +235,14 @@ Transform estimateMotion3DTo3D(
 	UASSERT(inliers1.size() == inliers2.size());
 	UDEBUG("Unique correspondences = %d", (int)inliers1.size());
 
-	if(varianceOut)
+	if(covariance)
 	{
-		*varianceOut = 1.0;
+		*covariance = cv::Mat::eye(6,6,CV_64FC1);
 	}
 
+	std::vector<int> inliers;
 	if((int)inliers1.size() >= minInliers)
 	{
-		std::vector<int> inliers;
 		pcl::PointCloud<pcl::PointXYZ>::Ptr inliers1cloud(new pcl::PointCloud<pcl::PointXYZ>);
 		pcl::PointCloud<pcl::PointXYZ>::Ptr inliers2cloud(new pcl::PointCloud<pcl::PointXYZ>);
 		inliers1cloud->resize(inliers1.size());
@@ -251,27 +264,27 @@ Transform estimateMotion3DTo3D(
 				refineIterations,
 				3.0,
 				&inliers,
-				varianceOut);
+				covariance);
 
 		if(!t.isNull() && (int)inliers.size() >= minInliers)
 		{
 			transform = t;
 		}
+	}
 
-		if(matchesOut)
+	if(matchesOut)
+	{
+		*matchesOut = matches;
+	}
+	if(inliersOut)
+	{
+		inliersOut->resize(inliers.size());
+		for(unsigned int i=0; i<inliers.size(); ++i)
 		{
-			*matchesOut = matches;
-		}
-
-		if(inliersOut)
-		{
-			inliersOut->resize(inliers.size());
-			for(unsigned int i=0; i<inliers.size(); ++i)
-			{
-				inliersOut->at(i) = matches[inliers[i]];
-			}
+			inliersOut->at(i) = matches[inliers[i]];
 		}
 	}
+
 	return transform;
 }
 
@@ -329,11 +342,10 @@ void solvePnPRansac(
 	{
 		minInliersCount = 4;
 	}
-#if CV_MAJOR_VERSION < 3
-	cv3::solvePnPRansac( //use OpenCV3 version of solvePnPRansac in OpenCV2
-#else
-	cv::solvePnPRansac( // use directly version from OpenCV 3
-#endif
+
+	// Use OpenCV3 version of solvePnPRansac in OpenCV2.
+	// FIXME: we should use this version of solvePnPRansac in newer 3.3.1 too, which seems a lot less stable!?!? Why!?
+	cv3::solvePnPRansac(
 			objectPoints,
 			imagePoints,
 			cameraMatrix,

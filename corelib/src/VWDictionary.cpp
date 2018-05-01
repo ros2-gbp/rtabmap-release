@@ -38,7 +38,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <opencv2/opencv_modules.hpp>
 
 #if CV_MAJOR_VERSION < 3
+#ifdef HAVE_OPENCV_GPU
 #include <opencv2/gpu/gpu.hpp>
+#endif
 #else
 #include <opencv2/core/cuda.hpp>
 #ifdef HAVE_OPENCV_CUDAFEATURES2D
@@ -48,6 +50,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <fstream>
 #include <string>
+
+#define KDTREE_SIZE 4
+#define KNN_CHECKS 32
 
 namespace rtabmap
 {
@@ -59,6 +64,7 @@ VWDictionary::VWDictionary(const ParametersMap & parameters) :
 	_totalActiveReferences(0),
 	_incrementalDictionary(Parameters::defaultKpIncrementalDictionary()),
 	_incrementalFlann(Parameters::defaultKpIncrementalFlann()),
+	_rebalancingFactor(Parameters::defaultKpFlannRebalancingFactor()),
 	_nndrRatio(Parameters::defaultKpNndrRatio()),
 	_dictionaryPath(Parameters::defaultKpDictionaryPath()),
 	_newWordsComparedTogether(Parameters::defaultKpNewWordsComparedTogether()),
@@ -83,6 +89,7 @@ void VWDictionary::parseParameters(const ParametersMap & parameters)
 	Parameters::parse(parameters, Parameters::kKpNndrRatio(), _nndrRatio);
 	Parameters::parse(parameters, Parameters::kKpNewWordsComparedTogether(), _newWordsComparedTogether);
 	Parameters::parse(parameters, Parameters::kKpIncrementalFlann(), _incrementalFlann);
+	Parameters::parse(parameters, Parameters::kKpFlannRebalancingFactor(), _rebalancingFactor);
 
 	UASSERT_MSG(_nndrRatio > 0.0f, uFormat("String=%s value=%f", uContains(parameters, Parameters::kKpNndrRatio())?parameters.at(Parameters::kKpNndrRatio()).c_str():"", _nndrRatio).c_str());
 
@@ -358,15 +365,15 @@ void VWDictionary::update()
 						switch(_strategy)
 						{
 						case kNNFlannNaive:
-							_flannIndex->buildLinearIndex(descriptor, useDistanceL1_);
+							_flannIndex->buildLinearIndex(descriptor, useDistanceL1_, _rebalancingFactor);
 							break;
 						case kNNFlannKdTree:
 							UASSERT_MSG(descriptor.type() == CV_32F, "To use KdTree dictionary, float descriptors are required!");
-							_flannIndex->buildKDTreeIndex(descriptor, 4, useDistanceL1_);
+							_flannIndex->buildKDTreeIndex(descriptor, KDTREE_SIZE, useDistanceL1_, _rebalancingFactor);
 							break;
 						case kNNFlannLSH:
 							UASSERT_MSG(descriptor.type() == CV_8U, "To use LSH dictionary, binary descriptors are required!");
-							_flannIndex->buildLSHIndex(descriptor, 12, 20, 2);
+							_flannIndex->buildLSHIndex(descriptor, 12, 20, 2, _rebalancingFactor);
 							break;
 						default:
 							UFATAL("Not supposed to be here!");
@@ -481,15 +488,15 @@ void VWDictionary::update()
 				switch(_strategy)
 				{
 				case kNNFlannNaive:
-					_flannIndex->buildLinearIndex(_dataTree, useDistanceL1_);
+					_flannIndex->buildLinearIndex(_dataTree, useDistanceL1_, _rebalancingFactor);
 					break;
 				case kNNFlannKdTree:
 					UASSERT_MSG(type == CV_32F, "To use KdTree dictionary, float descriptors are required!");
-					_flannIndex->buildKDTreeIndex(_dataTree, 4, useDistanceL1_);
+					_flannIndex->buildKDTreeIndex(_dataTree, KDTREE_SIZE, useDistanceL1_, _rebalancingFactor);
 					break;
 				case kNNFlannLSH:
 					UASSERT_MSG(type == CV_8U, "To use LSH dictionary, binary descriptors are required!");
-					_flannIndex->buildLSHIndex(_dataTree, 12, 20, 2);
+					_flannIndex->buildLSHIndex(_dataTree, 12, 20, 2, _rebalancingFactor);
 					break;
 				default:
 					break;
@@ -548,7 +555,7 @@ int VWDictionary::getNextId()
 
 void VWDictionary::addWordRef(int wordId, int signatureId)
 {
-	if(signatureId > 0 && wordId > 0)
+	if(signatureId > 0)
 	{
 		VisualWord * vw = 0;
 		vw = uValue(_visualWords, wordId, vw);
@@ -682,7 +689,7 @@ std::list<int> VWDictionary::addNewWords(const cv::Mat & descriptorsIn,
 
 		if(_strategy == kNNFlannNaive || _strategy == kNNFlannKdTree || _strategy == kNNFlannLSH)
 		{
-			_flannIndex->knnSearch(descriptors, results, dists, k);
+			_flannIndex->knnSearch(descriptors, results, dists, k, KNN_CHECKS);
 		}
 		else if(_strategy == kNNBruteForce)
 		{
@@ -755,7 +762,7 @@ std::list<int> VWDictionary::addNewWords(const cv::Mat & descriptorsIn,
 			for(int j=0; j<dists.cols; ++j)
 			{
 				float d = dists.at<float>(i,j);
-				int id = uValue(_mapIndexId, results.at<int>(i,j));
+				int id = uValue(_mapIndexId, (int)results.at<size_t>(i,j));
 				if(d >= 0.0f && id > 0)
 				{
 					fullResults.insert(std::pair<float, int>(d, id));
@@ -992,7 +999,7 @@ std::vector<int> VWDictionary::findNN(const cv::Mat & queryIn) const
 
 			if(_strategy == kNNFlannNaive || _strategy == kNNFlannKdTree || _strategy == kNNFlannLSH)
 			{
-				_flannIndex->knnSearch(query, results, dists, k);
+				_flannIndex->knnSearch(query, results, dists, k, KNN_CHECKS);
 			}
 			else if(_strategy == kNNBruteForce)
 			{
@@ -1103,7 +1110,7 @@ std::vector<int> VWDictionary::findNN(const cv::Mat & queryIn) const
 				for(int j=0; j<dists.cols; ++j)
 				{
 					float d = dists.at<float>(i,j);
-					int id = uValue(_mapIndexId, results.at<int>(i,j));
+					int id = uValue(_mapIndexId, (int)results.at<size_t>(i,j));
 					if(d >= 0.0f && id > 0)
 					{
 						fullResults.insert(std::pair<float, int>(d, id));

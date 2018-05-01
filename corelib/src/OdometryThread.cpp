@@ -39,7 +39,10 @@ namespace rtabmap {
 OdometryThread::OdometryThread(Odometry * odometry, unsigned int dataBufferMaxSize) :
 	_odometry(odometry),
 	_dataBufferMaxSize(dataBufferMaxSize),
-	_resetOdometry(false)
+	_resetOdometry(false),
+	_resetPose(Transform::getIdentity()),
+	_lastImuStamp(0.0),
+	_imuEstimatedDelay(0.0)
 {
 	UASSERT(_odometry != 0);
 }
@@ -55,7 +58,7 @@ OdometryThread::~OdometryThread()
 	UDEBUG("");
 }
 
-void OdometryThread::handleEvent(UEvent * event)
+bool OdometryThread::handleEvent(UEvent * event)
 {
 	if(this->isRunning())
 	{
@@ -67,11 +70,26 @@ void OdometryThread::handleEvent(UEvent * event)
 				this->addData(cameraEvent->data());
 			}
 		}
-		else if(event->getClassName().compare("OdometryResetEvent") == 0)
+		else if(event->getClassName().compare("IMUEvent") == 0)
 		{
-			_resetOdometry = true;
+			IMUEvent * imuEvent = (IMUEvent*)event;
+			if(!imuEvent->getData().empty())
+			{
+				this->addData(SensorData(imuEvent->getData(), 0, imuEvent->getStamp()));
+			}
 		}
 	}
+	if(event->getClassName().compare("OdometryResetEvent") == 0)
+	{
+		OdometryResetEvent * odomEvent = (OdometryResetEvent*)event;
+		_resetPose.setIdentity();
+		if(!odomEvent->getPose().isNull())
+		{
+			_resetPose = odomEvent->getPose();
+		}
+		_resetOdometry = true;
+	}
+	return false;
 }
 
 void OdometryThread::mainLoopBegin()
@@ -91,7 +109,7 @@ void OdometryThread::mainLoop()
 {
 	if(_resetOdometry)
 	{
-		_odometry->reset();
+		_odometry->reset(_resetPose);
 		_resetOdometry = false;
 	}
 
@@ -99,44 +117,66 @@ void OdometryThread::mainLoop()
 	if(getData(data))
 	{
 		OdometryInfo info;
+		UDEBUG("Processing data...");
 		Transform pose = _odometry->process(data, &info);
-		// a null pose notify that odometry could not be computed
-		double varianceLin = info.varianceLin>0?info.varianceLin:1;
-		double varianceAng = info.varianceAng>0?info.varianceAng:1;
 		UDEBUG("Odom pose = %s", pose.prettyPrint().c_str());
-		this->post(new OdometryEvent(data, pose, varianceAng, varianceLin, info));
+		if(!data.imageRaw().empty() || pose.isNull())
+		{
+			// a null pose notify that odometry could not be computed
+			this->post(new OdometryEvent(data, pose, info));
+		}
 	}
 }
 
 void OdometryThread::addData(const SensorData & data)
 {
-	if(dynamic_cast<OdometryMono*>(_odometry) == 0)
+	if(data.imu().empty())
 	{
-		if(data.imageRaw().empty() || data.depthOrRightRaw().empty() || (data.cameraModels().size()==0 && !data.stereoCameraModel().isValidForProjection()))
+		if(dynamic_cast<OdometryMono*>(_odometry) == 0)
 		{
-			ULOGGER_ERROR("Missing some information (images empty or missing calibration)!?");
-			return;
+			if(data.imageRaw().empty() || data.depthOrRightRaw().empty() || (data.cameraModels().size()==0 && !data.stereoCameraModel().isValidForProjection()))
+			{
+				ULOGGER_ERROR("Missing some information (images empty or missing calibration)!?");
+				return;
+			}
 		}
-	}
-	else
-	{
-		// Mono can accept RGB only
-		if(data.imageRaw().empty() || (data.cameraModels().size()==0 && !data.stereoCameraModel().isValidForProjection()))
+		else
 		{
-			ULOGGER_ERROR("Missing some information (image empty or missing calibration)!?");
-			return;
+			// Mono can accept RGB only
+			if(data.imageRaw().empty() || (data.cameraModels().size()==0 && !data.stereoCameraModel().isValidForProjection()))
+			{
+				ULOGGER_ERROR("Missing some information (image empty or missing calibration)!?");
+				return;
+			}
 		}
 	}
 
 	bool notify = true;
 	_dataMutex.lock();
 	{
-		_dataBuffer.push_back(data);
-		while(_dataBufferMaxSize > 0 && _dataBuffer.size() > _dataBufferMaxSize)
+		if(data.imu().empty())
 		{
-			UDEBUG("Data buffer is full, the oldest data is removed to add the new one.");
-			_dataBuffer.pop_front();
-			notify = false;
+			_dataBuffer.push_back(data);
+			while(_dataBufferMaxSize > 0 && _dataBuffer.size() > _dataBufferMaxSize)
+			{
+				UDEBUG("Data buffer is full, the oldest data is removed to add the new one.");
+				_dataBuffer.erase(_dataBuffer.begin());
+				notify = false;
+			}
+			if(notify && _imuEstimatedDelay>0.0 && data.stamp() > (_lastImuStamp+_imuEstimatedDelay))
+			{
+				// Don't notify if IMU data before this image has not been received yet
+				notify = false;
+			}
+		}
+		else
+		{
+			_imuBuffer.push_back(data);
+			if(_lastImuStamp != 0.0 && data.stamp() > _lastImuStamp)
+			{
+				_imuEstimatedDelay = data.stamp() - _lastImuStamp;
+			}
+			_lastImuStamp = data.stamp();
 		}
 	}
 	_dataMutex.unlock();
@@ -153,10 +193,19 @@ bool OdometryThread::getData(SensorData & data)
 	_dataAdded.acquire();
 	_dataMutex.lock();
 	{
-		if(!_dataBuffer.empty())
+		if(!_dataBuffer.empty() || !_imuBuffer.empty())
 		{
-			data = _dataBuffer.front();
-			_dataBuffer.pop_front();
+			if(_dataBuffer.empty() ||
+				(!_dataBuffer.empty() && !_imuBuffer.empty() && _imuBuffer.front().stamp() <= _dataBuffer.front().stamp()))
+			{
+				data = _imuBuffer.front();
+				_imuBuffer.pop_front();
+			}
+			else
+			{
+				data = _dataBuffer.front();
+				_dataBuffer.pop_front();
+			}
 			dataFilled = true;
 		}
 	}
