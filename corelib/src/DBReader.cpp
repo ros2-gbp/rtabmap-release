@@ -268,7 +268,8 @@ SensorData DBReader::captureImage(CameraInfo * info)
 						int mapId;
 						Transform localTransform, pose, groundTruth;
 						std::vector<float> velocity;
-						_dbDriver->getNodeInfo(*_currentId, pose, mapId, weight, label, stamp, groundTruth, velocity);
+						GPS gps;
+						_dbDriver->getNodeInfo(*_currentId, pose, mapId, weight, label, stamp, groundTruth, velocity, gps);
 						if(previousStamp && stamp && stamp > previousStamp)
 						{
 							delay = stamp - previousStamp;
@@ -322,7 +323,8 @@ SensorData DBReader::getNextData(CameraInfo * info)
 			double stamp;
 			Transform groundTruth;
 			std::vector<float> velocity;
-			_dbDriver->getNodeInfo(*_currentId, pose, mapId, weight, label, stamp, groundTruth, velocity);
+			GPS gps;
+			_dbDriver->getNodeInfo(*_currentId, pose, mapId, weight, label, stamp, groundTruth, velocity, gps);
 
 			cv::Mat infMatrix = cv::Mat::eye(6,6,CV_64FC1);
 			if(!_odometryIgnored)
@@ -399,6 +401,10 @@ SensorData DBReader::getNextData(CameraInfo * info)
 				_previousStamp = stamp;
 				_previousMapID = mapId;
 			}
+			else
+			{
+				stamp = 0;
+			}
 
 			data.uncompressData();
 			if(data.cameraModels().size() > 1 &&
@@ -435,8 +441,9 @@ SensorData DBReader::getNextData(CameraInfo * info)
 			data.setId(seq);
 			data.setStamp(stamp);
 			data.setGroundTruth(groundTruth);
+			data.setGPS(gps);
 			UDEBUG("Laser=%d RGB/Left=%d Depth/Right=%d, UserData=%d",
-					data.laserScanRaw().empty()?0:1,
+					data.laserScanRaw().isEmpty()?0:1,
 					data.imageRaw().empty()?0:1,
 					data.depthOrRightRaw().empty()?0:1,
 					data.userDataRaw().empty()?0:1);
@@ -453,6 +460,7 @@ SensorData DBReader::getNextData(CameraInfo * info)
 				{
 					info->odomPose = pose;
 					info->odomCovariance = infMatrix.inv();
+					info->odomVelocity = velocity;
 					UDEBUG("odom variance = %f/%f", info->odomCovariance.at<double>(0,0), info->odomCovariance.at<double>(5,5));
 				}
 			}

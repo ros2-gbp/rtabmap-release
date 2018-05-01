@@ -35,6 +35,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap/utilite/UTimer.h>
 #include <rtabmap/utilite/UStl.h>
 #include <rtabmap/utilite/UConversion.h>
+#include <rtabmap/utilite/UMath.h>
 
 #include <pcl/common/common.h>
 #include <pcl/common/centroid.h>
@@ -48,8 +49,8 @@ namespace util3d
 
 void occupancy2DFromLaserScan(
 		const cv::Mat & scan,
-		cv::Mat & ground,
-		cv::Mat & obstacles,
+		cv::Mat & empty,
+		cv::Mat & occupied,
 		float cellSize,
 		bool unknownSpaceFilled,
 		float scanMaxRange)
@@ -59,8 +60,8 @@ void occupancy2DFromLaserScan(
 			scan,
 			cv::Mat(),
 			viewpoint,
-			ground,
-			obstacles,
+			empty,
+			occupied,
 			cellSize,
 			unknownSpaceFilled,
 			scanMaxRange);
@@ -69,21 +70,21 @@ void occupancy2DFromLaserScan(
 void occupancy2DFromLaserScan(
 		const cv::Mat & scan,
 		const cv::Point3f & viewpoint,
-		cv::Mat & ground,
-		cv::Mat & obstacles,
+		cv::Mat & empty,
+		cv::Mat & occupied,
 		float cellSize,
 		bool unknownSpaceFilled,
 		float scanMaxRange)
 {
-	occupancy2DFromLaserScan(scan, cv::Mat(), viewpoint, ground, obstacles, cellSize, unknownSpaceFilled, scanMaxRange);
+	occupancy2DFromLaserScan(scan, cv::Mat(), viewpoint, empty, occupied, cellSize, unknownSpaceFilled, scanMaxRange);
 }
 
 void occupancy2DFromLaserScan(
 		const cv::Mat & scanHit,
 		const cv::Mat & scanNoHit,
 		const cv::Point3f & viewpoint,
-		cv::Mat & ground,
-		cv::Mat & obstacles,
+		cv::Mat & empty,
+		cv::Mat & occupied,
 		float cellSize,
 		bool unknownSpaceFilled,
 		float scanMaxRange)
@@ -105,27 +106,27 @@ void occupancy2DFromLaserScan(
 	float xMin, yMin;
 	cv::Mat map8S = create2DMap(poses, scans, viewpoints, cellSize, unknownSpaceFilled, xMin, yMin, 0.0f, scanMaxRange);
 
-	// find ground cells
-	std::list<int> groundIndices;
+	// find empty cells
+	std::list<int> emptyIndices;
 	for(unsigned int i=0; i< map8S.total(); ++i)
 	{
 		if(map8S.data[i] == 0)
 		{
-			groundIndices.push_back(i);
+			emptyIndices.push_back(i);
 		}
 	}
 
 	// Convert to position matrices, get points to each center of the cells
-	ground = cv::Mat();
-	if(groundIndices.size())
+	empty = cv::Mat();
+	if(emptyIndices.size())
 	{
-		ground = cv::Mat(1, (int)groundIndices.size(), CV_32FC2);
+		empty = cv::Mat(1, (int)emptyIndices.size(), CV_32FC2);
 		int i=0;
-		for(std::list<int>::iterator iter=groundIndices.begin();iter!=groundIndices.end(); ++iter)
+		for(std::list<int>::iterator iter=emptyIndices.begin();iter!=emptyIndices.end(); ++iter)
 		{
 			int y = *iter / map8S.cols;
 			int x = *iter - y*map8S.cols;
-			cv::Vec2f * ptr = ground.ptr<cv::Vec2f>();
+			cv::Vec2f * ptr = empty.ptr<cv::Vec2f>();
 			ptr[i][0] = (float(x))*cellSize + xMin;
 			ptr[i][1] = (float(y))*cellSize + yMin;
 			++i;
@@ -133,7 +134,14 @@ void occupancy2DFromLaserScan(
 	}
 
 	// copy directly obstacles precise positions
-	obstacles = scanHit.clone();
+	if(scanMaxRange > cellSize)
+	{
+		occupied = util3d::rangeFiltering(LaserScan::backwardCompatibility(scanHit), 0.0f, scanMaxRange).data().clone();
+	}
+	else
+	{
+		occupied = scanHit.clone();
+	}
 }
 
 /**
@@ -224,7 +232,7 @@ cv::Mat create2DMapFromOccupancyLocalMaps(
 					const float * vi = pair.first.ptr<float>(0,i);
 					float * vo = ground.ptr<float>(0,i);
 					cv::Point3f vt;
-					if(pair.first.channels() > 2)
+					if(pair.first.channels() != 2 && pair.first.channels() != 5)
 					{
 						vt = util3d::transformPoint(cv::Point3f(vi[0], vi[1], vi[2]), iter->second);
 					}
@@ -260,7 +268,7 @@ cv::Mat create2DMapFromOccupancyLocalMaps(
 					const float * vi = pair.second.ptr<float>(0,i);
 					float * vo = obstacles.ptr<float>(0,i);
 					cv::Point3f vt;
-					if(pair.second.channels() > 2)
+					if(pair.second.channels() != 2 && pair.second.channels() != 5)
 					{
 						vt = util3d::transformPoint(cv::Point3f(vi[0], vi[1], vi[2]), iter->second);
 					}
@@ -297,8 +305,8 @@ cv::Mat create2DMapFromOccupancyLocalMaps(
 		yMin += cellSize/2.0f;
 		float xMax = maxX+margin;
 		float yMax = maxY+margin;
-		if(fabs((yMax - yMin) / cellSize) > 99999 ||
-		   fabs((xMax - xMin) / cellSize) > 99999)
+		if(fabs((yMax - yMin) / cellSize) > 30000 || // Max 1.5Km/1.5Km at 5 cm/cell -> 900MB
+		   fabs((xMax - xMin) / cellSize) > 30000)
 		{
 			UERROR("Large map size!! map min=(%f, %f) max=(%f,%f). "
 					"There's maybe an error with the poses provided! The map will not be created!",
@@ -320,6 +328,8 @@ cv::Mat create2DMapFromOccupancyLocalMaps(
 					{
 						float * ptf = iter->second.ptr<float>(0, i);
 						cv::Point2i pt((ptf[0]-xMin)/cellSize, (ptf[1]-yMin)/cellSize);
+						UASSERT_MSG(pt.y>0 && pt.y<map.rows && pt.x>0 && pt.x<map.cols,
+								uFormat("id=%d, map min=(%f, %f) max=(%f,%f) map=%dx%d pt=(%d,%d)", kter->first, xMin, yMin, xMax, yMax, map.cols, map.rows, pt.x, pt.y).c_str());
 						char & value = map.at<char>(pt.y, pt.x);
 						if(value != -2)
 						{
@@ -357,6 +367,8 @@ cv::Mat create2DMapFromOccupancyLocalMaps(
 					{
 						float * ptf = jter->second.ptr<float>(0, i);
 						cv::Point2i pt((ptf[0]-xMin)/cellSize, (ptf[1]-yMin)/cellSize);
+						UASSERT_MSG(pt.y>0 && pt.y<map.rows && pt.x>0 && pt.x<map.cols,
+								uFormat("id=%d: map min=(%f, %f) max=(%f,%f) map=%dx%d pt=(%d,%d)", kter->first, xMin, yMin, xMax, yMax, map.cols, map.rows, pt.x, pt.y).c_str());
 						char & value = map.at<char>(pt.y, pt.x);
 						if(value != -2)
 						{
@@ -576,8 +588,8 @@ cv::Mat create2DMap(const std::map<int, Transform> & poses,
 		if(jter!=scans.end() && (jter->second.first.cols || jter->second.second.cols))
 		{
 			UASSERT(!iter->second.isNull());
-			cv::Mat hit = util3d::transformLaserScan(jter->second.first, iter->second);
-			cv::Mat noHit = util3d::transformLaserScan(jter->second.second, iter->second);
+			cv::Mat hit = util3d::transformLaserScan(LaserScan::backwardCompatibility(jter->second.first), iter->second).data();
+			cv::Mat noHit = util3d::transformLaserScan(LaserScan::backwardCompatibility(jter->second.second), iter->second).data();
 			pcl::PointXYZ min, max;
 			if(!hit.empty())
 			{
@@ -624,6 +636,7 @@ cv::Mat create2DMap(const std::map<int, Transform> & poses,
 
 		map = cv::Mat::ones((yMax - yMin) / cellSize, (xMax - xMin) / cellSize, CV_8S)*-1;
 		int j=0;
+		float scanMaxRangeSqr = scanMaxRange * scanMaxRange;
 		for(std::map<int, std::pair<cv::Mat, cv::Mat> >::iterator iter = localScans.begin(); iter!=localScans.end(); ++iter)
 		{
 			const Transform & pose = poses.at(iter->first);
@@ -634,15 +647,20 @@ cv::Mat create2DMap(const std::map<int, Transform> & poses,
 				viewpoint = kter->second;
 			}
 			cv::Point2i start(((pose.x()+viewpoint.x)-xMin)/cellSize, ((pose.y()+viewpoint.y)-yMin)/cellSize);
+			cv::Point2f startf(pose.x()+viewpoint.x, pose.y()+viewpoint.y);
 
 			// Set obstacles first
 			for(int i=0; i<iter->second.first.cols; ++i)
 			{
 				const float * ptr = iter->second.first.ptr<float>(0, i);
-				cv::Point2i end((ptr[0]-xMin)/cellSize, (ptr[1]-yMin)/cellSize);
-				if(end!=start)
+				bool ignore = scanMaxRange>cellSize && uNormSquared(ptr[0]+cellSize, ptr[1]+cellSize) > scanMaxRangeSqr;
+				if(!ignore)
 				{
-					map.at<char>(end.y, end.x) = 100; // obstacle
+					cv::Point2i end((ptr[0]+startf.x-xMin)/cellSize, (ptr[1]+startf.y-yMin)/cellSize);
+					if(end!=start)
+					{
+						map.at<char>(end.y, end.x) = 100; // obstacle
+					}
 				}
 			}
 
@@ -650,7 +668,18 @@ cv::Mat create2DMap(const std::map<int, Transform> & poses,
 			for(int i=0; i<iter->second.first.cols; ++i)
 			{
 				const float * ptr = iter->second.first.ptr<float>(0, i);
-				cv::Point2i end((ptr[0]-xMin)/cellSize, (ptr[1]-yMin)/cellSize);
+
+				cv::Vec2f v(ptr[0], ptr[1]);
+				if(scanMaxRange>cellSize)
+				{
+					float n = cv::norm(v);
+					if(n > scanMaxRange+cellSize)
+					{
+						v = (v/n) * scanMaxRange;
+					}
+				}
+
+				cv::Point2i end((v[0]+startf.x-xMin)/cellSize, (v[1]+startf.y-yMin)/cellSize);
 				if(end!=start)
 				{
 					if(localScans.size() > 1 || map.at<char>(end.y, end.x) != 0)
@@ -663,7 +692,18 @@ cv::Mat create2DMap(const std::map<int, Transform> & poses,
 			for(int i=0; i<iter->second.second.cols; ++i)
 			{
 				const float * ptr = iter->second.second.ptr<float>(0, i);
-				cv::Point2i end((ptr[0]-xMin)/cellSize, (ptr[1]-yMin)/cellSize);
+
+				cv::Vec2f v(ptr[0], ptr[1]);
+				if(scanMaxRange>cellSize)
+				{
+					float n = cv::norm(v);
+					if(n > scanMaxRange+cellSize)
+					{
+						v = (v/n) * scanMaxRange;
+					}
+				}
+
+				cv::Point2i end((v[0]+startf.x-xMin)/cellSize, (v[1]+startf.y-yMin)/cellSize);
 				if(end!=start)
 				{
 					if(localScans.size() > 1 || map.at<char>(end.y, end.x) != 0)
@@ -708,10 +748,10 @@ cv::Mat create2DMap(const std::map<int, Transform> & poses,
 						cv::Mat origin(2,1,CV_32F), endFirst(2,1,CV_32F), endLast(2,1,CV_32F);
 						origin.at<float>(0) = pose.x()+viewpoint.x;
 						origin.at<float>(1) = pose.y()+viewpoint.y;
-						endFirst.at<float>(0) = iter->second.first.ptr<float>(0,0)[0];
-						endFirst.at<float>(1) = iter->second.first.ptr<float>(0,0)[1];
-						endLast.at<float>(0) = iter->second.first.ptr<float>(0,iter->second.first.cols-1)[0];
-						endLast.at<float>(1) = iter->second.first.ptr<float>(0,iter->second.first.cols-1)[1];
+						endFirst.at<float>(0) = iter->second.first.ptr<float>(0,0)[0]+origin.at<float>(0);
+						endFirst.at<float>(1) = iter->second.first.ptr<float>(0,0)[1]+origin.at<float>(1);
+						endLast.at<float>(0) = iter->second.first.ptr<float>(0,iter->second.first.cols-1)[0]+origin.at<float>(0);
+						endLast.at<float>(1) = iter->second.first.ptr<float>(0,iter->second.first.cols-1)[1]+origin.at<float>(1);
 						//UWARN("origin = %f %f", origin.at<float>(0), origin.at<float>(1));
 						//UWARN("endFirst = %f %f", endFirst.at<float>(0), endFirst.at<float>(1));
 						//UWARN("endLast = %f %f", endLast.at<float>(0), endLast.at<float>(1));
@@ -845,7 +885,7 @@ void rayTrace(const cv::Point2i & start, const cv::Point2i & end, cv::Mat & grid
 }
 
 //convert to gray scaled map
-cv::Mat convertMap2Image8U(const cv::Mat & map8S)
+cv::Mat convertMap2Image8U(const cv::Mat & map8S, bool pgmFormat)
 {
 	UASSERT(map8S.channels() == 1 && map8S.type() == CV_8S);
 	cv::Mat map8U = cv::Mat(map8S.rows, map8S.cols, CV_8U);
@@ -853,11 +893,11 @@ cv::Mat convertMap2Image8U(const cv::Mat & map8S)
 	{
 		for (int j = 0; j < map8S.cols; ++j)
 		{
-			char v = map8S.at<char>(i, j);
+			char v = pgmFormat?map8S.at<char>((map8S.rows-1)-i, j):map8S.at<char>(i, j);
 			unsigned char gray;
 			if(v == 0)
 			{
-				gray = 178;
+				gray = pgmFormat?254:178;
 			}
 			else if(v == 100)
 			{
@@ -865,16 +905,68 @@ cv::Mat convertMap2Image8U(const cv::Mat & map8S)
 			}
 			else if(v == -2)
 			{
-				gray = 200;
+				gray = pgmFormat?254:200;
 			}
 			else // -1
 			{
-				gray = 89;
+				gray = pgmFormat?205:89;
 			}
 			map8U.at<unsigned char>(i, j) = gray;
 		}
 	}
 	return map8U;
+}
+
+//convert gray scaled image to map
+cv::Mat convertImage8U2Map(const cv::Mat & map8U, bool pgmFormat)
+{
+	UASSERT_MSG(map8U.channels() == 1 && map8U.type() == CV_8U, uFormat("map8U.channels()=%d map8U.type()=%d", map8U.channels(), map8U.type()).c_str());
+	cv::Mat map8S = cv::Mat(map8U.rows, map8U.cols, CV_8S);
+	for (int i = 0; i < map8U.rows; ++i)
+	{
+		for (int j = 0; j < map8U.cols; ++j)
+		{
+			unsigned char v = pgmFormat?map8U.at<char>((map8U.rows-1)-i, j):map8U.at<char>(i, j);
+			char occupancy;
+			if(pgmFormat)
+			{
+				if(v >= 254)
+				{
+					occupancy = 0;
+				}
+				else if(v == 0)
+				{
+					occupancy = 100;
+				}
+				else // 205
+				{
+					occupancy = -1;
+				}
+			}
+			else
+			{
+				if(v == 178)
+				{
+					occupancy = 0;
+				}
+				else if(v == 0)
+				{
+					occupancy = 100;
+				}
+				else if(v == 200)
+				{
+					occupancy = -2;
+				}
+				else // 89
+				{
+					occupancy = -1;
+				}
+			}
+
+			map8S.at<char>(i, j) = occupancy;
+		}
+	}
+	return map8S;
 }
 
 cv::Mat erodeMap(const cv::Mat & map)

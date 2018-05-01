@@ -109,6 +109,7 @@ protected:
 private:
 	bool _incrementalDictionary;
 	bool _incrementalFlann;
+	float _rebalancingFactor;
 	float _nndrRatio;
 	std::string _dictionaryPath; // a pre-computed dictionary (.txt)
 	bool _newWordsComparedTogether;

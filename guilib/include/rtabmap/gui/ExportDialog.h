@@ -25,43 +25,51 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifndef MAPVISIBILITYWIDGET_H_
-#define MAPVISIBILITYWIDGET_H_
+#ifndef RTABMAP_EXPORTDIALOG_H_
+#define RTABMAP_EXPORTDIALOG_H_
 
-#include <QWidget>
-#include <rtabmap/core/Transform.h>
-#include <map>
+#include "rtabmap/gui/RtabmapGuiExp.h" // DLL export/import defines
+
+#include <QDialog>
+#include <QSettings>
+
+class Ui_ExportDialog;
 
 namespace rtabmap {
 
-class MapVisibilityWidget : public QWidget {
-	Q_OBJECT;
+class RTABMAPGUI_EXP ExportDialog : public QDialog
+{
+	Q_OBJECT
+
 public:
-	MapVisibilityWidget(QWidget * parent = 0);
-	virtual ~MapVisibilityWidget();
+	ExportDialog(QWidget * parent = 0);
 
-	void setMap(const std::map<int, Transform> & poses, const std::map<int, bool> & mask);
-	std::map<int, Transform> getVisiblePoses() const;
+	virtual ~ExportDialog();
 
-	void clear();
+	void saveSettings(QSettings & settings, const QString & group) const;
+	void loadSettings(QSettings & settings, const QString & group);
 
-protected:
-	virtual void showEvent(QShowEvent * event);
-
-private slots:
-	void signalVisibility();
-	void selectAll(bool);
-
-private:
-	void updateCheckBoxes();
+	QString outputPath() const;
+	int framesIgnored() const;
+	double targetFramerate() const;
+	int sessionExported() const;
+	bool isRgbExported() const;
+	bool isDepthExported() const;
+	bool isDepth2dExported() const;
+	bool isOdomExported() const;
+	bool isUserDataExported() const;
 
 signals:
-	void visibilityChanged(int id, bool visible);
+	void configChanged();
+
+private slots:
+	void getPath();
+	void restoreDefaults();
 
 private:
-	std::map<int, Transform> _poses;
-	std::map<int, bool> _mask;
+	Ui_ExportDialog * _ui;
 };
 
-} /* namespace rtabmap */
-#endif /* MAPVISIBILITYWIDGET_H_ */
+}
+
+#endif /* EXPORTDIALOG_H_ */

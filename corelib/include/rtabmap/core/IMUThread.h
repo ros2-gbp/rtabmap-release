@@ -25,70 +25,46 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifndef POSTPROCESSINGDIALOG_H_
-#define POSTPROCESSINGDIALOG_H_
+#pragma once
 
-#include <QDialog>
-#include <QtCore/QSettings>
+#include "rtabmap/core/RtabmapExp.h" // DLL export/import defines
 
-#include <rtabmap/core/Optimizer.h>
+#include <rtabmap/core/Transform.h>
+#include <rtabmap/utilite/UThread.h>
+#include <rtabmap/utilite/UEventsSender.h>
+#include <rtabmap/utilite/UTimer.h>
 
-class Ui_PostProcessingDialog;
-class QAbstractButton;
+#include <fstream>
 
-namespace rtabmap {
-
-class PostProcessingDialog : public QDialog
+namespace rtabmap
 {
-	Q_OBJECT
 
+/**
+ * Class IMUThread
+ *
+ */
+class RTABMAP_EXP IMUThread :
+	public UThread,
+	public UEventsSender
+{
 public:
-	PostProcessingDialog(QWidget * parent = 0);
+	IMUThread(int rate, const Transform & localTransform);
+	virtual ~IMUThread();
 
-	virtual ~PostProcessingDialog();
-
-	void saveSettings(QSettings & settings, const QString & group = "") const;
-	void loadSettings(QSettings & settings, const QString & group = "");
-
-	//getters
-	bool isDetectMoreLoopClosures() const;
-	double clusterRadius() const;
-	double clusterAngle() const;
-	int iterations() const;
-	bool isRefineNeighborLinks() const;
-	bool isRefineLoopClosureLinks() const;
-	bool isSBA() const;
-	int sbaIterations() const;
-	double sbaVariance() const;
-	Optimizer::Type sbaType() const;
-
-	//setters
-	void setDetectMoreLoopClosures(bool on);
-	void setClusterRadius(double radius);
-	void setClusterAngle(double angle);
-	void setIterations(int iterations);
-	void setRefineNeighborLinks(bool on);
-	void setRefineLoopClosureLinks(bool on);
-	void setSBA(bool on);
-	void setSBAIterations(int iterations);
-	void setSBAVariance(double variance);
-	void setSBAType(Optimizer::Type type);
-
-signals:
-	void configChanged();
-
-public slots:
-	void restoreDefaults();
-
-private slots:
-	void updateVisibility();
-	void updateButtonBox();
-
+	bool init(const std::string & path);
+	void setRate(int rate);
 
 private:
-	Ui_PostProcessingDialog * _ui;
+	virtual void mainLoopBegin();
+	virtual void mainLoop();
+
+private:
+	int rate_;
+	Transform localTransform_;
+	std::ifstream imuFile_;
+	UTimer frameRateTimer_;
+	double captureDelay_;
+	double previousStamp_;
 };
 
-}
-
-#endif /* POSTPROCESSINGDIALOG_H_ */
+} // namespace rtabmap

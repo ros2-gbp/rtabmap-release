@@ -35,6 +35,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap/core/GeodeticCoords.h>
 #include <rtabmap/core/Memory.h>
 #include <rtabmap/core/util3d_filtering.h>
+#include <rtabmap/core/util3d_registration.h>
 #include <pcl/search/kdtree.h>
 #include <pcl/common/eigen.h>
 #include <pcl/common/common.h>
@@ -160,10 +161,10 @@ bool exportPoses(
 
 bool importPoses(
 		const std::string & filePath,
-		int format, // 0=Raw, 1=RGBD-SLAM, 2=KITTI, 3=TORO, 4=g2o, 5=NewCollege(t,x,y), 6=Malaga Urban GPS, 7=St Lucia INS, 8=Karlsruhe
+		int format, // 0=Raw, 1=RGBD-SLAM, 2=KITTI, 3=TORO, 4=g2o, 5=NewCollege(t,x,y), 6=Malaga Urban GPS, 7=St Lucia INS, 8=Karlsruhe, 9=EuRoC MAC
 		std::map<int, Transform> & poses,
 		std::multimap<int, Link> * constraints, // optional for formats 3 and 4
-		std::map<int, double> * stamps) // optional for format 1
+		std::map<int, double> * stamps) // optional for format 1 and 9
 {
 	UDEBUG("%s format=%d", filePath.c_str(), format);
 	if(format==3) // TORO
@@ -201,12 +202,50 @@ bool importPoses(
 			std::string str;
 			std::getline(file, str);
 
+			if(str.size() && str.at(str.size()-1) == '\r')
+			{
+				str = str.substr(0, str.size()-1);
+			}
+
 			if(str.empty() || str.at(0) == '#' || str.at(0) == '%')
 			{
 				continue;
 			}
 
-			if(format == 8) // Karlsruhe format
+			if(format == 9) // EuRoC format
+			{
+				std::list<std::string> strList = uSplit(str, ',');
+				if(strList.size() ==  17)
+				{
+					double stamp = uStr2Double(strList.front())/1000000000.0;
+					strList.pop_front();
+					std::vector<std::string> v = uListToVector(strList);
+					Transform pose(uStr2Float(v[0]), uStr2Float(v[1]), uStr2Float(v[2]), // x y z
+							uStr2Float(v[4]), uStr2Float(v[5]), uStr2Float(v[6]), uStr2Float(v[3])); // qw qx qy qz -> qx qy qz qw
+					if(pose.isNull())
+					{
+						UWARN("Null transform read!? line parsed: \"%s\"", str.c_str());
+					}
+					else
+					{
+						if(stamps)
+						{
+							stamps->insert(std::make_pair(id, stamp));
+						}
+						// we need to rotate from IMU frame to world frame
+						Transform t( 0, 0, 1, 0,
+								   0, -1, 0, 0,
+								   1, 0, 0, 0);
+						pose = pose * t;
+						poses.insert(std::make_pair(id, pose));
+					}
+				}
+				else
+				{
+					UERROR("Error parsing \"%s\" with EuRoC MAV format (should have 17 values: stamp x y z qw qx qy qz vx vy vz vr vp vy ax ay az)", str.c_str());
+				}
+			}
+			else if(format == 8) // Karlsruhe format
 			{
 				std::vector<std::string> strList = uListToVector(uSplit(str));
 				if(strList.size() ==  10)
@@ -363,7 +402,7 @@ bool importPoses(
 				}
 				else
 				{
-					UERROR("Error parsing \"%s\" with NewCollege format (should have 3 values: stamp x y)", str.c_str());
+					UERROR("Error parsing \"%s\" with NewCollege format (should have 3 values: stamp x y, found %d)", str.c_str(), (int)strList.size());
 				}
 			}
 			else if(format == 1) // rgbd-slam format
@@ -420,6 +459,105 @@ bool importPoses(
 			++id;
 		}
 		file.close();
+		return true;
+	}
+	return false;
+}
+
+bool exportGPS(
+		const std::string & filePath,
+		const std::map<int, GPS> & gpsValues,
+		unsigned int rgba)
+{
+	UDEBUG("%s", filePath.c_str());
+	std::string tmpPath = filePath;
+
+	std::string ext = UFile::getExtension(filePath);
+
+	if(ext.compare("kml")!=0 && ext.compare("txt")!=0)
+	{
+		UERROR("Only txt and kml formats are supported!");
+		return false;
+	}
+
+	FILE* fout = 0;
+#ifdef _MSC_VER
+	fopen_s(&fout, tmpPath.c_str(), "w");
+#else
+	fout = fopen(tmpPath.c_str(), "w");
+#endif
+	if(fout)
+	{
+		if(ext.compare("kml")==0)
+		{
+			std::string values;
+			for(std::map<int, GPS>::const_iterator iter=gpsValues.begin(); iter!=gpsValues.end(); ++iter)
+			{
+				values += uFormat("%f,%f,%f ", iter->second.longitude(), iter->second.latitude(), iter->second.altitude());
+			}
+
+			// switch argb (Qt format) -> abgr
+			unsigned int abgr = 0xFF << 24 | (rgba & 0xFF) << 16 | (rgba & 0xFF00) | ((rgba >> 16) &0xFF);
+
+			std::string colorHexa = uFormat("%08x", abgr);
+
+			fprintf(fout, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+			fprintf(fout, "<kml xmlns=\"http://www.opengis.net/kml/2.2\">\n");
+			fprintf(fout, "<Document>\n"
+						  "	<name>%s</name>\n", tmpPath.c_str());
+			fprintf(fout, "	<StyleMap id=\"msn_ylw-pushpin\">\n"
+						  "		<Pair>\n"
+						  "			<key>normal</key>\n"
+						  "			<styleUrl>#sn_ylw-pushpin</styleUrl>\n"
+						  "		</Pair>\n"
+						  "		<Pair>\n"
+						  "			<key>highlight</key>\n"
+						  "			<styleUrl>#sh_ylw-pushpin</styleUrl>\n"
+						  "		</Pair>\n"
+						  "	</StyleMap>\n"
+						  "	<Style id=\"sh_ylw-pushpin\">\n"
+						  "		<IconStyle>\n"
+						  "			<scale>1.2</scale>\n"
+						  "		</IconStyle>\n"
+						  "		<LineStyle>\n"
+						  "			<color>%s</color>\n"
+						  "		</LineStyle>\n"
+						  "	</Style>\n"
+						  "	<Style id=\"sn_ylw-pushpin\">\n"
+						  "		<LineStyle>\n"
+						  "			<color>%s</color>\n"
+						  "		</LineStyle>\n"
+						  "	</Style>\n", colorHexa.c_str(), colorHexa.c_str());
+			fprintf(fout, "	<Placemark>\n"
+						  "		<name>%s</name>\n"
+						  "		<styleUrl>#msn_ylw-pushpin</styleUrl>"
+						  "		<LineString>\n"
+						  "			<coordinates>\n"
+						  "				%s\n"
+						  "			</coordinates>\n"
+						  "		</LineString>\n"
+						  "	</Placemark>\n"
+						  "</Document>\n"
+						  "</kml>\n",
+						  uSplit(tmpPath, '.').front().c_str(),
+						  values.c_str());
+		}
+		else
+		{
+			fprintf(fout, "# stamp longitude latitude altitude error bearing\n");
+			for(std::map<int, GPS>::const_iterator iter=gpsValues.begin(); iter!=gpsValues.end(); ++iter)
+			{
+				fprintf(fout, "%f %f %f %f %f %f\n",
+						iter->second.stamp(),
+						iter->second.longitude(),
+						iter->second.latitude(),
+						iter->second.altitude(),
+						iter->second.error(),
+						iter->second.bearing());
+			}
+		}
+
+		fclose(fout);
 		return true;
 	}
 	return false;
@@ -542,6 +680,143 @@ void calcKittiSequenceErrors (
 	r_err *= 180/CV_PI; // Rotation error (deg/m)
 }
 // KITTI evaluation end
+
+Transform calcRMSE (
+		const std::map<int, Transform> & groundTruth,
+		const std::map<int, Transform> & poses,
+		float & translational_rmse,
+		float & translational_mean,
+		float & translational_median,
+		float & translational_std,
+		float & translational_min,
+		float & translational_max,
+		float & rotational_rmse,
+		float & rotational_mean,
+		float & rotational_median,
+		float & rotational_std,
+		float & rotational_min,
+		float & rotational_max)
+{
+
+	translational_rmse = 0.0f;
+	translational_mean = 0.0f;
+	translational_median = 0.0f;
+	translational_std = 0.0f;
+	translational_min = 0.0f;
+	translational_max = 0.0f;
+
+	rotational_rmse = 0.0f;
+	rotational_mean = 0.0f;
+	rotational_median = 0.0f;
+	rotational_std = 0.0f;
+	rotational_min = 0.0f;
+	rotational_max = 0.0f;
+
+	//align with ground truth for more meaningful results
+	pcl::PointCloud<pcl::PointXYZ> cloud1, cloud2;
+	cloud1.resize(poses.size());
+	cloud2.resize(poses.size());
+	int oi = 0;
+	int idFirst = 0;
+	for(std::map<int, Transform>::const_iterator iter=poses.begin(); iter!=poses.end(); ++iter)
+	{
+		std::map<int, Transform>::const_iterator jter=groundTruth.find(iter->first);
+		if(jter != groundTruth.end())
+		{
+			if(oi==0)
+			{
+				idFirst = iter->first;
+			}
+			cloud1[oi] = pcl::PointXYZ(jter->second.x(), jter->second.y(), jter->second.z());
+			cloud2[oi++] = pcl::PointXYZ(iter->second.x(), iter->second.y(), iter->second.z());
+		}
+	}
+
+	Transform t = Transform::getIdentity();
+	if(oi>5)
+	{
+		cloud1.resize(oi);
+		cloud2.resize(oi);
+
+		t = util3d::transformFromXYZCorrespondencesSVD(cloud2, cloud1);
+	}
+	else if(idFirst)
+	{
+		t = groundTruth.at(idFirst) * poses.at(idFirst).inverse();
+	}
+
+	std::vector<float> translationalErrors(poses.size());
+	std::vector<float> rotationalErrors(poses.size());
+	float sumTranslationalErrors = 0.0f;
+	float sumRotationalErrors = 0.0f;
+	float sumSqrdTranslationalErrors = 0.0f;
+	float sumSqrdRotationalErrors = 0.0f;
+	float radToDegree = 180.0f / M_PI;
+	oi=0;
+	for(std::map<int, Transform>::const_iterator iter=poses.begin(); iter!=poses.end(); ++iter)
+	{
+		std::map<int, Transform>::const_iterator jter = groundTruth.find(iter->first);
+		if(jter!=groundTruth.end())
+		{
+			Transform pose = t * iter->second;
+			Eigen::Vector3f xAxis(1,0,0);
+			Eigen::Vector3f vA = pose.toEigen3f().linear()*xAxis;
+			Eigen::Vector3f vB = jter->second.toEigen3f().linear()*xAxis;
+			double a = pcl::getAngle3D(Eigen::Vector4f(vA[0], vA[1], vA[2], 0), Eigen::Vector4f(vB[0], vB[1], vB[2], 0));
+			rotationalErrors[oi] = a*radToDegree;
+			translationalErrors[oi] = pose.getDistance(jter->second);
+
+			sumTranslationalErrors+=translationalErrors[oi];
+			sumSqrdTranslationalErrors+=translationalErrors[oi]*translationalErrors[oi];
+			sumRotationalErrors+=rotationalErrors[oi];
+			sumSqrdRotationalErrors+=rotationalErrors[oi]*rotationalErrors[oi];
+
+			if(oi == 0)
+			{
+				translational_min = translational_max = translationalErrors[oi];
+				rotational_min = rotational_max = rotationalErrors[oi];
+			}
+			else
+			{
+				if(translationalErrors[oi] < translational_min)
+				{
+					translational_min = translationalErrors[oi];
+				}
+				else if(translationalErrors[oi] > translational_max)
+				{
+					translational_max = translationalErrors[oi];
+				}
+
+				if(rotationalErrors[oi] < rotational_min)
+				{
+					rotational_min = rotationalErrors[oi];
+				}
+				else if(rotationalErrors[oi] > rotational_max)
+				{
+					rotational_max = rotationalErrors[oi];
+				}
+			}
+
+			++oi;
+		}
+	}
+	translationalErrors.resize(oi);
+	rotationalErrors.resize(oi);
+	if(oi)
+	{
+		float total = float(oi);
+		translational_rmse = std::sqrt(sumSqrdTranslationalErrors/total);
+		translational_mean = sumTranslationalErrors/total;
+		translational_median = translationalErrors[oi/2];
+		translational_std = std::sqrt(uVariance(translationalErrors, translational_mean));
+
+		rotational_rmse = std::sqrt(sumSqrdRotationalErrors/total);
+		rotational_mean = sumRotationalErrors/total;
+		rotational_median = rotationalErrors[oi/2];
+		rotational_std = std::sqrt(uVariance(rotationalErrors, rotational_mean));
+	}
+	return t;
+}
 
 
 ////////////////////////////////////////////
@@ -674,6 +949,20 @@ std::multimap<int, int>::const_iterator findLink(
 	return links.end();
 }
 
+std::multimap<int, Link> filterDuplicateLinks(
+		const std::multimap<int, Link> & links)
+{
+	std::multimap<int, Link> output;
+	for(std::multimap<int, Link>::const_iterator iter=links.begin(); iter!=links.end(); ++iter)
+	{
+		if(graph::findLink(output, iter->second.from(), iter->second.to(), true) == output.end())
+		{
+			output.insert(*iter);
+		}
+	}
+	return output;
+}
+
 std::multimap<int, Link> filterLinks(
 		const std::multimap<int, Link> & links,
 		Link::Type filteredType)
@@ -789,7 +1078,7 @@ std::map<int, Transform> radiusPosesFiltering(
 
 				std::set<int> cloudIndices;
 				const Transform & currentT = transforms.at(i);
-				Eigen::Vector3f vA = currentT.toEigen3f().rotation()*Eigen::Vector3f(1,0,0);
+				Eigen::Vector3f vA = currentT.toEigen3f().linear()*Eigen::Vector3f(1,0,0);
 				for(unsigned int j=0; j<kIndices.size(); ++j)
 				{
 					if(indicesChecked.find(kIndices[j]) == indicesChecked.end())
@@ -798,7 +1087,7 @@ std::map<int, Transform> radiusPosesFiltering(
 						{
 							const Transform & checkT = transforms.at(kIndices[j]);
 							// same orientation?
-							Eigen::Vector3f vB = checkT.toEigen3f().rotation()*Eigen::Vector3f(1,0,0);
+							Eigen::Vector3f vB = checkT.toEigen3f().linear()*Eigen::Vector3f(1,0,0);
 							double a = pcl::getAngle3D(Eigen::Vector4f(vA[0], vA[1], vA[2], 0), Eigen::Vector4f(vB[0], vB[1], vB[2], 0));
 							if(a <= angle)
 							{
@@ -894,7 +1183,7 @@ std::multimap<int, int> radiusPosesClustering(const std::map<int, Transform> & p
 
 			std::set<int> cloudIndices;
 			const Transform & currentT = transforms.at(i);
-			Eigen::Vector3f vA = currentT.toEigen3f().rotation()*Eigen::Vector3f(1,0,0);
+			Eigen::Vector3f vA = currentT.toEigen3f().linear()*Eigen::Vector3f(1,0,0);
 			for(unsigned int j=0; j<kIndices.size(); ++j)
 			{
 				if((int)i != kIndices[j])
@@ -903,7 +1192,7 @@ std::multimap<int, int> radiusPosesClustering(const std::map<int, Transform> & p
 					{
 						const Transform & checkT = transforms.at(kIndices[j]);
 						// same orientation?
-						Eigen::Vector3f vB = checkT.toEigen3f().rotation()*Eigen::Vector3f(1,0,0);
+						Eigen::Vector3f vB = checkT.toEigen3f().linear()*Eigen::Vector3f(1,0,0);
 						double a = pcl::getAngle3D(Eigen::Vector4f(vA[0], vA[1], vA[2], 0), Eigen::Vector4f(vB[0], vB[1], vB[2], 0));
 						if(a <= angle)
 						{
@@ -1545,7 +1834,7 @@ std::list<std::pair<int, Transform> > computePath(
 					{
 						//Transform nextPose = iter->second;
 						//Eigen::Vector4f v1 = Eigen::Vector4f(nextPose.x()-previousIter->second.x(), nextPose.y()-previousIter->second.y(), nextPose.z()-previousIter->second.z(), 1.0f);
-						//Eigen::Vector4f v2 = nextPose.rotation().toEigen4f()*Eigen::Vector4f(1,0,0,1);
+						//Eigen::Vector4f v2 = nextPose.linear().toEigen4f()*Eigen::Vector4f(1,0,0,1);
 						//float angle = pcl::getAngle3D(v1, v2);
 						//float cost = angle ;
 						//UDEBUG("v1=%f,%f,%f v2=%f,%f,%f a=%f", v1[0], v1[1], v1[2], v2[0], v2[1], v2[2], cost);
@@ -1583,6 +1872,20 @@ int findNearestNode(
 		const rtabmap::Transform & targetPose)
 {
 	int id = 0;
+	std::vector<int> nearestNodes = findNearestNodes(nodes, targetPose, 1);
+	if(nearestNodes.size())
+	{
+		id = nearestNodes[0];
+	}
+	return id;
+}
+
+std::vector<int> findNearestNodes(
+		const std::map<int, rtabmap::Transform> & nodes,
+		const rtabmap::Transform & targetPose,
+		int k)
+{
+	std::vector<int> nearestIds;
 	if(nodes.size() && !targetPose.isNull())
 	{
 		pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
@@ -1600,14 +1903,15 @@ int findNearestNode(
 		std::vector<int> ind;
 		std::vector<float> dist;
 		pcl::PointXYZ pt(targetPose.x(), targetPose.y(), targetPose.z());
-		kdTree->nearestKSearch(pt, 1, ind, dist);
-		if(ind.size() && dist.size() && ind[0] >= 0)
+		kdTree->nearestKSearch(pt, k, ind, dist);
+
+		nearestIds.resize(ind.size());
+		for(unsigned int i=0; i<ind.size(); ++i)
 		{
-			UDEBUG("Nearest node = %d: %f", ids[ind[0]], dist[0]);
-			id = ids[ind[0]];
+			nearestIds[i] = ids[ind[i]];
 		}
 	}
-	return id;
+	return nearestIds;
 }
 
 // return <id, sqrd distance>, excluding query
@@ -1704,7 +2008,7 @@ std::map<int, Transform> getPosesInRadius(
 		pcl::PointXYZ pt(fromT.x(), fromT.y(), fromT.z());
 		kdTree->radiusSearch(pt, radius, ind, sqrdDist, 0);
 
-		Eigen::Vector3f vA = fromT.toEigen3f().rotation()*Eigen::Vector3f(1,0,0);
+		Eigen::Vector3f vA = fromT.toEigen3f().linear()*Eigen::Vector3f(1,0,0);
 
 		for(unsigned int i=0; i<ind.size(); ++i)
 		{
@@ -1714,7 +2018,7 @@ std::map<int, Transform> getPosesInRadius(
 				{
 					const Transform & checkT = nodes.at(ids[ind[i]]);
 					// same orientation?
-					Eigen::Vector3f vB = checkT.toEigen3f().rotation()*Eigen::Vector3f(1,0,0);
+					Eigen::Vector3f vB = checkT.toEigen3f().linear()*Eigen::Vector3f(1,0,0);
 					double a = pcl::getAngle3D(Eigen::Vector4f(vA[0], vA[1], vA[2], 0), Eigen::Vector4f(vB[0], vB[1], vB[2], 0));
 					if(a <= angle)
 					{

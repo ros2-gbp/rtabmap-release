@@ -147,6 +147,7 @@ class RTABMapApp : public UEventsHandler {
   void setRenderingTextureDecimation(int value);
   void setBackgroundColor(float gray);
   int setMappingParameter(const std::string & key, const std::string & value);
+  void setGPS(const rtabmap::GPS & gps);
 
   void resetMapping();
   void save(const std::string & databasePath);
@@ -227,26 +228,29 @@ class RTABMapApp : public UEventsHandler {
   int lastDrawnCloudsCount_;
   float renderingTime_;
   double lastPostRenderEventTime_;
-  long processMemoryUsedBytes;
-  long processGPUMemoryUsedBytes;
+  double lastPoseEventTime_;
   std::map<std::string, float> bufferedStatsData_;
 
   bool visualizingMesh_;
   bool exportedMeshUpdated_;
   pcl::TextureMesh::Ptr optMesh_;
   cv::Mat optTexture_;
+  int optRefId_;
+  rtabmap::Transform * optRefPose_; // App crashes when loading native library if not dynamic
 
   // main_scene_ includes all drawable object for visualizing Tango device's
   // movement and point cloud.
   Scene main_scene_;
 
 	std::list<rtabmap::RtabmapEvent*> rtabmapEvents_;
+	std::list<rtabmap::RtabmapEvent*> visLocalizationEvents_;
 	std::list<rtabmap::OdometryEvent> odomEvents_;
 	std::list<rtabmap::Transform> poseEvents_;
 
 	rtabmap::Transform mapToOdom_;
 
 	boost::mutex rtabmapMutex_;
+	boost::mutex visLocalizationMutex_;
 	boost::mutex meshesMutex_;
 	boost::mutex odomMutex_;
 	boost::mutex poseMutex_;

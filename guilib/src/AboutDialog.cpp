@@ -25,7 +25,7 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#include "AboutDialog.h"
+#include "rtabmap/gui/AboutDialog.h"
 #include "rtabmap/core/Parameters.h"
 #include "rtabmap/core/CameraRGBD.h"
 #include "rtabmap/core/CameraStereo.h"
@@ -73,6 +73,12 @@ AboutDialog::AboutDialog(QWidget * parent) :
 	_ui->label_cputsdf->setText("No");
 	_ui->label_cputsdf_license->setEnabled(false);
 #endif
+#ifdef RTABMAP_OPENCHISEL
+	_ui->label_openchisel->setText("Yes");
+#else
+	_ui->label_openchisel->setText("No");
+#endif
+
 	_ui->label_freenect->setText(CameraFreenect::available()?"Yes":"No");
 	_ui->label_freenect_license->setEnabled(CameraFreenect::available());
 	_ui->label_openni2->setText(CameraOpenNI2::available()?"Yes":"No");
@@ -94,6 +100,14 @@ AboutDialog::AboutDialog(QWidget * parent) :
 	_ui->label_gtsam_license->setEnabled(Optimizer::isAvailable(Optimizer::kTypeGTSAM)?true:false);
 	_ui->label_cvsba->setText(Optimizer::isAvailable(Optimizer::kTypeCVSBA)?"Yes":"No");
 	_ui->label_cvsba_license->setEnabled(Optimizer::isAvailable(Optimizer::kTypeCVSBA)?true:false);
+
+#ifdef RTABMAP_POINTMATCHER
+	_ui->label_libpointmatcher->setText("Yes");
+	_ui->label_libpointmatcher_license->setEnabled(true);
+#else
+	_ui->label_libpointmatcher->setText("No");
+	_ui->label_libpointmatcher_license->setEnabled(false);
+#endif
 
 #ifdef RTABMAP_FOVIS
 	_ui->label_fovis->setText("Yes");

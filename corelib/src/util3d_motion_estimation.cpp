@@ -35,9 +35,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/core/util3d_correspondences.h"
 #include "rtabmap/core/util3d.h"
 
-#if CV_MAJOR_VERSION < 3
+#include <pcl/common/common.h>
+
 #include "opencv/solvepnp.h"
-#endif
 
 namespace rtabmap
 {
@@ -94,8 +94,8 @@ Transform estimateMotion3DTo2D(
 	imagePoints.resize(oi);
 	matches.resize(oi);
 
-	UDEBUG("words3A=%d words2B=%d matches=%d words3B=%d",
-			(int)words3A.size(), (int)words2B.size(), (int)matches.size(), (int)words3B.size());
+	UDEBUG("words3A=%d words2B=%d matches=%d words3B=%d guess=%s",
+			(int)words3A.size(), (int)words2B.size(), (int)matches.size(), (int)words3B.size(), guess.prettyPrint().c_str());
 
 	if((int)matches.size() >= minInliers)
 	{
@@ -141,6 +141,7 @@ Transform estimateMotion3DTo2D(
 			if(covariance && words3B.size())
 			{
 				std::vector<float> errorSqrdDists(inliers.size());
+				std::vector<float> errorSqrdAngles(inliers.size());
 				oi = 0;
 				for(unsigned int i=0; i<inliers.size(); ++i)
 				{
@@ -150,19 +151,30 @@ Transform estimateMotion3DTo2D(
 						const cv::Point3f & objPt = objectPoints[inliers[i]];
 						cv::Point3f newPt = util3d::transformPoint(iter->second, transform);
 						errorSqrdDists[oi] = uNormSquared(objPt.x-newPt.x, objPt.y-newPt.y, objPt.z-newPt.z);
-						//ignore very very far features (stereo)
-						if(errorSqrdDists[oi] < iter->second.x/100.0f)
-						{
-							++oi;
-						}
+
+						Eigen::Vector4f v1(objPt.x - transform.x(), objPt.y - transform.y(), objPt.z - transform.z(), 0);
+						Eigen::Vector4f v2(newPt.x - transform.x(), newPt.y - transform.y(), newPt.z - transform.z(), 0);
+						errorSqrdAngles[oi++] = pcl::getAngle3D(v1, v2);
 					}
 				}
+
 				errorSqrdDists.resize(oi);
+				errorSqrdAngles.resize(oi);
 				if(errorSqrdDists.size())
 				{
 					std::sort(errorSqrdDists.begin(), errorSqrdDists.end());
-					double median_error_sqr = (double)errorSqrdDists[errorSqrdDists.size () >> 1];
-					*covariance *= 2.1981 * median_error_sqr;
+					//divide by 4 instead of 2 to ignore very very far features (stereo)
+					double median_error_sqr = 2.1981 * (double)errorSqrdDists[errorSqrdDists.size () >> 2];
+					UASSERT(uIsFinite(median_error_sqr));
+					(*covariance)(cv::Range(0,3), cv::Range(0,3)) *= median_error_sqr;
+					std::sort(errorSqrdAngles.begin(), errorSqrdAngles.end());
+					median_error_sqr = 2.1981 * (double)errorSqrdAngles[errorSqrdAngles.size () >> 2];
+					UASSERT(uIsFinite(median_error_sqr));
+					(*covariance)(cv::Range(3,6), cv::Range(3,6)) *= median_error_sqr;
+				}
+				else
+				{
+					UWARN("Not enough close points to compute covariance!");
 				}
 			}
 			else if(covariance)
@@ -175,6 +187,7 @@ Transform estimateMotion3DTo2D(
 				{
 					err += uNormSquared(imagePoints.at(inliers[i]).x - imagePointsReproj.at(inliers[i]).x, imagePoints.at(inliers[i]).y - imagePointsReproj.at(inliers[i]).y);
 				}
+				UASSERT(uIsFinite(err));
 				*covariance *= std::sqrt(err/float(inliers.size()));
 			}
 		}
@@ -329,11 +342,10 @@ void solvePnPRansac(
 	{
 		minInliersCount = 4;
 	}
-#if CV_MAJOR_VERSION < 3
-	cv3::solvePnPRansac( //use OpenCV3 version of solvePnPRansac in OpenCV2
-#else
-	cv::solvePnPRansac( // use directly version from OpenCV 3
-#endif
+
+	// Use OpenCV3 version of solvePnPRansac in OpenCV2.
+	// FIXME: we should use this version of solvePnPRansac in newer 3.3.1 too, which seems a lot less stable!?!? Why!?
+	cv3::solvePnPRansac(
 			objectPoints,
 			imagePoints,
 			cameraMatrix,

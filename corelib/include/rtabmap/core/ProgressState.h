@@ -30,6 +30,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <rtabmap/utilite/ULogger.h>
 
+namespace rtabmap {
+
 class ProgressState
 {
 public:
@@ -55,5 +57,6 @@ private:
 	bool canceled_;
 };
 
+}
 
 #endif /* CORELIB_INCLUDE_RTABMAP_CORE_PROGRESSSTATE_H_ */
