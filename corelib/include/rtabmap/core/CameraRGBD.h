@@ -34,6 +34,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/core/CameraModel.h"
 #include "rtabmap/core/Camera.h"
 #include "rtabmap/core/CameraRGB.h"
+#include "rtabmap/core/Version.h"
 
 #include <pcl/pcl_config.h>
 
@@ -64,8 +65,24 @@ class Registration;
 class PacketPipeline;
 }
 
+namespace rs
+{
+	class context;
+	class device;
+	namespace slam {
+	class slam;
+	}
+}
+
 typedef struct _freenect_context freenect_context;
 typedef struct _freenect_device freenect_device;
+
+typedef struct IKinectSensor IKinectSensor;
+typedef struct ICoordinateMapper ICoordinateMapper;
+typedef struct _DepthSpacePoint DepthSpacePoint;
+typedef struct _ColorSpacePoint ColorSpacePoint;
+typedef struct tagRGBQUAD RGBQUAD;
+typedef struct IMultiSourceFrameReader IMultiSourceFrameReader;
 
 namespace rtabmap
 {
@@ -149,9 +166,11 @@ class RTABMAP_EXP CameraOpenNI2 :
 public:
 	static bool available();
 	static bool exposureGainAvailable();
+	enum Type {kTypeColorDepth, kTypeIRDepth, kTypeIR};
 
 public:
 	CameraOpenNI2(const std::string & deviceId = "",
+					Type type = kTypeColorDepth,
 					float imageRate = 0,
 					const Transform & localTransform = Transform::getIdentity());
 	virtual ~CameraOpenNI2();
@@ -165,12 +184,15 @@ public:
 	bool setExposure(int value);
 	bool setGain(int value);
 	bool setMirroring(bool enabled);
-	void setOpenNI2StampsAndIDsUsed(bool used) {_openNI2StampsAndIDsUsed = used;}
+	void setOpenNI2StampsAndIDsUsed(bool used);
+	void setIRDepthShift(int horizontal, int vertical);
 
 protected:
 	virtual SensorData captureImage(CameraInfo * info = 0);
 
 private:
+#ifdef RTABMAP_OPENNI2
+	Type _type;
 	openni::Device * _device;
 	openni::VideoStream * _color;
 	openni::VideoStream * _depth;
@@ -178,6 +200,10 @@ private:
 	float _depthFy;
 	std::string _deviceId;
 	bool _openNI2StampsAndIDsUsed;
+	StereoCameraModel _stereoModel;
+	int _depthHShift;
+	int _depthVShift;
+#endif
 };
 
 
@@ -191,10 +217,12 @@ class RTABMAP_EXP CameraFreenect :
 {
 public:
 	static bool available();
+	enum Type {kTypeColorDepth, kTypeIRDepth};
 
 public:
 	// default local transform z in, x right, y down));
 	CameraFreenect(int deviceId= 0,
+					Type type = kTypeColorDepth,
 					float imageRate=0.0f,
 					const Transform & localTransform = Transform::getIdentity());
 	virtual ~CameraFreenect();
@@ -207,9 +235,13 @@ protected:
 	virtual SensorData captureImage(CameraInfo * info = 0);
 
 private:
+#ifdef RTABMAP_FREENECT
 	int deviceId_;
+	Type type_;
 	freenect_context * ctx_;
 	FreenectDevice * freenectDevice_;
+	StereoCameraModel stereoModel_;
+#endif
 };
 
 /////////////////////////
@@ -234,14 +266,15 @@ public:
 public:
 	// default local transform z in, x right, y down));
 	CameraFreenect2(int deviceId= 0,
-					Type type = kTypeColor2DepthSD,
+					Type type = kTypeDepth2ColorSD,
 					float imageRate=0.0f,
 					const Transform & localTransform = Transform::getIdentity(),
 					float minDepth = 0.3f,
 					float maxDepth = 12.0f,
 					bool bilateralFiltering = true,
 					bool edgeAwareFiltering = true,
-					bool noiseFiltering = true);
+					bool noiseFiltering = true,
+					const std::string & pipelineName = "");
 	virtual ~CameraFreenect2();
 
 	virtual bool init(const std::string & calibrationFolder = ".", const std::string & cameraName = "");
@@ -252,6 +285,7 @@ protected:
 	virtual SensorData captureImage(CameraInfo * info = 0);
 
 private:
+#ifdef RTABMAP_FREENECT2
 	int deviceId_;
 	Type type_;
 	StereoCameraModel stereoModel_;
@@ -264,6 +298,111 @@ private:
 	bool bilateralFiltering_;
 	bool edgeAwareFiltering_;
 	bool noiseFiltering_;
+	std::string pipelineName_;
+#endif
+};
+
+/////////////////////////
+// CameraK4W2
+/////////////////////////
+
+class RTABMAP_EXP CameraK4W2 :
+	public Camera
+{
+public:
+	static bool available();
+
+	enum Type {
+		kTypeColor2DepthSD,
+		kTypeDepth2ColorSD,
+		kTypeDepth2ColorHD
+	};
+
+public:
+	static const int        cDepthWidth = 512;
+	static const int        cDepthHeight = 424;
+	static const int        cColorWidth = 1920;
+	static const int        cColorHeight = 1080;
+
+public:
+	// default local transform z in, x right, y down));
+	CameraK4W2(int deviceId = 0, // not used
+		Type type = kTypeDepth2ColorSD,
+		float imageRate = 0.0f,
+		const Transform & localTransform = Transform::getIdentity());
+	virtual ~CameraK4W2();
+
+	virtual bool init(const std::string & calibrationFolder = ".", const std::string & cameraName = "");
+	virtual bool isCalibrated() const;
+	virtual std::string getSerial() const;
+
+protected:
+	virtual SensorData captureImage(CameraInfo * info = 0);
+
+private:
+	void close();
+
+private:
+#ifdef RTABMAP_K4W2
+	Type type_;
+	IKinectSensor*          pKinectSensor_;
+	ICoordinateMapper*      pCoordinateMapper_;
+	DepthSpacePoint*        pDepthCoordinates_;
+	ColorSpacePoint*        pColorCoordinates_;
+	IMultiSourceFrameReader* pMultiSourceFrameReader_;
+	RGBQUAD * pColorRGBX_;
+	INT_PTR hMSEvent;
+	CameraModel colorCameraModel_;
+#endif
+};
+
+/////////////////////////
+// CameraRealSense
+/////////////////////////
+class slam_event_handler;
+class RTABMAP_EXP CameraRealSense :
+	public Camera
+{
+public:
+	static bool available();
+
+public:
+	// default local transform z in, x right, y down));
+	CameraRealSense(
+		int deviceId = 0,
+		int presetRGB = 0, // 0=best quality, 1=largest image, 2=highest framerate
+		int presetDepth = 0, // 0=best quality, 1=largest image, 2=highest framerate
+		bool computeOdometry = false,
+		float imageRate = 0,
+		const Transform & localTransform = Transform::getIdentity());
+	virtual ~CameraRealSense();
+
+	virtual bool init(const std::string & calibrationFolder = ".", const std::string & cameraName = "");
+	virtual bool isCalibrated() const;
+	virtual std::string getSerial() const;
+	virtual bool odomProvided() const;
+
+protected:
+	virtual SensorData captureImage(CameraInfo * info = 0);
+
+private:
+#ifdef RTABMAP_REALSENSE
+	rs::context * ctx_;
+	rs::device * dev_;
+	int deviceId_;
+	int presetRGB_;
+	int presetDepth_;
+	bool computeOdometry_;
+
+	int motionSeq_[2];
+	rs::slam::slam * slam_;
+	UMutex slamLock_;
+
+	std::map<double, std::pair<cv::Mat, cv::Mat> > bufferedFrames_;
+	std::pair<cv::Mat, cv::Mat> lastSyncFrames_;
+	UMutex dataMutex_;
+	USemaphore dataReady_;
+#endif
 };
 
 
@@ -289,6 +428,8 @@ public:
 	virtual bool init(const std::string & calibrationFolder = ".", const std::string & cameraName = "");
 	virtual bool isCalibrated() const;
 	virtual std::string getSerial() const;
+
+	virtual void setStartIndex(int index) {CameraImages::setStartIndex(index);cameraDepth_.setStartIndex(index);} // negative means last
 
 protected:
 	virtual SensorData captureImage(CameraInfo * info = 0);

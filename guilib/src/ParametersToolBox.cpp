@@ -32,7 +32,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap/core/Parameters.h>
 #include <rtabmap/core/Optimizer.h>
 
-#include "ParametersToolBox.h"
+#include "rtabmap/gui/ParametersToolBox.h"
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QLineEdit>
@@ -47,6 +47,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <stdio.h>
 #include <rtabmap/utilite/ULogger.h>
 #include <rtabmap/utilite/UConversion.h>
+#include <rtabmap/utilite/UStl.h>
 #include <opencv2/opencv_modules.hpp>
 
 namespace rtabmap {
@@ -54,8 +55,7 @@ namespace rtabmap {
 ParametersToolBox::ParametersToolBox(QWidget *parent) :
 	QWidget(parent),
 	comboBox_(new QComboBox(this)),
-	stackedWidget_(new QStackedWidget(this)),
-	parameters_(Parameters::getDefaultParameters())
+	stackedWidget_(new QStackedWidget(this))
 {
 	QVBoxLayout * layout = new QVBoxLayout(this);
 	this->setLayout(layout);
@@ -86,7 +86,7 @@ QStringList ParametersToolBox::resetPage(int index)
 		QString key = children.at(j)->objectName();
 		// ignore working memory
 		QString group = key.split("/").first();
-		if(!ignoredGroups_.contains(group) && parameters_.find(key.toStdString())!=parameters_.end())
+		if(parameters_.find(key.toStdString())!=parameters_.end())
 		{
 			UASSERT_MSG(parameters_.find(key.toStdString()) != parameters_.end(), uFormat("key=%s", key.toStdString().c_str()).c_str());
 			std::string value = Parameters::getDefaultParameters().at(key.toStdString());
@@ -202,11 +202,10 @@ void ParametersToolBox::updateParametersVisibility()
 	}*/
 }
 
-void ParametersToolBox::setupUi(const QSet<QString> & ignoredGroups)
+void ParametersToolBox::setupUi(const ParametersMap & parameters)
 {
-	ignoredGroups_ = ignoredGroups;
+	parameters_ = parameters;
 	QWidget * currentItem = 0;
-	const ParametersMap & parameters = Parameters::getDefaultParameters();
 	QStringList groups;
 	for(ParametersMap::const_iterator iter=parameters.begin();
 			iter!=parameters.end();
@@ -214,28 +213,26 @@ void ParametersToolBox::setupUi(const QSet<QString> & ignoredGroups)
 	{
 		QStringList splitted = QString::fromStdString(iter->first).split('/');
 		QString group = splitted.first();
-		if(!ignoredGroups_.contains(group))
-		{
-			QString name = splitted.last();
-			if(currentItem == 0 || currentItem->objectName().compare(group) != 0)
-			{
-				groups.push_back(group);
-				QScrollArea * area = new QScrollArea(this);
-				stackedWidget_->addWidget(area);
-				currentItem = new QWidget();
-				currentItem->setObjectName(group);
-				QVBoxLayout * layout = new QVBoxLayout(currentItem);
-				layout->setSizeConstraint(QLayout::SetMinimumSize);
-				layout->setContentsMargins(0,0,0,0);
-				layout->setSpacing(0);
-				area->setWidget(currentItem);
 
-				addParameter(layout, iter->first, iter->second);
-			}
-			else
-			{
-				addParameter((QVBoxLayout*)currentItem->layout(), iter->first, iter->second);
-			}
+		QString name = splitted.last();
+		if(currentItem == 0 || currentItem->objectName().compare(group) != 0)
+		{
+			groups.push_back(group);
+			QScrollArea * area = new QScrollArea(this);
+			stackedWidget_->addWidget(area);
+			currentItem = new QWidget();
+			currentItem->setObjectName(group);
+			QVBoxLayout * layout = new QVBoxLayout(currentItem);
+			layout->setSizeConstraint(QLayout::SetMinimumSize);
+			layout->setContentsMargins(0,0,0,0);
+			layout->setSpacing(0);
+			area->setWidget(currentItem);
+
+			addParameter(layout, iter->first, iter->second);
+		}
+		else
+		{
+			addParameter((QVBoxLayout*)currentItem->layout(), iter->first, iter->second);
 		}
 	}
 	comboBox_->addItems(groups);
@@ -247,51 +244,44 @@ void ParametersToolBox::setupUi(const QSet<QString> & ignoredGroups)
 void ParametersToolBox::updateParameter(const std::string & key, const std::string & value)
 {
 	QString group = QString::fromStdString(key).split("/").first();
-	if(!ignoredGroups_.contains(group))
+	if(parameters_.find(key) != parameters_.end())
 	{
-		if(parameters_.find(key) == parameters_.end())
+		parameters_.at(key) = value;
+		QWidget * widget = this->findChild<QWidget*>(key.c_str());
+		QString type = QString::fromStdString(Parameters::getType(key));
+		if(type.compare("string") == 0)
 		{
-			UWARN("key=\"%s\" doesn't exist", key.c_str());
+			QString valueQt = QString::fromStdString(value);
+			if(valueQt.contains(';'))
+			{
+				// It's a list, just change the index
+				QStringList splitted = valueQt.split(':');
+				((QComboBox*)widget)->setCurrentIndex(splitted.first().toInt());
+			}
+			else
+			{
+				((QLineEdit*)widget)->setText(valueQt);
+			}
 		}
-		else
+		else if(type.compare("int") == 0)
 		{
-			parameters_.at(key) = value;
-			QWidget * widget = this->findChild<QWidget*>(key.c_str());
-			QString type = QString::fromStdString(Parameters::getType(key));
-			if(type.compare("string") == 0)
-			{
-				QString valueQt = QString::fromStdString(value);
-				if(valueQt.contains(';'))
-				{
-					// It's a list, just change the index
-					QStringList splitted = valueQt.split(':');
-					((QComboBox*)widget)->setCurrentIndex(splitted.first().toInt());
-				}
-				else
-				{
-					((QLineEdit*)widget)->setText(valueQt);
-				}
-			}
-			else if(type.compare("int") == 0)
-			{
-				((QSpinBox*)widget)->setValue(uStr2Int(value));
-			}
-			else if(type.compare("uint") == 0)
-			{
-				((QSpinBox*)widget)->setValue(uStr2Int(value));
-			}
-			else if(type.compare("double") == 0)
-			{
-				((QDoubleSpinBox*)widget)->setValue(uStr2Double(value));
-			}
-			else if(type.compare("float") == 0)
-			{
-				((QDoubleSpinBox*)widget)->setValue(uStr2Float(value));
-			}
-			else if(type.compare("bool") == 0)
-			{
-				((QCheckBox*)widget)->setChecked(uStr2Bool(value));
-			}
+			((QSpinBox*)widget)->setValue(uStr2Int(value));
+		}
+		else if(type.compare("uint") == 0)
+		{
+			((QSpinBox*)widget)->setValue(uStr2Int(value));
+		}
+		else if(type.compare("double") == 0)
+		{
+			((QDoubleSpinBox*)widget)->setValue(uStr2Double(value));
+		}
+		else if(type.compare("float") == 0)
+		{
+			((QDoubleSpinBox*)widget)->setValue(uStr2Float(value));
+		}
+		else if(type.compare("bool") == 0)
+		{
+			((QCheckBox*)widget)->setChecked(uStr2Bool(value));
 		}
 	}
 }
@@ -357,15 +347,47 @@ void ParametersToolBox::addParameter(QVBoxLayout * layout,
 		const double & value)
 {
 	QDoubleSpinBox * widget = new QDoubleSpinBox(this);
+	int decimals = 0;
+	int decimalValue = 0;
+
+	QString str = Parameters::getDefaultParameters().at(key.toStdString()).c_str();
+	if(!str.isEmpty())
+	{
+		str.replace(',', '.');
+		QStringList items = str.split('.');
+		if(items.size() == 2)
+		{
+			decimals = items.back().length();
+			decimalValue = items.back().toInt();
+		}
+	}
+
 	double def = uStr2Double(Parameters::getDefaultParameters().at(key.toStdString()));
-	if(def<0.01)
+	if(def<0.001 || (decimals >= 4 && decimalValue>0))
+	{
+		widget->setDecimals(5);
+		widget->setSingleStep(0.0001);
+	}
+	else if(def<0.01 || (decimals >= 3 && decimalValue>0))
 	{
 		widget->setDecimals(4);
+		widget->setSingleStep(0.001);
 	}
-	else if(def<0.1)
+	else if(def<0.1 || (decimals >= 2 && decimalValue>0))
 	{
 		widget->setDecimals(3);
+		widget->setSingleStep(0.01);
 	}
+	else if(def<1.0 || (decimals >= 1 && decimalValue>0))
+	{
+		widget->setDecimals(2);
+		widget->setSingleStep(0.1);
+	}
+	else
+	{
+		widget->setDecimals(1);
+	}
+
 
 	if(def>0.0)
 	{
@@ -380,6 +402,15 @@ void ParametersToolBox::addParameter(QVBoxLayout * layout,
 		widget->setMinimum(def*1000000.0);
 		widget->setMaximum(0.0);
 	}
+
+	// set minimum for selected parameters
+	if(key.compare(Parameters::kGridMinGroundHeight().c_str()) == 0 ||
+		key.compare(Parameters::kGridMaxGroundHeight().c_str()) == 0 ||
+		key.compare(Parameters::kGridMaxObstacleHeight().c_str()) == 0)
+	{
+		widget->setMinimum(-1000000.0);
+	}
+
 	widget->setValue(value);
 	widget->setObjectName(key);
 	connect(widget, SIGNAL(editingFinished()), this, SLOT(changeParameter()));
@@ -488,10 +519,6 @@ void ParametersToolBox::addParameter(QVBoxLayout * layout, const QString & key, 
 	QHBoxLayout * hLayout = new QHBoxLayout();
 	layout->insertLayout(layout->count()-1, hLayout);
 	QString tmp = key.split('/').last();
-	if(tmp.at(0).isDigit())
-	{
-		tmp.remove(0,1);
-	}
 	QLabel * label = new QLabel(tmp, this);
 	label->setObjectName(key+"/label");
 	label->setToolTip(QString("<FONT>%1</FONT>").arg(Parameters::getDescription(key.toStdString()).c_str()));

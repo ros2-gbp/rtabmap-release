@@ -40,7 +40,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/core/Parameters.h"
 #include "rtabmap/core/OdometryEvent.h"
 
-#include <stack>
+#include <queue>
 
 class UTimer;
 
@@ -66,7 +66,6 @@ public:
 		kStateCleanDataBuffer,
 		kStatePublishingMap,
 		kStateTriggeringMap,
-		kStateAddingUserData,
 		kStateSettingGoal,
 		kStateCancellingGoal,
 		kStateLabelling
@@ -82,11 +81,21 @@ public:
 	void setDataBufferSize(unsigned int bufferSize);
 	void createIntermediateNodes(bool enabled);
 
-	// this will delete rtabmap object if set
-	void close(bool databaseSaved);
+	float getDetectorRate() const {return _rate;}
+	unsigned int getDataBufferSize() const {return _dataBufferMaxSize;}
+	bool getCreateIntermediateNodes() const {return _createIntermediateNodes;}
+
+	/**
+	 * Close rtabmap. This will delete rtabmap object if set.
+	 * @param databaseSaved true=database saved, false=database discarded.
+	 * @param databasePath output database file name, ignored if
+	 *                     Db/Sqlite3InMemory=false (opened database is
+	 *                     then overwritten).
+	 */
+	void close(bool databaseSaved, const std::string & databasePath = "");
 
 protected:
-	virtual void handleEvent(UEvent * anEvent);
+	virtual bool handleEvent(UEvent * anEvent);
 
 private:
 	virtual void mainLoopBegin();
@@ -100,10 +109,11 @@ private:
 
 private:
 	UMutex _stateMutex;
-	std::stack<State> _state;
-	std::stack<ParametersMap> _stateParam;
+	std::queue<State> _state;
+	std::queue<ParametersMap> _stateParam;
 
 	std::list<OdometryEvent> _dataBuffer;
+	std::list<double> _newMapEvents;
 	UMutex _dataMutex;
 	USemaphore _dataAdded;
 	unsigned int _dataBufferMaxSize;
@@ -115,8 +125,7 @@ private:
 	Rtabmap * _rtabmap;
 	bool _paused;
 	Transform lastPose_;
-	double _rotVariance;
-	double _transVariance;
+	cv::Mat covariance_;
 
 	cv::Mat _userData;
 	UMutex _userDataMutex;

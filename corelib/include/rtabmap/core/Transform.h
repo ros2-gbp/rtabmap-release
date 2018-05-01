@@ -56,6 +56,8 @@ public:
 	// x,y, theta
 	Transform(float x, float y, float theta);
 
+	Transform clone() const;
+
 	float r11() const {return data()[0];}
 	float r12() const {return data()[1];}
 	float r13() const {return data()[2];}
@@ -106,11 +108,13 @@ public:
 	void getTranslationAndEulerAngles(float & x, float & y, float & z, float & roll, float & pitch, float & yaw) const;
 	void getEulerAngles(float & roll, float & pitch, float & yaw) const;
 	void getTranslation(float & x, float & y, float & z) const;
+	float getAngle(float x=1.0f, float y=0.0f, float z=0.0f) const;
 	float getNorm() const;
 	float getNormSquared() const;
 	float getDistance(const Transform & t) const;
 	float getDistanceSquared(const Transform & t) const;
 	Transform interpolate(float t, const Transform & other) const;
+	void normalizeRotation();
 	std::string prettyPrint() const;
 
 	Transform operator*(const Transform & t) const;
