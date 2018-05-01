@@ -34,6 +34,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/core/SensorData.h"
 #include "rtabmap/core/Statistics.h"
 #include "rtabmap/core/Link.h"
+#include "rtabmap/core/ProgressState.h"
 
 #include <opencv2/core/core.hpp>
 #include <list>
@@ -58,16 +59,44 @@ public:
 	Rtabmap();
 	virtual ~Rtabmap();
 
-	bool process(const cv::Mat & image, int id=0); // for convenience, an id is automatically generated if id=0
+	/**
+	 * @brief Main loop of rtabmap.
+	 * @param data Sensor data to process.
+	 * @param odomPose Odometry pose, should be non-null for RGB-D SLAM mode.
+	 * @param covariance Odometry covariance.
+	 * @param externalStats External statistics to be saved in the database for convenience
+	 * @return true if data has been added to map.
+	 */
 	bool process(
 			const SensorData & data,
-			const Transform & odomPose,
-			const cv::Mat & covariance = cv::Mat::eye(6,6,CV_64FC1)); // for convenience
+			Transform odomPose,
+			const cv::Mat & odomCovariance = cv::Mat::eye(6,6,CV_64FC1),
+			const std::vector<float> & odomVelocity = std::vector<float>(),
+			const std::map<std::string, float> & externalStats = std::map<std::string, float>());
+	// for convenience
+	bool process(
+			const SensorData & data,
+			Transform odomPose,
+			float odomLinearVariance,
+			float odomAngularVariance,
+			const std::vector<float> & odomVelocity = std::vector<float>(),
+			const std::map<std::string, float> & externalStats = std::map<std::string, float>());
+	// for convenience, loop closure detection only
+	bool process(
+			const cv::Mat & image,
+			int id=0, const std::map<std::string, float> & externalStats = std::map<std::string, float>());
 
 	void init(const ParametersMap & parameters, const std::string & databasePath = "");
 	void init(const std::string & configFile = "", const std::string & databasePath = "");
 
-	void close(bool databaseSaved = true);
+	/**
+	 * Close rtabmap. This will delete rtabmap object if set.
+	 * @param databaseSaved true=database saved, false=database discarded.
+	 * @param databasePath output database file name, ignored if
+	 *                     Db/Sqlite3InMemory=false (opened database is
+	 *                     then overwritten).
+	 */
+	void close(bool databaseSaved = true, const std::string & ouputDatabasePath = "");
 
 	const std::string & getWorkingDir() const {return _wDir;}
 	bool isRGBDMode() const { return _rgbdSlamMode; }
@@ -89,6 +118,7 @@ public:
 	const Statistics & getStatistics() const;
 	//bool getMetricData(int locationId, cv::Mat & rgb, cv::Mat & depth, float & depthConstant, Transform & pose, Transform & localTransform) const;
 	const std::map<int, Transform> & getLocalOptimizedPoses() const {return _optimizedPoses;}
+	const std::multimap<int, Link> & getLocalConstraints() const {return _constraints;}
 	Transform getPose(int locationId) const;
 	Transform getMapCorrection() const {return _mapCorrection;}
 	const Memory * getMemory() const {return _memory;}
@@ -99,8 +129,16 @@ public:
 	float getTimeThreshold() const {return _maxTimeAllowed;} // in ms
 	void setTimeThreshold(float maxTimeAllowed); // in ms
 
+	void setInitialPose(const Transform & initialPose);
 	int triggerNewMap();
 	bool labelLocation(int id, const std::string & label);
+	/**
+	 * Set user data. Detect automatically if raw or compressed. If raw, the data is
+	 * compressed too. A matrix of type CV_8UC1 with 1 row is considered as compressed.
+	 * If you have one dimension unsigned 8 bits raw data, make sure to transpose it
+	 * (to have multiple rows instead of multiple columns) in order to be detected as
+	 * not compressed.
+	 */
 	bool setUserData(int id, const cv::Mat & data);
 	void generateDOTGraph(const std::string & path, int id=0, int margin=5);
 	void exportPoses(
@@ -127,7 +165,8 @@ public:
 			bool optimized,
 			bool global,
 			std::map<int, Signature> * signatures = 0);
-	int detectMoreLoopClosures(float clusterRadius = 0.5f, float clusterAngle = M_PI/6.0f, int iterations = 1);
+	int detectMoreLoopClosures(float clusterRadius = 0.5f, float clusterAngle = M_PI/6.0f, int iterations = 1, const ProgressState * state = 0);
+	int refineLinks();
 
 	int getPathStatus() const {return _pathStatus;} // -1=failed 0=idle/executing 1=success
 	void clearPath(int status); // -1=failed 0=idle/executing 1=success
@@ -142,7 +181,7 @@ public:
 	const Transform & getPathTransformToGoal() const {return _pathTransformToGoal;}
 
 	std::map<int, Transform> getForwardWMPoses(int fromId, int maxNearestNeighbors, float radius, int maxDiffID) const;
-	std::list<std::map<int, Transform> > getPaths(std::map<int, Transform> poses) const;
+	std::map<int, std::map<int, Transform> > getPaths(std::map<int, Transform> poses, const Transform & target, int maxGraphDepth = 0) const;
 	void adjustLikelihood(std::map<int, float> & likelihood) const;
 	std::pair<int, float> selectHypothesis(const std::map<int, float> & posterior,
 											const std::map<int, float> & likelihood) const;
@@ -174,10 +213,14 @@ private:
 	bool _publishLastSignatureData;
 	bool _publishPdf;
 	bool _publishLikelihood;
+	bool _publishRAMUsage;
+	bool _computeRMSE;
+	bool _saveWMState;
 	float _maxTimeAllowed; // in ms
 	unsigned int _maxMemoryAllowed; // signatures count in WM
 	float _loopThr;
 	float _loopRatio;
+	bool _verifyLoopClosureHypothesis;
 	unsigned int _maxRetrieved;
 	unsigned int _maxLocalRetrieved;
 	bool _rawDataKept;
@@ -187,6 +230,8 @@ private:
 	bool _rgbdSlamMode;
 	float _rgbdLinearUpdate;
 	float _rgbdAngularUpdate;
+	float _rgbdLinearSpeedUpdate;
+	float _rgbdAngularSpeedUpdate;
 	float _newMapOdomChangeDistance;
 	bool _neighborLinkRefining;
 	bool _proximityByTime;
@@ -195,6 +240,8 @@ private:
 	float _localRadius;
 	float _localImmunizationRatio;
 	int _proximityMaxGraphDepth;
+	int _proximityMaxPaths;
+	int _proximityMaxNeighbors;
 	float _proximityFilteringRadius;
 	bool _proximityRawPosesUsed;
 	float _proximityAngle;
@@ -207,6 +254,7 @@ private:
 	int _pathStuckIterations;
 	float _pathLinearVelocity;
 	float _pathAngularVelocity;
+	bool _savedLocalizationIgnored;
 
 	std::pair<int, float> _loopClosureHypothesis;
 	std::pair<int, float> _highestHypothesis;
@@ -235,6 +283,7 @@ private:
 	std::map<int, Transform> _optimizedPoses;
 	std::multimap<int, Link> _constraints;
 	Transform _mapCorrection;
+	Transform _mapCorrectionBackup; // used in localization mode when odom is lost
 	Transform _lastLocalizationPose; // Corrected odometry pose. In mapping mode, this corresponds to last pose return by getLocalOptimizedPoses().
 	int _lastLocalizationNodeId; // for localization mode
 
@@ -250,6 +299,5 @@ private:
 
 };
 
-#endif /* RTABMAP_H_ */
-
 } // namespace rtabmap
+#endif /* RTABMAP_H_ */

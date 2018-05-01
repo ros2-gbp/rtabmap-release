@@ -191,6 +191,7 @@ int main (int argc, char * argv[])
 	float maxDepth = 4.0f;
 	float voxelSize = rtabmap::Parameters::defaultIcpVoxelSize();
 	int normalsK = 0;
+	float normalsRadius = 0.0f;
 	if(regStrategy == 1 || regStrategy == 2)
 	{
 		// icp requires scans
@@ -203,8 +204,10 @@ int main (int argc, char * argv[])
 		rtabmap::Parameters::parse(parameters, rtabmap::Parameters::kIcpPointToPlane(), pointToPlane);
 		if(pointToPlane)
 		{
-			normalsK = rtabmap::Parameters::defaultIcpPointToPlaneNormalNeighbors();
-			rtabmap::Parameters::parse(parameters, rtabmap::Parameters::kIcpPointToPlaneNormalNeighbors(), normalsK);
+			normalsK = rtabmap::Parameters::defaultIcpPointToPlaneK();
+			rtabmap::Parameters::parse(parameters, rtabmap::Parameters::kIcpPointToPlaneK(), normalsK);
+			normalsRadius = rtabmap::Parameters::defaultIcpPointToPlaneRadius();
+			rtabmap::Parameters::parse(parameters, rtabmap::Parameters::kIcpPointToPlaneRadius(), normalsRadius);
 		}
 
 		uInsert(parameters, rtabmap::ParametersPair(rtabmap::Parameters::kIcpDownsamplingStep(), "1"));
@@ -241,7 +244,7 @@ int main (int argc, char * argv[])
 			UERROR("Not built with OpenNI2 support...");
 			exit(-1);
 		}
-		camera = new rtabmap::CameraOpenNI2("", rate, t);
+		camera = new rtabmap::CameraOpenNI2("", rtabmap::CameraOpenNI2::kTypeColorDepth, rate, t);
 	}
 	else if(driver == 2)
 	{
@@ -250,7 +253,7 @@ int main (int argc, char * argv[])
 			UERROR("Not built with Freenect support...");
 			exit(-1);
 		}
-		camera = new rtabmap::CameraFreenect(0, rate, t);
+		camera = new rtabmap::CameraFreenect(0, rtabmap::CameraFreenect::kTypeColorDepth, rate, t);
 	}
 	else if(driver == 3)
 	{
@@ -310,7 +313,7 @@ int main (int argc, char * argv[])
 		{
 			rtabmap::CameraThread cameraThread(camera, parameters);
 
-			cameraThread.setScanFromDepth(icp, decimation<1?1:decimation, maxDepth, voxelSize, normalsK);
+			cameraThread.setScanFromDepth(icp, decimation<1?1:decimation, maxDepth, voxelSize, normalsK, normalsRadius);
 
 			odomThread.start();
 			cameraThread.start();

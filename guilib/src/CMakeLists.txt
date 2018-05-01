@@ -5,7 +5,7 @@ SET(headers_ui
 	../include/${PROJECT_PREFIX}/gui/MainWindow.h
 	../include/${PROJECT_PREFIX}/gui/PreferencesDialog.h
 	../include/${PROJECT_PREFIX}/gui/DatabaseViewer.h
-	./AboutDialog.h
+	../include/${PROJECT_PREFIX}/gui/AboutDialog.h
 	../include/${PROJECT_PREFIX}/gui/ConsoleWidget.h
 	../include/${PROJECT_PREFIX}/gui/ImageView.h
 	../include/${PROJECT_PREFIX}/gui/PdfPlot.h
@@ -19,14 +19,19 @@ SET(headers_ui
 	../include/${PROJECT_PREFIX}/gui/DataRecorder.h
 	../include/${PROJECT_PREFIX}/gui/CameraViewer.h
 	../include/${PROJECT_PREFIX}/gui/CalibrationDialog.h
-	./ExportDialog.h
-	./PostProcessingDialog.h
-	./ExportCloudsDialog.h
-	./ExportScansDialog.h
-	./MapVisibilityWidget.h
+	../include/${PROJECT_PREFIX}/gui/ExportDialog.h
+	../include/${PROJECT_PREFIX}/gui/PostProcessingDialog.h
+	../include/${PROJECT_PREFIX}/gui/ExportCloudsDialog.h
+	../include/${PROJECT_PREFIX}/gui/ExportBundlerDialog.h
+	../include/${PROJECT_PREFIX}/gui/MapVisibilityWidget.h
 	../include/${PROJECT_PREFIX}/gui/GraphViewer.h
-	./CreateSimpleCalibrationDialog.h
-	./ParametersToolBox.h
+	../include/${PROJECT_PREFIX}/gui/CreateSimpleCalibrationDialog.h
+	../include/${PROJECT_PREFIX}/gui/ParametersToolBox.h
+	../include/${PROJECT_PREFIX}/gui/DepthCalibrationDialog.h
+	./3rdParty/QMultiComboBox.h
+	../include/${PROJECT_PREFIX}/gui/TexturingState.h
+	../include/${PROJECT_PREFIX}/gui/RecoveryState.h
+	../include/${PROJECT_PREFIX}/gui/EditDepthArea.h
 )
 
 SET(uis
@@ -39,9 +44,10 @@ SET(uis
     ./ui/exportDialog.ui
     ./ui/postProcessingDialog.ui
     ./ui/exportCloudsDialog.ui
-    ./ui/exportScansDialog.ui
     ./ui/calibrationDialog.ui
     ./ui/createSimpleCalibrationDialog.ui
+    ./ui/depthCalibrationDialog.ui
+    ./ui/exportBundlerDialog.ui
 )
 
 SET(qrc 
@@ -84,17 +90,30 @@ SET(SRC_FILES
 	./CameraViewer.cpp
 	./CalibrationDialog.cpp
 	./ExportDialog.cpp
+	./ExportBundlerDialog.cpp
 	./PostProcessingDialog.cpp
 	./ExportCloudsDialog.cpp
-	./ExportScansDialog.cpp
 	./MapVisibilityWidget.cpp
 	./GraphViewer.cpp
+	./EditDepthArea.cpp
 	./CreateSimpleCalibrationDialog.cpp
 	./ParametersToolBox.cpp
+	./DepthCalibrationDialog.cpp
+	./3rdParty/QMultiComboBox.cpp
+	./opencv/vtkImageMatSource.cpp
+	
 	${moc_srcs} 
 	${moc_uis} 
 	${srcs_qrc}
 )
+
+# to get includes in visual studio
+IF(MSVC)
+    FILE(GLOB HEADERS
+        ../include/${PROJECT_PREFIX}/gui/*.h
+    )
+    SET(SRC_FILES ${SRC_FILES} ${HEADERS})
+ENDIF(MSVC)
 
 SET(INCLUDE_DIRS
 	${PROJECT_SOURCE_DIR}/corelib/include
@@ -127,6 +146,28 @@ IF(OCTOMAP_FOUND)
 	)
 ENDIF(OCTOMAP_FOUND)
 
+IF(CPUTSDF_FOUND)
+	SET(INCLUDE_DIRS
+		${INCLUDE_DIRS}
+		${CPUTSDF_INCLUDE_DIRS}
+	)
+	SET(LIBRARIES
+		${LIBRARIES}
+		${CPUTSDF_LIBRARIES}
+	)
+ENDIF(CPUTSDF_FOUND)
+
+IF(open_chisel_FOUND)
+	SET(INCLUDE_DIRS
+		${INCLUDE_DIRS}
+		${open_chisel_INCLUDE_DIRS}
+	)
+	SET(LIBRARIES
+		${LIBRARIES}
+		${open_chisel_LIBRARIES}
+	)
+ENDIF(open_chisel_FOUND)
+
 IF(VTK_USE_QVTK)
 	SET(INCLUDE_DIRS ${INCLUDE_DIRS} ${QVTK_INCLUDE_DIR})
 	SET(LIBRARIES ${LIBRARIES} ${QVTK_LIBRARY})
@@ -143,7 +184,11 @@ ADD_LIBRARY(rtabmap_gui ${SRC_FILES})
 
 TARGET_LINK_LIBRARIES(rtabmap_gui rtabmap_core rtabmap_utilite ${LIBRARIES})
 IF(Qt5_FOUND)
-    QT5_USE_MODULES(rtabmap_gui Widgets Core Gui Svg PrintSupport)
+    IF(Qt5Svg_FOUND)
+        QT5_USE_MODULES(rtabmap_gui Widgets Core Gui Svg PrintSupport)
+    ELSE()
+        QT5_USE_MODULES(rtabmap_gui Widgets Core Gui PrintSupport)
+    ENDIF()
 ENDIF(Qt5_FOUND)
 
 SET_TARGET_PROPERTIES(

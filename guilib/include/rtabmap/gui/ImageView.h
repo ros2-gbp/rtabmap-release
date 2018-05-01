@@ -25,8 +25,8 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifndef IMAGEVIEW_H_
-#define IMAGEVIEW_H_
+#ifndef RTABMAP_IMAGEVIEW_H_
+#define RTABMAP_IMAGEVIEW_H_
 
 #include "rtabmap/gui/RtabmapGuiExp.h" // DLL export/import defines
 
@@ -61,8 +61,10 @@ public:
 	bool isFeaturesShown() const;
 	bool isLinesShown() const;
 	int getAlpha() const {return _alpha;}
+	int getFeaturesSize() const {return _featuresSize;}
 	bool isGraphicsViewMode() const;
 	bool isGraphicsViewScaled() const;
+	const QColor & getDefaultBackgroundColor() const;
 	const QColor & getBackgroundColor() const;
 
 	float viewScale() const;
@@ -73,6 +75,7 @@ public:
 	void setLinesShown(bool shown);
 	void setGraphicsViewMode(bool on);
 	void setGraphicsViewScaled(bool scaled);
+	void setDefaultBackgroundColor(const QColor & color);
 	void setBackgroundColor(const QColor & color);
 
 	void setFeatures(const std::multimap<int, cv::KeyPoint> & refWords, const cv::Mat & depth = cv::Mat(), const QColor & color = Qt::yellow);
@@ -84,11 +87,13 @@ public:
 	void setFeatureColor(int id, QColor color);
 	void setFeaturesColor(QColor color);
 	void setAlpha(int alpha);
+	void setFeaturesSize(int size);
 	void setSceneRect(const QRectF & rect);
 
 	const QMultiMap<int, rtabmap::KeypointItem *> & getFeatures() const {return _features;}
 
 	void clearLines();
+	void clearFeatures();
 	void clear();
 
 	virtual QSize sizeHint() const;
@@ -111,6 +116,8 @@ private:
 private:
 	QString _savedFileName;
 	int _alpha;
+	int _featuresSize;
+	QColor _defaultBgColor;
 
 	QMenu * _menu;
 	QAction * _showImage;
@@ -119,6 +126,7 @@ private:
 	QAction * _showLines;
 	QAction * _saveImage;
 	QAction * _setAlpha;
+	QAction * _setFeaturesSize;
 	QAction * _graphicsViewMode;
 	QAction * _graphicsViewScaled;
 

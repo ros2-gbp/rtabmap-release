@@ -33,10 +33,17 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap/utilite/UThread.h>
 #include <rtabmap/utilite/UEventsSender.h>
 
+namespace clams
+{
+class DiscreteDepthDistortionModel;
+}
+
 namespace rtabmap
 {
 
 class Camera;
+class CameraInfo;
+class SensorData;
 class StereoDense;
 
 /**
@@ -53,38 +60,48 @@ public:
 	virtual ~CameraThread();
 
 	void setMirroringEnabled(bool enabled) {_mirroring = enabled;}
+	void setStereoExposureCompensation(bool enabled) {_stereoExposureCompensation = enabled;}
 	void setColorOnly(bool colorOnly) {_colorOnly = colorOnly;}
 	void setImageDecimation(int decimation) {_imageDecimation = decimation;}
 	void setStereoToDepth(bool enabled) {_stereoToDepth = enabled;}
+	void setImageRate(float imageRate);
+	void setDistortionModel(const std::string & path);
+	void enableBilateralFiltering(float sigmaS, float sigmaR);
+	void disableBilateralFiltering() {_bilateralFiltering = false;}
 
 	void setScanFromDepth(
 			bool enabled,
 			int decimation=4,
 			float maxDepth=4.0f,
 			float voxelSize = 0.0f,
-			int normalsK = 0)
+			int normalsK = 0,
+			int normalsRadius = 0.0f)
 	{
 		_scanFromDepth = enabled;
 		_scanDecimation=decimation;
 		_scanMaxDepth = maxDepth;
 		_scanVoxelSize = voxelSize;
 		_scanNormalsK = normalsK;
+		_scanNormalsRadius = normalsRadius;
 	}
+
+	void postUpdate(SensorData * data, CameraInfo * info = 0) const;
 
 	//getters
 	bool isPaused() const {return !this->isRunning();}
 	bool isCapturing() const {return this->isRunning();}
-	void setImageRate(float imageRate);
 
 	Camera * camera() {return _camera;} // return null if not set, valid until CameraThread is deleted
 
 private:
+	virtual void mainLoopBegin();
 	virtual void mainLoop();
 	virtual void mainLoopKill();
 
 private:
 	Camera * _camera;
 	bool _mirroring;
+	bool _stereoExposureCompensation;
 	bool _colorOnly;
 	int _imageDecimation;
 	bool _stereoToDepth;
@@ -94,7 +111,12 @@ private:
 	float _scanMinDepth;
 	float _scanVoxelSize;
 	int _scanNormalsK;
+	float _scanNormalsRadius;
 	StereoDense * _stereoDense;
+	clams::DiscreteDepthDistortionModel * _distortionModel;
+	bool _bilateralFiltering;
+	float _bilateralSigmaS;
+	float _bilateralSigmaR;
 };
 
 } // namespace rtabmap

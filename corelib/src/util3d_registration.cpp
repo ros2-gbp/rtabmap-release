@@ -36,7 +36,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <pcl/registration/transformation_estimation_svd.h>
 #include <pcl/sample_consensus/sac_model_registration.h>
 #include <pcl/sample_consensus/ransac.h>
+#include <pcl/common/common.h>
 #include <rtabmap/utilite/ULogger.h>
+#include <rtabmap/utilite/UMath.h>
 
 namespace rtabmap
 {
@@ -66,15 +68,15 @@ Transform transformFromXYZCorrespondences(
 		int refineIterations,
 		double refineSigma,
 		std::vector<int> * inliersOut,
-		double * varianceOut)
+		cv::Mat * covariance)
 {
 	//NOTE: this method is a mix of two methods:
 	//  - getRemainingCorrespondences() in pcl/registration/impl/correspondence_rejection_sample_consensus.hpp
 	//  - refineModel() in pcl/sample_consensus/sac.h
 
-	if(varianceOut)
+	if(covariance)
 	{
-		*varianceOut = 1.0;
+		*covariance = cv::Mat::eye(6,6,CV_64FC1);
 	}
 	Transform transform;
 	if(cloud1->size() >=3 && cloud1->size() == cloud2->size())
@@ -199,9 +201,11 @@ Transform transformFromXYZCorrespondences(
 				{
 					*inliersOut = inliers;
 				}
-				if(varianceOut)
+				if(covariance)
 				{
-					*varianceOut = model->computeVariance();
+					double variance =  model->computeVariance();
+					UASSERT(uIsFinite(variance));
+					*covariance *= variance;
 				}
 
 				// get best transformation
@@ -237,6 +241,7 @@ void computeVarianceAndCorrespondences(
 		const pcl::PointCloud<pcl::PointNormal>::ConstPtr & cloudA,
 		const pcl::PointCloud<pcl::PointNormal>::ConstPtr & cloudB,
 		double maxCorrespondenceDistance,
+		double maxCorrespondenceAngle,
 		double & variance,
 		int & correspondencesOut)
 {
@@ -244,26 +249,53 @@ void computeVarianceAndCorrespondences(
 	correspondencesOut = 0;
 	pcl::registration::CorrespondenceEstimation<pcl::PointNormal, pcl::PointNormal>::Ptr est;
 	est.reset(new pcl::registration::CorrespondenceEstimation<pcl::PointNormal, pcl::PointNormal>);
-	est->setInputTarget(cloudB);
-	est->setInputSource(cloudA);
+	const pcl::PointCloud<pcl::PointNormal>::ConstPtr & target = cloudA->size()>cloudB->size()?cloudA:cloudB;
+	const pcl::PointCloud<pcl::PointNormal>::ConstPtr & source = cloudA->size()>cloudB->size()?cloudB:cloudA;
+	est->setInputTarget(target);
+	est->setInputSource(source);
 	pcl::Correspondences correspondences;
 	est->determineCorrespondences(correspondences, maxCorrespondenceDistance);
 
-	if(correspondences.size()>=3)
+	if(correspondences.size())
 	{
 		std::vector<double> distances(correspondences.size());
+		correspondencesOut = 0;
 		for(unsigned int i=0; i<correspondences.size(); ++i)
 		{
 			distances[i] = correspondences[i].distance;
+			if(maxCorrespondenceAngle <= 0.0)
+			{
+				++correspondencesOut;
+			}
+			else
+			{
+				Eigen::Vector4f v1(
+						target->at(correspondences[i].index_match).normal_x,
+						target->at(correspondences[i].index_match).normal_y,
+						target->at(correspondences[i].index_match).normal_z,
+						0);
+				Eigen::Vector4f v2(
+						source->at(correspondences[i].index_query).normal_x,
+						source->at(correspondences[i].index_query).normal_y,
+						source->at(correspondences[i].index_query).normal_z,
+						0);
+				float angle = pcl::getAngle3D(v1, v2);
+				if(angle < maxCorrespondenceAngle)
+				{
+					++correspondencesOut;
+				}
+			}
 		}
+		if(correspondencesOut)
+		{
+			distances.resize(correspondencesOut);
 
-		//variance
-		std::sort(distances.begin (), distances.end ());
-		double median_error_sqr = distances[distances.size () >> 1];
-		variance = (2.1981 * median_error_sqr);
+			//variance
+			std::sort(distances.begin (), distances.end ());
+			double median_error_sqr = distances[distances.size () >> 1];
+			variance = (2.1981 * median_error_sqr);
+		}
 	}
-
-	correspondencesOut = (int)correspondences.size();
 }
 
 void computeVarianceAndCorrespondences(
@@ -277,8 +309,8 @@ void computeVarianceAndCorrespondences(
 	correspondencesOut = 0;
 	pcl::registration::CorrespondenceEstimation<pcl::PointXYZ, pcl::PointXYZ>::Ptr est;
 	est.reset(new pcl::registration::CorrespondenceEstimation<pcl::PointXYZ, pcl::PointXYZ>);
-	est->setInputTarget(cloudB);
-	est->setInputSource(cloudA);
+	est->setInputTarget(cloudA->size()>cloudB->size()?cloudA:cloudB);
+	est->setInputSource(cloudA->size()>cloudB->size()?cloudB:cloudA);
 	pcl::Correspondences correspondences;
 	est->determineCorrespondences(correspondences, maxCorrespondenceDistance);
 
@@ -326,7 +358,7 @@ Transform icp(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr & cloud_source,
 	// Set the maximum number of iterations (criterion 1)
 	icp.setMaximumIterations (maximumIterations);
 	// Set the transformation epsilon (criterion 2)
-	icp.setTransformationEpsilon (epsilon);
+	icp.setTransformationEpsilon (epsilon*epsilon);
 	// Set the euclidean distance difference epsilon (criterion 3)
 	//icp.setEuclideanFitnessEpsilon (1);
 	//icp.setRANSACOutlierRejectionThreshold(maxCorrespondenceDistance);
@@ -353,13 +385,6 @@ Transform icpPointToPlane(
 	icp.setInputTarget (cloud_target);
 	icp.setInputSource (cloud_source);
 
-	if(icp2D)
-	{
-		pcl::registration::TransformationEstimation2D<pcl::PointNormal, pcl::PointNormal>::Ptr est;
-		est.reset(new pcl::registration::TransformationEstimation2D<pcl::PointNormal, pcl::PointNormal>);
-		icp.setTransformationEstimation(est);
-	}
-
 	pcl::registration::TransformationEstimationPointToPlaneLLS<pcl::PointNormal, pcl::PointNormal>::Ptr est;
 	est.reset(new pcl::registration::TransformationEstimationPointToPlaneLLS<pcl::PointNormal, pcl::PointNormal>);
 	icp.setTransformationEstimation(est);
@@ -369,7 +394,7 @@ Transform icpPointToPlane(
 	// Set the maximum number of iterations (criterion 1)
 	icp.setMaximumIterations (maximumIterations);
 	// Set the transformation epsilon (criterion 2)
-	icp.setTransformationEpsilon (epsilon);
+	icp.setTransformationEpsilon (epsilon*epsilon);
 	// Set the euclidean distance difference epsilon (criterion 3)
 	//icp.setEuclideanFitnessEpsilon (1);
 	//icp.setRANSACOutlierRejectionThreshold(maxCorrespondenceDistance);
@@ -377,7 +402,15 @@ Transform icpPointToPlane(
 	// Perform the alignment
 	icp.align (cloud_source_registered);
 	hasConverged = icp.hasConverged();
-	return Transform::fromEigen4f(icp.getFinalTransformation());
+	Transform t = Transform::fromEigen4f(icp.getFinalTransformation());
+
+	if(icp2D)
+	{
+		// FIXME probably an estimation approach already 2D like in icp() version above exists.
+		t = t.to3DoF();
+	}
+
+	return t;
 }
 
 }
