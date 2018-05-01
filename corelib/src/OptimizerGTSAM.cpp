@@ -69,6 +69,12 @@ bool OptimizerGTSAM::available()
 #endif
 }
 
+void OptimizerGTSAM::parseParameters(const ParametersMap & parameters)
+{
+	Optimizer::parseParameters(parameters);
+	Parameters::parse(parameters, Parameters::kGTSAMOptimizer(), optimizer_);
+}
+
 std::map<int, Transform> OptimizerGTSAM::optimize(
 		int rootId,
 		const std::map<int, Transform> & poses,
@@ -93,18 +99,34 @@ std::map<int, Transform> OptimizerGTSAM::optimize(
 	{
 		gtsam::NonlinearFactorGraph graph;
 
-		//prior first pose
-		UASSERT(uContains(poses, rootId));
-		const Transform & initialPose = poses.at(rootId);
-		if(isSlam2d())
+		// detect if there is a global pose prior set, if so remove rootId
+		if(!priorsIgnored())
 		{
-			gtsam::noiseModel::Diagonal::shared_ptr priorNoise = gtsam::noiseModel::Diagonal::Sigmas(gtsam::Vector3(0.01, 0.01, 0.01));
-			graph.add(gtsam::PriorFactor<gtsam::Pose2>(rootId, gtsam::Pose2(initialPose.x(), initialPose.y(), initialPose.theta()), priorNoise));
+			for(std::multimap<int, Link>::const_iterator iter=edgeConstraints.begin(); iter!=edgeConstraints.end(); ++iter)
+			{
+				if(iter->second.from() == iter->second.to())
+				{
+					rootId = 0;
+					break;
+				}
+			}
 		}
-		else
+
+		//prior first pose
+		if(rootId != 0)
 		{
-			gtsam::noiseModel::Diagonal::shared_ptr priorNoise = gtsam::noiseModel::Diagonal::Sigmas((gtsam::Vector(6) << 1e-6, 1e-6, 1e-6, 1e-4, 1e-4, 1e-4).finished());
-			graph.add(gtsam::PriorFactor<gtsam::Pose3>(rootId, gtsam::Pose3(initialPose.toEigen4d()), priorNoise));
+			UASSERT(uContains(poses, rootId));
+			const Transform & initialPose = poses.at(rootId);
+			if(isSlam2d())
+			{
+				gtsam::noiseModel::Diagonal::shared_ptr priorNoise = gtsam::noiseModel::Diagonal::Variances(gtsam::Vector3(0.01, 0.01, 0.01));
+				graph.add(gtsam::PriorFactor<gtsam::Pose2>(rootId, gtsam::Pose2(initialPose.x(), initialPose.y(), initialPose.theta()), priorNoise));
+			}
+			else
+			{
+				gtsam::noiseModel::Diagonal::shared_ptr priorNoise = gtsam::noiseModel::Diagonal::Variances((gtsam::Vector(6) << 1e-6, 1e-6, 1e-6, 1e-4, 1e-4, 1e-4).finished());
+				graph.add(gtsam::PriorFactor<gtsam::Pose3>(rootId, gtsam::Pose3(initialPose.toEigen4d()), priorNoise));
+			}
 		}
 
 		UDEBUG("fill poses to gtsam...");
@@ -128,116 +150,174 @@ std::map<int, Transform> OptimizerGTSAM::optimize(
 		{
 			int id1 = iter->second.from();
 			int id2 = iter->second.to();
-
 			UASSERT(!iter->second.transform().isNull());
-
-#ifdef RTABMAP_VERTIGO
-			if(this->isRobust() &&
-			   iter->second.type()!=Link::kNeighbor &&
-			   iter->second.type() != Link::kNeighborMerged)
+			if(id1 == id2)
 			{
-				// create new switch variable
-				// Sunderhauf IROS 2012:
-				// "Since it is reasonable to initially accept all loop closure constraints,
-				//  a proper and convenient initial value for all switch variables would be
-				//  sij = 1 when using the linear switch function"
-				double prior = 1.0;
-				initialEstimate.insert(gtsam::Symbol('s',switchCounter), vertigo::SwitchVariableLinear(prior));
-
-				// create switch prior factor
-				// "If the front-end is not able to assign sound individual values
-				//  for Ξij , it is save to set all Ξij = 1, since this value is close
-				//  to the individual optimal choice of Ξij for a large range of
-				//  outliers."
-				gtsam::noiseModel::Diagonal::shared_ptr switchPriorModel = gtsam::noiseModel::Diagonal::Sigmas(gtsam::Vector1(1.0));
-				graph.add(gtsam::PriorFactor<vertigo::SwitchVariableLinear> (gtsam::Symbol('s',switchCounter), vertigo::SwitchVariableLinear(prior), switchPriorModel));
-			}
-#endif
-
-			if(isSlam2d())
-			{
-				Eigen::Matrix<double, 3, 3> information = Eigen::Matrix<double, 3, 3>::Identity();
-				if(!isCovarianceIgnored())
+				if(!priorsIgnored())
 				{
-					// For some reasons, dividing by 1000 avoids some exceptions (maybe too large numbers on optimization)
-					information(0,0) = iter->second.infMatrix().at<double>(0,0)/1000.0; // x-x
-					information(0,1) = iter->second.infMatrix().at<double>(0,1)/1000.0; // x-y
-					information(0,2) = iter->second.infMatrix().at<double>(0,5)/1000.0; // x-theta
-					information(1,0) = iter->second.infMatrix().at<double>(1,0)/1000.0; // y-x
-					information(1,1) = iter->second.infMatrix().at<double>(1,1)/1000.0; // y-y
-					information(1,2) = iter->second.infMatrix().at<double>(1,5)/1000.0; // y-theta
-					information(2,0) = iter->second.infMatrix().at<double>(5,0)/1000.0; // theta-x
-					information(2,1) = iter->second.infMatrix().at<double>(5,1)/1000.0; // theta-y
-					information(2,2) = iter->second.infMatrix().at<double>(5,5)/1000.0; // theta-theta
-				}
-				gtsam::noiseModel::Gaussian::shared_ptr model = gtsam::noiseModel::Gaussian::Information(information);
+					if(isSlam2d())
+					{
+						Eigen::Matrix<double, 3, 3> information = Eigen::Matrix<double, 3, 3>::Identity();
+						if(!isCovarianceIgnored())
+						{
+							information(0,0) = iter->second.infMatrix().at<double>(0,0); // x-x
+							information(0,1) = iter->second.infMatrix().at<double>(0,1); // x-y
+							information(0,2) = iter->second.infMatrix().at<double>(0,5); // x-theta
+							information(1,0) = iter->second.infMatrix().at<double>(1,0); // y-x
+							information(1,1) = iter->second.infMatrix().at<double>(1,1); // y-y
+							information(1,2) = iter->second.infMatrix().at<double>(1,5); // y-theta
+							information(2,0) = iter->second.infMatrix().at<double>(5,0); // theta-x
+							information(2,1) = iter->second.infMatrix().at<double>(5,1); // theta-y
+							information(2,2) = iter->second.infMatrix().at<double>(5,5); // theta-theta
+						}
 
-#ifdef RTABMAP_VERTIGO
-				if(this->isRobust() &&
-				   iter->second.type()!=Link::kNeighbor &&
-				   iter->second.type() != Link::kNeighborMerged)
-				{
-					// create switchable edge factor
-					graph.add(vertigo::BetweenFactorSwitchableLinear<gtsam::Pose2>(id1, id2, gtsam::Symbol('s', switchCounter++), gtsam::Pose2(iter->second.transform().x(), iter->second.transform().y(), iter->second.transform().theta()), model));
-				}
-				else
-#endif
-				{
-					graph.add(gtsam::BetweenFactor<gtsam::Pose2>(id1, id2, gtsam::Pose2(iter->second.transform().x(), iter->second.transform().y(), iter->second.transform().theta()), model));
+						gtsam::noiseModel::Gaussian::shared_ptr model = gtsam::noiseModel::Gaussian::Information(information);
+						graph.add(gtsam::PriorFactor<gtsam::Pose2>(id1, gtsam::Pose2(iter->second.transform().x(), iter->second.transform().y(), iter->second.transform().theta()), model));
+					}
+					else
+					{
+						Eigen::Matrix<double, 6, 6> information = Eigen::Matrix<double, 6, 6>::Identity();
+						if(!isCovarianceIgnored())
+						{
+							memcpy(information.data(), iter->second.infMatrix().data, iter->second.infMatrix().total()*sizeof(double));
+						}
+
+						Eigen::Matrix<double, 6, 6> mgtsam = Eigen::Matrix<double, 6, 6>::Identity();
+						mgtsam.block(0,0,3,3) = information.block(3,3,3,3); // cov rotation
+						mgtsam.block(3,3,3,3) = information.block(0,0,3,3); // cov translation
+						mgtsam.block(0,3,3,3) = information.block(0,3,3,3); // off diagonal
+						mgtsam.block(3,0,3,3) = information.block(3,0,3,3); // off diagonal
+						gtsam::SharedNoiseModel model = gtsam::noiseModel::Gaussian::Information(mgtsam);
+
+						graph.add(gtsam::PriorFactor<gtsam::Pose3>(id1, gtsam::Pose3(iter->second.transform().toEigen4d()), model));
+					}
 				}
 			}
 			else
 			{
-				Eigen::Matrix<double, 6, 6> information = Eigen::Matrix<double, 6, 6>::Identity();
-				if(!isCovarianceIgnored())
-				{
-					memcpy(information.data(), iter->second.infMatrix().data, iter->second.infMatrix().total()*sizeof(double));
-					// For some reasons, dividing by 1000 avoids some exceptions (maybe too large numbers on optimization)
-					information = information / 1000.0;
-				}
-
-				gtsam::noiseModel::Gaussian::shared_ptr model = gtsam::noiseModel::Gaussian::Information(information);
-
 #ifdef RTABMAP_VERTIGO
 				if(this->isRobust() &&
-				   iter->second.type()!=Link::kNeighbor &&
-				   iter->second.type() != Link::kNeighborMerged)
+				   iter->second.type() != Link::kNeighbor &&
+				   iter->second.type() != Link::kNeighborMerged &&
+				   iter->second.type() != Link::kPosePrior)
 				{
-					// create switchable edge factor
-					graph.add(vertigo::BetweenFactorSwitchableLinear<gtsam::Pose3>(id1, id2, gtsam::Symbol('s', switchCounter++), gtsam::Pose3(iter->second.transform().toEigen4d()), model));
+					// create new switch variable
+					// Sunderhauf IROS 2012:
+					// "Since it is reasonable to initially accept all loop closure constraints,
+					//  a proper and convenient initial value for all switch variables would be
+					//  sij = 1 when using the linear switch function"
+					double prior = 1.0;
+					initialEstimate.insert(gtsam::Symbol('s',switchCounter), vertigo::SwitchVariableLinear(prior));
+
+					// create switch prior factor
+					// "If the front-end is not able to assign sound individual values
+					//  for Ξij , it is save to set all Ξij = 1, since this value is close
+					//  to the individual optimal choice of Ξij for a large range of
+					//  outliers."
+					gtsam::noiseModel::Diagonal::shared_ptr switchPriorModel = gtsam::noiseModel::Diagonal::Sigmas(gtsam::Vector1(1.0));
+					graph.add(gtsam::PriorFactor<vertigo::SwitchVariableLinear> (gtsam::Symbol('s',switchCounter), vertigo::SwitchVariableLinear(prior), switchPriorModel));
+				}
+#endif
+
+				if(isSlam2d())
+				{
+					Eigen::Matrix<double, 3, 3> information = Eigen::Matrix<double, 3, 3>::Identity();
+					if(!isCovarianceIgnored())
+					{
+						information(0,0) = iter->second.infMatrix().at<double>(0,0); // x-x
+						information(0,1) = iter->second.infMatrix().at<double>(0,1); // x-y
+						information(0,2) = iter->second.infMatrix().at<double>(0,5); // x-theta
+						information(1,0) = iter->second.infMatrix().at<double>(1,0); // y-x
+						information(1,1) = iter->second.infMatrix().at<double>(1,1); // y-y
+						information(1,2) = iter->second.infMatrix().at<double>(1,5); // y-theta
+						information(2,0) = iter->second.infMatrix().at<double>(5,0); // theta-x
+						information(2,1) = iter->second.infMatrix().at<double>(5,1); // theta-y
+						information(2,2) = iter->second.infMatrix().at<double>(5,5); // theta-theta
+					}
+					gtsam::noiseModel::Gaussian::shared_ptr model = gtsam::noiseModel::Gaussian::Information(information);
+
+#ifdef RTABMAP_VERTIGO
+					if(this->isRobust() &&
+					   iter->second.type()!=Link::kNeighbor &&
+					   iter->second.type() != Link::kNeighborMerged)
+					{
+						// create switchable edge factor
+						graph.add(vertigo::BetweenFactorSwitchableLinear<gtsam::Pose2>(id1, id2, gtsam::Symbol('s', switchCounter++), gtsam::Pose2(iter->second.transform().x(), iter->second.transform().y(), iter->second.transform().theta()), model));
+					}
+					else
+#endif
+					{
+						graph.add(gtsam::BetweenFactor<gtsam::Pose2>(id1, id2, gtsam::Pose2(iter->second.transform().x(), iter->second.transform().y(), iter->second.transform().theta()), model));
+					}
 				}
 				else
-#endif
 				{
-					graph.add(gtsam::BetweenFactor<gtsam::Pose3>(id1, id2, gtsam::Pose3(iter->second.transform().toEigen4d()), model));
+					Eigen::Matrix<double, 6, 6> information = Eigen::Matrix<double, 6, 6>::Identity();
+					if(!isCovarianceIgnored())
+					{
+						memcpy(information.data(), iter->second.infMatrix().data, iter->second.infMatrix().total()*sizeof(double));
+					}
+
+					Eigen::Matrix<double, 6, 6> mgtsam = Eigen::Matrix<double, 6, 6>::Identity();
+					mgtsam.block(0,0,3,3) = information.block(3,3,3,3); // cov rotation
+					mgtsam.block(3,3,3,3) = information.block(0,0,3,3); // cov translation
+					mgtsam.block(0,3,3,3) = information.block(0,3,3,3); // off diagonal
+					mgtsam.block(3,0,3,3) = information.block(3,0,3,3); // off diagonal
+					gtsam::SharedNoiseModel model = gtsam::noiseModel::Gaussian::Information(mgtsam);
+
+#ifdef RTABMAP_VERTIGO
+					if(this->isRobust() &&
+					   iter->second.type() != Link::kNeighbor &&
+					   iter->second.type() != Link::kNeighborMerged &&
+					   iter->second.type() != Link::kPosePrior)
+					{
+						// create switchable edge factor
+						graph.add(vertigo::BetweenFactorSwitchableLinear<gtsam::Pose3>(id1, id2, gtsam::Symbol('s', switchCounter++), gtsam::Pose3(iter->second.transform().toEigen4d()), model));
+					}
+					else
+#endif
+					{
+						graph.add(gtsam::BetweenFactor<gtsam::Pose3>(id1, id2, gtsam::Pose3(iter->second.transform().toEigen4d()), model));
+					}
 				}
 			}
 		}
 
 		UDEBUG("create optimizer");
-		gtsam::GaussNewtonParams parameters;
-		parameters.relativeErrorTol = epsilon();
-		parameters.maxIterations = iterations();
-		gtsam::GaussNewtonOptimizer optimizer(graph, initialEstimate, parameters);
-		//gtsam::LevenbergMarquardtParams parametersLev;
-		//parametersLev.relativeErrorTol = epsilon();
-		//parametersLev.maxIterations = iterations();
-		//gtsam::LevenbergMarquardtOptimizer optimizer(graph, initialEstimate, parametersLev);
-		//gtsam::DoglegParams parametersDogleg;
-		//parametersDogleg.relativeErrorTol = epsilon();
-		//parametersDogleg.maxIterations = iterations();
-		//gtsam::DoglegOptimizer optimizer(graph, initialEstimate, parametersDogleg);
+		gtsam::NonlinearOptimizer * optimizer;
+
+		if(optimizer_ == 2)
+		{
+			gtsam::DoglegParams parameters;
+			parameters.relativeErrorTol = epsilon();
+			parameters.maxIterations = iterations();
+			optimizer = new gtsam::DoglegOptimizer(graph, initialEstimate, parameters);
+		}
+		else if(optimizer_ == 1)
+		{
+			gtsam::GaussNewtonParams parameters;
+			parameters.relativeErrorTol = epsilon();
+			parameters.maxIterations = iterations();
+			optimizer = new gtsam::GaussNewtonOptimizer(graph, initialEstimate, parameters);
+		}
+		else
+		{
+			gtsam::LevenbergMarquardtParams parameters;
+			parameters.relativeErrorTol = epsilon();
+			parameters.maxIterations = iterations();
+			optimizer = new gtsam::LevenbergMarquardtOptimizer(graph, initialEstimate, parameters);
+		}
 
 		UINFO("GTSAM optimizing begin (max iterations=%d, robust=%d)", iterations(), isRobust()?1:0);
 		UTimer timer;
 		int it = 0;
-		double lastError = 0.0;
+		double lastError = optimizer->error();
 		for(int i=0; i<iterations(); ++i)
 		{
 			if(intermediateGraphes && i > 0)
 			{
 				std::map<int, Transform> tmpPoses;
-				for(gtsam::Values::const_iterator iter=optimizer.values().begin(); iter!=optimizer.values().end(); ++iter)
+				for(gtsam::Values::const_iterator iter=optimizer->values().begin(); iter!=optimizer->values().end(); ++iter)
 				{
 					if(iter->value.dim() > 1)
 					{
@@ -257,17 +337,18 @@ std::map<int, Transform> OptimizerGTSAM::optimize(
 			}
 			try
 			{
-				optimizer.iterate();
+				optimizer->iterate();
 				++it;
 			}
 			catch(gtsam::IndeterminantLinearSystemException & e)
 			{
 				UERROR("GTSAM exception caught: %s", e.what());
+				delete optimizer;
 				return optimizedPoses;
 			}
 
 			// early stop condition
-			double error = optimizer.error();
+			double error = optimizer->error();
 			UDEBUG("iteration %d error =%f", i+1, error);
 			double errorDelta = lastError - error;
 			if(i>0 && errorDelta < this->epsilon())
@@ -297,9 +378,10 @@ std::map<int, Transform> OptimizerGTSAM::optimize(
 		{
 			*iterationsDone = it;
 		}
-		UINFO("GTSAM optimizing end (%d iterations done, error=%f (initial=%f final=%f), time=%f s)", optimizer.iterations(), optimizer.error(), graph.error(initialEstimate), graph.error(optimizer.values()), timer.ticks());
+		UINFO("GTSAM optimizing end (%d iterations done, error=%f (initial=%f final=%f), time=%f s)",
+				optimizer->iterations(), optimizer->error(), graph.error(initialEstimate), graph.error(optimizer->values()), timer.ticks());
 
-		for(gtsam::Values::const_iterator iter=optimizer.values().begin(); iter!=optimizer.values().end(); ++iter)
+		for(gtsam::Values::const_iterator iter=optimizer->values().begin(); iter!=optimizer->values().end(); ++iter)
 		{
 			if(iter->value.dim() > 1)
 			{
@@ -315,6 +397,7 @@ std::map<int, Transform> OptimizerGTSAM::optimize(
 				}
 			}
 		}
+		delete optimizer;
 	}
 	else if(poses.size() == 1 || iterations() <= 0)
 	{

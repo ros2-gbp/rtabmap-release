@@ -81,16 +81,13 @@ void StatItem::clearCache()
 {
 	_x.clear();
 	_y.clear();
+	_value->clear();
 }
 
 void StatItem::addValue(float y)
 {
 	if(_cacheOn)
 	{
-		if(_y.size() % 100)
-		{
-			_y.reserve(_y.size()+100);
-		}
 		_y.push_back(y);
 	}
 	_value->setText(QString::number(y, 'g', 3));
@@ -106,15 +103,7 @@ void StatItem::addValue(float x, float y)
 			clearCache();
 		}
 
-		if(_y.size() % 100)
-		{
-			_y.reserve(_y.size()+100);
-		}
 		_y.push_back(y);
-		if(_x.size() % 100)
-		{
-			_x.reserve(_x.size()+100);
-		}
 		_x.push_back(x);
 	}
 
@@ -154,8 +143,10 @@ void StatItem::setupUi(QGridLayout * grid)
 	_button->setPopupMode(QToolButton::InstantPopup);
 	_button->setMenu(_menu);
 	_name = new QLabel(this);
+	_name->setTextInteractionFlags(Qt::TextSelectableByMouse);
 	_name->setWordWrap(true);
 	_value = new QLabel(this);
+	_value->setTextInteractionFlags(Qt::TextSelectableByMouse);
 	_unit = new QLabel(this);
 
 	if(grid)
@@ -317,6 +308,10 @@ void StatsToolBox::updateStat(const QString & statFullName, const std::vector<fl
 			grp = list.at(0);
 			name = list.at(1);
 			unit = list.at(2);
+			for(int i=3; i<list.size(); ++i)
+			{
+				unit += "/" + list.at(i);
+			}
 		}
 		else if(list.size() == 2)
 		{
