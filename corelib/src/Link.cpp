@@ -65,13 +65,13 @@ Link::Link(int from,
 
 double Link::rotVariance() const
 {
-	double min = uMin3(infMatrix_.at<double>(3,3), infMatrix_.at<double>(4,4), infMatrix_.at<double>(5,5));
+	double min = uMax3(infMatrix_.at<double>(3,3), infMatrix_.at<double>(4,4), infMatrix_.at<double>(5,5));
 	UASSERT(min > 0.0);
 	return 1.0/min;
 }
 double Link::transVariance() const
 {
-	double min = uMin3(infMatrix_.at<double>(0,0), infMatrix_.at<double>(1,1), infMatrix_.at<double>(2,2));
+	double min = uMax3(infMatrix_.at<double>(0,0), infMatrix_.at<double>(1,1), infMatrix_.at<double>(2,2));
 	UASSERT(min > 0.0);
 	return 1.0/min;
 }
@@ -117,7 +117,8 @@ Link Link::merge(const Link & link, Type outputType) const
 			link.to(),
 			outputType,
 			transform_.isNull()?Transform():transform_ * link.transform(), // FIXME, should be inf1^-1(inf1*t1 + inf2*t2)
-			transform_.isNull()?cv::Mat::eye(6,6,CV_64FC1):(infMatrix_.inv() + link.infMatrix().inv()).inv());
+			transform_.isNull()?cv::Mat::eye(6,6,CV_64FC1):(infMatrix_.at<double>(0,0)<link.infMatrix().at<double>(0,0)?infMatrix_:link.infMatrix()));
+			//transform_.isNull()?cv::Mat::eye(6,6,CV_64FC1):(infMatrix_.inv() + link.infMatrix().inv()).inv());
 }
 
 Link Link::inverse() const

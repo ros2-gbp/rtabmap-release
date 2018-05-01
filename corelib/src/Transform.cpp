@@ -71,7 +71,7 @@ Transform::Transform(float x, float y, float z, float roll, float pitch, float y
 Transform::Transform(float x, float y, float z, float qx, float qy, float qz, float qw) :
 		data_(cv::Mat::zeros(3,4,CV_32FC1))
 {
-	Eigen::Matrix3f rotation = Eigen::Quaternionf(qw, qx, qy, qz).toRotationMatrix();
+	Eigen::Matrix3f rotation = Eigen::Quaternionf(qw, qx, qy, qz).normalized().toRotationMatrix();
 	data()[0] = rotation(0,0);
 	data()[1] = rotation(0,1);
 	data()[2] = rotation(0,2);
@@ -90,6 +90,11 @@ Transform::Transform(float x, float y, float theta)
 {
 	Eigen::Affine3f t = pcl::getTransformation (x, y, 0, 0, 0, theta);
 	*this = fromEigen3f(t);
+}
+
+Transform Transform::clone() const
+{
+	return Transform(data_.clone());
 }
 
 bool Transform::isNull() const
@@ -212,7 +217,7 @@ void Transform::getTranslation(float & x, float & y, float & z) const
 float Transform::getAngle(float x, float y, float z) const
 {
 	Eigen::Vector3f vA(x,y,z);
-	Eigen::Vector3f vB = this->toEigen3f().rotation()*Eigen::Vector3f(1,0,0);
+	Eigen::Vector3f vB = this->toEigen3f().linear()*Eigen::Vector3f(1,0,0);
 	return pcl::getAngle3D(Eigen::Vector4f(vA[0], vA[1], vA[2], 0), Eigen::Vector4f(vB[0], vB[1], vB[2], 0));
 }
 
@@ -249,6 +254,16 @@ Transform Transform::interpolate(float t, const Transform & other) const
 	return Transform(x,y,z, qres.x(), qres.y(), qres.z(), qres.w());
 }
 
+void Transform::normalizeRotation()
+{
+	if(!this->isNull())
+	{
+		Eigen::Affine3f m = toEigen3f();
+		m.linear() = Eigen::Quaternionf(m.linear()).normalized().toRotationMatrix();
+		*this = fromEigen3f(m);
+	}
+}
+
 std::string Transform::prettyPrint() const
 {
 	if(this->isNull())
@@ -265,7 +280,10 @@ std::string Transform::prettyPrint() const
 
 Transform Transform::operator*(const Transform & t) const
 {
-	return fromEigen4f(toEigen4f()*t.toEigen4f());
+	Eigen::Affine3f m = Eigen::Affine3f(toEigen4f()*t.toEigen4f());
+	// make sure rotation is always normalized!
+	m.linear() = Eigen::Quaternionf(m.linear()).normalized().toRotationMatrix();
+	return fromEigen3f(m);
 }
 
 Transform & Transform::operator*=(const Transform & t)
@@ -328,12 +346,12 @@ Eigen::Affine3d Transform::toEigen3d() const
 
 Eigen::Quaternionf Transform::getQuaternionf() const
 {
-	return Eigen::Quaternionf(this->toEigen3f().rotation()).normalized();
+	return Eigen::Quaternionf(this->toEigen3f().linear()).normalized();
 }
 
 Eigen::Quaterniond Transform::getQuaterniond() const
 {
-	return Eigen::Quaterniond(this->toEigen3d().rotation()).normalized();
+	return Eigen::Quaterniond(this->toEigen3d().linear()).normalized();
 }
 
 Transform Transform::getIdentity()

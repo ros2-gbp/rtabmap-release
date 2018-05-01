@@ -25,64 +25,44 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-//
-// Original version from Find-Object: https://github.com/introlab/find-object
-//
+#ifndef RTABMAP_CREATESIMPLECALIBRATIONDIALOG_H_
+#define RTABMAP_CREATESIMPLECALIBRATIONDIALOG_H_
 
-#ifndef PARAMETERSTOOLBOX_H_
-#define PARAMETERSTOOLBOX_H_
+#include "rtabmap/gui/RtabmapGuiExp.h" // DLL export/import defines
 
-#include <rtabmap/core/Parameters.h>
-#include <QWidget>
-#include <QSet>
+#include <QDialog>
+#include <QSettings>
 
-class QVBoxLayout;
-class QStackedWidget;
-class QComboBox;
+class Ui_createSimpleCalibrationDialog;
 
 namespace rtabmap {
 
-class ParametersToolBox: public QWidget
+class RTABMAPGUI_EXP CreateSimpleCalibrationDialog : public QDialog
 {
 	Q_OBJECT
 
 public:
-	ParametersToolBox(QWidget *parent = 0);
-	virtual ~ParametersToolBox();
+	CreateSimpleCalibrationDialog(
+			const QString & savingFolder = ".",
+			const QString & cameraName = "",
+			QWidget * parent = 0);
 
-	void setupUi(const ParametersMap & parameters);
-	QWidget * getParameterWidget(const QString & key);
-	void updateParameter(const std::string & key, const std::string & value);
-	const ParametersMap & getParameters() const {return parameters_;}
+	virtual ~CreateSimpleCalibrationDialog();
 
-private:
-	void addParameter(QVBoxLayout * layout, const std::string & key, const std::string & value);
-	void addParameter(QVBoxLayout * layout, const QString & key, const QString & value);
-	void addParameter(QVBoxLayout * layout, const QString & key, const int & value);
-	void addParameter(QVBoxLayout * layout, const QString & key, const double & value);
-	void addParameter(QVBoxLayout * layout, const QString & key, const bool & value);
-	void addParameter(QVBoxLayout * layout, const QString & name, QWidget * widget);
+	void setCameraInfoDir(const QString & folder) {savingFolder_ = folder;}
+	const QString & cameraName() const {return cameraName_;}
 
-Q_SIGNALS:
-	void parametersChanged(const QStringList & name);
-
-private Q_SLOTS:
-	void changeParameter();
-	void changeParameter(const QString & value);
-	void changeParameter(const int & value);
-	void resetCurrentPage();
-	void resetAllPages();
+private slots:
+	void updateStereoView();
+	void updateSaveStatus();
+	void saveCalibration();
 
 private:
-	QStringList resetPage(int index);
-	void updateParametersVisibility();
-
-private:
-	QComboBox * comboBox_;
-	QStackedWidget * stackedWidget_;
-	ParametersMap parameters_;
+	Ui_createSimpleCalibrationDialog * ui_;
+	QString savingFolder_;
+	QString cameraName_;
 };
 
-} // namespace find_object
+}
 
-#endif /* PARAMETERSTOOLBOX_H_ */
+#endif /* CREATESIMPLECALIBRATIONDIALOG_H_ */

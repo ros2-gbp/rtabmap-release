@@ -75,6 +75,7 @@ public:
 	bool isCovarianceIgnored() const {return covarianceIgnored_;}
 	double epsilon() const {return epsilon_;}
 	bool isRobust() const {return robust_;}
+	bool priorsIgnored() const {return priorsIgnored_;}
 
 	// setters
 	void setIterations(int iterations) {iterations_ = iterations;}
@@ -82,8 +83,17 @@ public:
 	void setCovarianceIgnored(bool enabled) {covarianceIgnored_ = enabled;}
 	void setEpsilon(double epsilon) {epsilon_ = epsilon;}
 	void setRobust(bool enabled) {robust_ = enabled;}
+	void setPriorsIgnored(bool enabled) {priorsIgnored_ = enabled;}
 
 	virtual void parseParameters(const ParametersMap & parameters);
+
+	std::map<int, Transform> optimizeIncremental(
+			int rootId,
+			const std::map<int, Transform> & poses,
+			const std::multimap<int, Link> & constraints,
+			std::list<std::map<int, Transform> > * intermediateGraphes = 0,
+			double * finalError = 0,
+			int * iterationsDone = 0);
 
 	// inherited classes should implement one of these methods
 	virtual std::map<int, Transform> optimize(
@@ -128,7 +138,8 @@ protected:
 			bool slam2d            = Parameters::defaultRegForce3DoF(),
 			bool covarianceIgnored = Parameters::defaultOptimizerVarianceIgnored(),
 			double epsilon         = Parameters::defaultOptimizerEpsilon(),
-			bool robust            = Parameters::defaultOptimizerRobust());
+			bool robust            = Parameters::defaultOptimizerRobust(),
+			bool priorsIgnored     = Parameters::defaultOptimizerPriorsIgnored());
 	Optimizer(const ParametersMap & parameters);
 
 private:
@@ -137,6 +148,7 @@ private:
 	bool covarianceIgnored_;
 	double epsilon_;
 	bool robust_;
+	bool priorsIgnored_;
 };
 
 } /* namespace rtabmap */

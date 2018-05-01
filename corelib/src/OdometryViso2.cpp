@@ -28,7 +28,6 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/core/OdometryViso2.h"
 #include "rtabmap/core/OdometryInfo.h"
 #include "rtabmap/core/util2d.h"
-#include "rtabmap/core/Version.h"
 #include "rtabmap/utilite/ULogger.h"
 #include "rtabmap/utilite/UTimer.h"
 #include "rtabmap/utilite/UStl.h"
@@ -53,15 +52,19 @@ namespace rtabmap {
 
 OdometryViso2::OdometryViso2(const ParametersMap & parameters) :
 	Odometry(parameters),
+#ifdef RTABMAP_VISO2
 	viso2_(0),
 	ref_frame_change_method_(0),
 	ref_frame_inlier_threshold_(Parameters::defaultOdomVisKeyFrameThr()),
 	ref_frame_motion_threshold_(5.0),
 	lost_(false),
 	keep_reference_frame_(false),
+#endif
 	reference_motion_(Transform::getIdentity())
 {
+#ifdef RTABMAP_VISO2
 	Parameters::parse(parameters, Parameters::kOdomVisKeyFrameThr(), ref_frame_inlier_threshold_);
+#endif
 	viso2Parameters_ = Parameters::filterParameters(parameters, "OdomViso2");
 }
 
@@ -160,10 +163,10 @@ Transform OdometryViso2::computeTransform(
 	if(viso2_ == 0)
 	{
 		VisualOdometryStereo::parameters params;
-		params.base      = data.stereoCameraModel().baseline();
-		params.calib.cu  = data.stereoCameraModel().left().cx();
-		params.calib.cv  = data.stereoCameraModel().left().cy();
-		params.calib.f   = data.stereoCameraModel().left().fx();
+		params.base      = params.match.base = data.stereoCameraModel().baseline();
+		params.calib.cu  = params.match.cu = data.stereoCameraModel().left().cx();
+		params.calib.cv  = params.match.cv = data.stereoCameraModel().left().cy();
+		params.calib.f   = params.match.f = data.stereoCameraModel().left().fx();
 
 		Parameters::parse(viso2Parameters_, Parameters::kOdomViso2RansacIters(), params.ransac_iters);
 		Parameters::parse(viso2Parameters_, Parameters::kOdomViso2InlierThreshold(), params.inlier_threshold);
@@ -273,11 +276,11 @@ Transform OdometryViso2::computeTransform(
 	{
 		info->type = (int)kTypeViso2;
 		info->keyFrameAdded = !keep_reference_frame_;
-		info->matches = viso2_->getNumberOfMatches();
-		info->inliers = viso2_->getNumberOfInliers();
+		info->reg.matches = viso2_->getNumberOfMatches();
+		info->reg.inliers = viso2_->getNumberOfInliers();
 		if(covariance.cols == 6 && covariance.rows == 6 && covariance.type() == CV_64FC1)
 		{
-			info->covariance = covariance;
+			info->reg.covariance = covariance;
 		}
 
 		if(this->isInfoDataFilled())
