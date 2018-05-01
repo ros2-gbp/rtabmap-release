@@ -85,6 +85,7 @@ void RtabmapThread::clearBufferedData()
 	_dataMutex.lock();
 	{
 		_dataBuffer.clear();
+		_newMapEvents.clear();
 		lastPose_.setIdentity();
 		covariance_ = cv::Mat();
 		_previousStamp = 0;
@@ -271,15 +272,6 @@ void RtabmapThread::mainLoop()
 	case kStateTriggeringMap:
 		_rtabmap->triggerNewMap();
 		break;
-	case kStateAddingUserData:
-		_userDataMutex.lock();
-		{
-			userData = _userData;
-			_userData = cv::Mat();
-		}
-		_userDataMutex.unlock();
-		_rtabmap->setUserData(0, userData);
-		break;
 	case kStateSettingGoal:
 		id = atoi(parameters.at("id").c_str());
 		if(id == 0 && !parameters.at("label").empty() && _rtabmap->getMemory())
@@ -336,7 +328,18 @@ bool RtabmapThread::handleEvent(UEvent* event)
 					if (!e->info().odomPose.isNull() || (_rtabmap->getMemory() && !_rtabmap->getMemory()->isIncremental()))
 					{
 						OdometryInfo infoCov;
-						infoCov.covariance = e->info().odomCovariance;
+						infoCov.reg.covariance = e->info().odomCovariance;
+						if(e->info().odomVelocity.size() == 6)
+						{
+							infoCov.transform = Transform(
+									e->info().odomVelocity[0],
+									e->info().odomVelocity[1],
+									e->info().odomVelocity[2],
+									e->info().odomVelocity[3],
+									e->info().odomVelocity[4],
+									e->info().odomVelocity[5]);
+							infoCov.interval = 1.0;
+						}
 						this->addData(OdometryEvent(e->data(), e->info().odomPose, infoCov));
 					}
 					else
@@ -347,7 +350,7 @@ bool RtabmapThread::handleEvent(UEvent* event)
 				else
 				{ 
 					OdometryInfo infoCov;
-					infoCov.covariance = e->info().odomCovariance;
+					infoCov.reg.covariance = e->info().odomCovariance;
 					this->addData(OdometryEvent(e->data(), e->info().odomPose, infoCov));
 				}
 				
@@ -385,10 +388,6 @@ bool RtabmapThread::handleEvent(UEvent* event)
 					UWARN("New user data received before the last one was processed... replacing "
 						"user data with this new one. Note that UserDataEvent should be used only "
 						"if the rate of UserDataEvent is lower than RTAB-Map's detection rate (%f Hz).", _rate);
-				}
-				else
-				{
-					pushNewState(kStateAddingUserData);
 				}
 			}
 		}
@@ -562,7 +561,7 @@ void RtabmapThread::addData(const OdometryEvent & odomEvent)
 		bool ignoreFrame = false;
 		if(_rate>0.0f)
 		{
-			if((_previousStamp>0.0 && odomEvent.data().stamp()>_previousStamp && odomEvent.data().stamp() - _previousStamp < 1.0f/_rate) ||
+			if((_previousStamp>=0.0 && odomEvent.data().stamp()>_previousStamp && odomEvent.data().stamp() - _previousStamp < 1.0f/_rate) ||
 				((_previousStamp<=0.0 || odomEvent.data().stamp()<=_previousStamp) && _frameRateTimer->getElapsedTime() < 1.0f/_rate))
 			{
 				ignoreFrame = true;
@@ -570,28 +569,28 @@ void RtabmapThread::addData(const OdometryEvent & odomEvent)
 		}
 		if(!lastPose_.isIdentity() &&
 						(odomEvent.pose().isIdentity() ||
-						odomEvent.info().covariance.at<double>(0,0)>=9999))
+						odomEvent.info().reg.covariance.at<double>(0,0)>=9999))
 		{
 			if(odomEvent.pose().isIdentity())
 			{
-				UWARN("Odometry is reset (identity pose detected). Increment map id!");
+				UWARN("Odometry is reset (identity pose detected). Increment map id! (stamp=%fs)", odomEvent.data().stamp());
 			}
 			else
 			{
-				UWARN("Odometry is reset (high variance (%f >=9999 detected). Increment map id!", odomEvent.info().covariance.at<double>(0,0));
+				UWARN("Odometry is reset (high variance (%f >=9999 detected, stamp=%fs). Increment map id!", odomEvent.info().reg.covariance.at<double>(0,0), odomEvent.data().stamp());
 			}
-			pushNewState(kStateTriggeringMap);
+			_newMapEvents.push_back(odomEvent.data().stamp());
 			covariance_ = cv::Mat();
 		}
 
-		if(uIsFinite(odomEvent.info().covariance.at<double>(0,0)) &&
-			odomEvent.info().covariance.at<double>(0,0) != 1.0 &&
-			odomEvent.info().covariance.at<double>(0,0)>0.0)
+		if(uIsFinite(odomEvent.info().reg.covariance.at<double>(0,0)) &&
+			odomEvent.info().reg.covariance.at<double>(0,0) != 1.0 &&
+			odomEvent.info().reg.covariance.at<double>(0,0)>0.0)
 		{
 			// Use largest covariance error (to be independent of the odometry frame rate)
-			if(covariance_.empty() || odomEvent.info().covariance.at<double>(0,0) > covariance_.at<double>(0,0))
+			if(covariance_.empty() || odomEvent.info().reg.covariance.at<double>(0,0) > covariance_.at<double>(0,0))
 			{
-				covariance_ = odomEvent.info().covariance;
+				covariance_ = odomEvent.info().reg.covariance;
 			}
 		}
 
@@ -614,7 +613,7 @@ void RtabmapThread::addData(const OdometryEvent & odomEvent)
 			covariance_ = cv::Mat::eye(6,6,CV_64FC1);
 		}
 		OdometryInfo odomInfo = odomEvent.info().copyWithoutData();
-		odomInfo.covariance = covariance_;
+		odomInfo.reg.covariance = covariance_;
 		if(ignoreFrame)
 		{
 			// set negative id so rtabmap will detect it as an intermediate node
@@ -656,17 +655,41 @@ bool RtabmapThread::getData(OdometryEvent & data)
 	ULOGGER_INFO("wake-up");
 
 	bool dataFilled = false;
-
+	bool triggerNewMap = false;
 	_dataMutex.lock();
 	{
 		if(_state.empty() && !_dataBuffer.empty())
 		{
 			data = _dataBuffer.front();
 			_dataBuffer.pop_front();
+
+			_userDataMutex.lock();
+			{
+				if(!_userData.empty())
+				{
+					data.data().setUserData(_userData);
+					_userData = cv::Mat();
+				}
+			}
+			_userDataMutex.unlock();
+
+			while(_newMapEvents.size() && _newMapEvents.front() <= data.data().stamp())
+			{
+				UWARN("Triggering new map %f<=%f...", _newMapEvents.front() , data.data().stamp());
+				triggerNewMap = true;
+				_newMapEvents.pop_front();
+			}
+
 			dataFilled = true;
 		}
 	}
 	_dataMutex.unlock();
+
+	if(triggerNewMap)
+	{
+		_rtabmap->triggerNewMap();
+	}
+
 	return dataFilled;
 }
 

@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2017, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -25,64 +25,32 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifndef EDITDEPTHAREA_H
-#define EDITDEPTHAREA_H
+#ifndef RECOVERY_H_
+#define RECOVERY_H_
 
-#include <QColor>
-#include <QImage>
-#include <QPoint>
-#include <QWidget>
-#include <opencv2/opencv.hpp>
+#include "rtabmap/core/RtabmapExp.h" // DLL export/import defines
 
-class QMenu;
-class QAction;
+#include <string>
 
 namespace rtabmap {
 
-class EditDepthArea : public QWidget
-{
-    Q_OBJECT
+class ProgressState;
 
-public:
-    EditDepthArea(QWidget *parent = 0);
-
-    void setImage(const cv::Mat & depth, const cv::Mat & rgb = cv::Mat());
-    cv::Mat getModifiedImage() const;
-    bool isModified() const {return modified_;}
-
-    void setPenWidth(int newWidth);
-    int penWidth() const { return myPenWidth_; }
-
-public slots:
-    void resetChanges();
-
-protected:
-    void mousePressEvent(QMouseEvent *event) override;
-    void mouseMoveEvent(QMouseEvent *event) override;
-    void mouseReleaseEvent(QMouseEvent *event) override;
-    void paintEvent(QPaintEvent *event) override;
-    void resizeEvent(QResizeEvent *event) override;
-    void contextMenuEvent(QContextMenuEvent * e) override;
-
-private:
-    void drawLineTo(const QPoint &endPoint);
-    void computeScaleOffsets(const QRect & targetRect, float & scale, float & offsetX, float & offsetY) const;
-
-    bool modified_;
-    bool scribbling_;
-    int myPenWidth_;
-    QImage imageRGB_;
-    QImage image_;
-    cv::Mat originalImage_;
-    QPoint lastPoint_;
-
-    QMenu * menu_;
-    QAction * showRGB_;
-    QAction * removeCluster_;
-    QAction * resetChanges_;
-    QAction * setPenWidth_;
-};
+/**
+ * Return true on success. The database is
+ * renamed to "*.backup.db" before recovering.
+ * @param corruptedDatabase database to recover
+ * @param keepCorruptedDatabase if false and on recovery success, the backup database is removed
+ * @param errorMsg error message if the function returns false
+ * @param progressState A ProgressState object used to get status of the recovery process
+ */
+bool RTABMAP_EXP databaseRecovery(
+		const std::string & corruptedDatabase,
+		bool keepCorruptedDatabase = true,
+		std::string * errorMsg = 0,
+		ProgressState * progressState = 0);
 
 }
 
-#endif
+
+#endif /* RECOVERY_H_ */

@@ -45,14 +45,34 @@ typename pcl::PointCloud<PointT>::Ptr OccupancyGrid::segmentCloud(
 		pcl::IndicesPtr * flatObstacles) const
 {
 	typename pcl::PointCloud<PointT>::Ptr cloud(new pcl::PointCloud<PointT>);
-
-	// voxelize to grid cell size
-	cloud = util3d::voxelize(cloudIn, indicesIn, cellSize_);
 	pcl::IndicesPtr indices(new std::vector<int>);
-	indices->resize(cloud->size());
-	for(unsigned int i=0; i<indices->size(); ++i)
+
+	if(preVoxelFiltering_)
 	{
-		indices->at(i) = i;
+		// voxelize to grid cell size
+		cloud = util3d::voxelize(cloudIn, indicesIn, cellSize_);
+
+		indices->resize(cloud->size());
+		for(unsigned int i=0; i<indices->size(); ++i)
+		{
+			indices->at(i) = i;
+		}
+	}
+	else
+	{
+		cloud = cloudIn;
+		if(indicesIn->empty() && cloud->is_dense)
+		{
+			indices->resize(cloud->size());
+			for(unsigned int i=0; i<indices->size(); ++i)
+			{
+				indices->at(i) = i;
+			}
+		}
+		else
+		{
+			indices = indicesIn;
+		}
 	}
 
 	// add pose rotation without yaw
