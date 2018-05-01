@@ -375,7 +375,7 @@ public:
      * @param params
      * @return
      */
-    int knnSearch(const Matrix<ElementType>& queries,
+    /*int knnSearch(const Matrix<ElementType>& queries,
                                  Matrix<int>& indices,
                                  Matrix<DistanceType>& dists,
                                  size_t knn,
@@ -391,7 +391,7 @@ public:
     	}
         delete[] indices_.ptr();
     	return result;
-    }
+    }*/
 
 
     /**
@@ -402,7 +402,7 @@ public:
      * @param[in] knn Number of nearest neighbors to return
      * @param[in] params Search parameters
      */
-    int knnSearch(const Matrix<ElementType>& queries,
+    virtual int knnSearch(const Matrix<ElementType>& queries,
 					std::vector< std::vector<size_t> >& indices,
 					std::vector<std::vector<DistanceType> >& dists,
     				size_t knn,
@@ -498,7 +498,7 @@ public:
      * @param[in] params Search parameters
      * @return Number of neighbors found
      */
-    int radiusSearch(const Matrix<ElementType>& queries,
+    virtual int radiusSearch(const Matrix<ElementType>& queries,
     		Matrix<size_t>& indices,
     		Matrix<DistanceType>& dists,
     		float radius,
@@ -608,7 +608,7 @@ public:
      * @param[in] params Search parameters
      * @return Number of neighbors found
      */
-    int radiusSearch(const Matrix<ElementType>& queries,
+    virtual int radiusSearch(const Matrix<ElementType>& queries,
     		std::vector< std::vector<size_t> >& indices,
     		std::vector<std::vector<DistanceType> >& dists,
     		float radius,

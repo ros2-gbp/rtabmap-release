@@ -83,8 +83,6 @@ void segmentObstaclesFromGround(
 				normalKSearch,
 				viewPoint);
 
-		UDEBUG("cloud=%d, indices=%d flatSurfaces=%d", (int)cloud->size(), (int)indices->size(), (int)flatSurfaces->size());
-
 		if(segmentFlatObstacles && flatSurfaces->size())
 		{
 			int biggestFlatSurfaceIndex;
@@ -95,7 +93,6 @@ void segmentObstaclesFromGround(
 					minClusterSize,
 					std::numeric_limits<int>::max(),
 					&biggestFlatSurfaceIndex);
-			UDEBUG("clusteredFlatSurfaces=%d", (int)clusteredFlatSurfaces.size());
 
 			// cluster all surfaces for which the centroid is in the Z-range of the bigger surface
 			if(clusteredFlatSurfaces.size())
@@ -104,7 +101,7 @@ void segmentObstaclesFromGround(
 				Eigen::Vector4f min,max;
 				pcl::getMinMax3D(*cloud, *clusteredFlatSurfaces.at(biggestFlatSurfaceIndex), min, max);
 
-				if(maxGroundHeight <= 0 || min[2] < maxGroundHeight)
+				if(maxGroundHeight == 0.0f || min[2] < maxGroundHeight)
 				{
 					for(unsigned int i=0; i<clusteredFlatSurfaces.size(); ++i)
 					{
@@ -112,8 +109,7 @@ void segmentObstaclesFromGround(
 						{
 							Eigen::Vector4f centroid(0,0,0,1);
 							pcl::compute3DCentroid(*cloud, *clusteredFlatSurfaces.at(i), centroid);
-							if(centroid[2] >= min[2]-0.01 &&
-							  (centroid[2] <= max[2]+0.01 || (maxGroundHeight>0 && centroid[2] <= maxGroundHeight+0.01))) // epsilon
+							if(maxGroundHeight==0.0f || centroid[2] <= maxGroundHeight || centroid[2] <= max[2]) // epsilon
 							{
 								ground = util3d::concatenate(ground, clusteredFlatSurfaces.at(i));
 							}
@@ -140,8 +136,6 @@ void segmentObstaclesFromGround(
 			ground = flatSurfaces;
 		}
 
-		UDEBUG("ground=%d", (int)ground->size());
-
 		if(ground->size() != cloud->size())
 		{
 			// Remove ground
@@ -154,7 +148,7 @@ void segmentObstaclesFromGround(
 			pcl::IndicesPtr otherStuffIndices = util3d::extractIndices(cloud, notObstacles, true);
 
 			// If ground height is set, remove obstacles under it
-			if(maxGroundHeight > 0.0f)
+			if(maxGroundHeight != 0.0f)
 			{
 				otherStuffIndices = rtabmap::util3d::passThrough(cloud, otherStuffIndices, "z", maxGroundHeight, std::numeric_limits<float>::max());
 			}
@@ -255,8 +249,9 @@ void occupancy2DFromGroundObstacles(
 		ground = cv::Mat(1, (int)groundCloudProjected->size(), CV_32FC2);
 		for(unsigned int i=0;i<groundCloudProjected->size(); ++i)
 		{
-			ground.at<cv::Vec2f>(i)[0] = groundCloudProjected->at(i).x;
-			ground.at<cv::Vec2f>(i)[1] = groundCloudProjected->at(i).y;
+			cv::Vec2f * ptr = ground.ptr<cv::Vec2f>();
+			ptr[i][0] = groundCloudProjected->at(i).x;
+			ptr[i][1] = groundCloudProjected->at(i).y;
 		}
 	}
 
@@ -272,8 +267,9 @@ void occupancy2DFromGroundObstacles(
 		obstacles = cv::Mat(1, (int)obstaclesCloudProjected->size(), CV_32FC2);
 		for(unsigned int i=0;i<obstaclesCloudProjected->size(); ++i)
 		{
-			obstacles.at<cv::Vec2f>(i)[0] = obstaclesCloudProjected->at(i).x;
-			obstacles.at<cv::Vec2f>(i)[1] = obstaclesCloudProjected->at(i).y;
+			cv::Vec2f * ptr = obstacles.ptr<cv::Vec2f>();
+			ptr[i][0] = obstaclesCloudProjected->at(i).x;
+			ptr[i][1] = obstaclesCloudProjected->at(i).y;
 		}
 	}
 }

@@ -25,8 +25,8 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifndef DATARECORDER_H_
-#define DATARECORDER_H_
+#ifndef RTABMAP_DATARECORDER_H_
+#define RTABMAP_DATARECORDER_H_
 
 #include "rtabmap/gui/RtabmapGuiExp.h" // DLL export/import defines
 
@@ -61,7 +61,7 @@ public slots:
 	void showImage(const cv::Mat & image, const cv::Mat & depth);
 protected:
 	virtual void closeEvent(QCloseEvent* event);
-	void handleEvent(UEvent * event);
+	bool handleEvent(UEvent * event);
 
 private:
 	UMutex memoryMutex_;

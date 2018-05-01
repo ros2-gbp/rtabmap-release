@@ -41,7 +41,7 @@ class RTABMAP_EXP RegistrationIcp : public Registration
 public:
 	// take ownership of child
 	RegistrationIcp(const ParametersMap & parameters = ParametersMap(), Registration * child = 0);
-	virtual ~RegistrationIcp() {}
+	virtual ~RegistrationIcp();
 
 	virtual void parseParameters(const ParametersMap & parameters);
 
@@ -52,6 +52,7 @@ protected:
 			Transform guess,
 			RegistrationInfo & info) const;
 	virtual bool isScanRequiredImpl() const {return true;}
+	virtual bool canUseGuessImpl() const {return true;}
 	virtual float getMinGeometryCorrespondencesRatioImpl() const {return _correspondenceRatio;}
 
 private:
@@ -64,7 +65,15 @@ private:
 	float _epsilon;
 	float _correspondenceRatio;
 	bool _pointToPlane;
-	int _pointToPlaneNormalNeighbors;
+	int _pointToPlaneK;
+	float _pointToPlaneRadius;
+	float _pointToPlaneMinComplexity;
+	bool _libpointmatcher;
+	std::string _libpointmatcherConfig;
+	int _libpointmatcherKnn;
+	float _libpointmatcherEpsilon;
+	float _libpointmatcherOutlierRatio;
+	void * _libpointmatcherICP;
 };
 
 }

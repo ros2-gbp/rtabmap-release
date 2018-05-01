@@ -38,7 +38,8 @@ FlannIndex::FlannIndex():
 		featuresType_(0),
 		featuresDim_(0),
 		isLSH_(false),
-		useDistanceL1_(false)
+		useDistanceL1_(false),
+		rebalancingFactor_(2.0f)
 {
 }
 FlannIndex::~FlannIndex()
@@ -134,7 +135,8 @@ unsigned int FlannIndex::memoryUsed() const
 
 void FlannIndex::buildLinearIndex(
 		const cv::Mat & features,
-		bool useDistanceL1)
+		bool useDistanceL1,
+		float rebalancingFactor)
 {
 	this->release();
 	UASSERT(index_ == 0);
@@ -142,6 +144,7 @@ void FlannIndex::buildLinearIndex(
 	featuresType_ = features.type();
 	featuresDim_ = features.cols;
 	useDistanceL1_ = useDistanceL1;
+	rebalancingFactor_ = rebalancingFactor;
 
 	rtflann::LinearIndexParams params;
 
@@ -180,7 +183,8 @@ void FlannIndex::buildLinearIndex(
 void FlannIndex::buildKDTreeIndex(
 		const cv::Mat & features,
 		int trees,
-		bool useDistanceL1)
+		bool useDistanceL1,
+		float rebalancingFactor)
 {
 	this->release();
 	UASSERT(index_ == 0);
@@ -188,6 +192,7 @@ void FlannIndex::buildKDTreeIndex(
 	featuresType_ = features.type();
 	featuresDim_ = features.cols;
 	useDistanceL1_ = useDistanceL1;
+	rebalancingFactor_ = rebalancingFactor;
 
 	rtflann::KDTreeIndexParams params(trees);
 
@@ -227,7 +232,8 @@ void FlannIndex::buildKDTreeSingleIndex(
 		const cv::Mat & features,
 		int leafMaxSize,
 		bool reorder,
-		bool useDistanceL1)
+		bool useDistanceL1,
+		float rebalancingFactor)
 {
 	this->release();
 	UASSERT(index_ == 0);
@@ -235,6 +241,7 @@ void FlannIndex::buildKDTreeSingleIndex(
 	featuresType_ = features.type();
 	featuresDim_ = features.cols;
 	useDistanceL1_ = useDistanceL1;
+	rebalancingFactor_ = rebalancingFactor;
 
 	rtflann::KDTreeSingleIndexParams params(leafMaxSize, reorder);
 
@@ -274,7 +281,8 @@ void FlannIndex::buildLSHIndex(
 		const cv::Mat & features,
 		unsigned int table_number,
 		unsigned int key_size,
-		unsigned int multi_probe_level)
+		unsigned int multi_probe_level,
+		float rebalancingFactor)
 {
 	this->release();
 	UASSERT(index_ == 0);
@@ -282,6 +290,7 @@ void FlannIndex::buildLSHIndex(
 	featuresType_ = features.type();
 	featuresDim_ = features.cols;
 	useDistanceL1_ = true;
+	rebalancingFactor_ = rebalancingFactor;
 
 	rtflann::Matrix<unsigned char> dataset(features.data, features.rows, features.cols);
 	index_ = new rtflann::Index<rtflann::Hamming<unsigned char> >(dataset, rtflann::LshIndexParams(12, 20, 2));
@@ -315,9 +324,10 @@ unsigned int FlannIndex::addPoints(const cv::Mat & features)
 		rtflann::Index<rtflann::Hamming<unsigned char> > * index = (rtflann::Index<rtflann::Hamming<unsigned char> >*)index_;
 		removedPts = index->removedCount();
 		index->addPoints(points, 0);
-		// Rebuild index if it doubles in size
-		if(index->sizeAtBuild() * 2 < index->size()+index->removedCount())
+		// Rebuild index if it is now X times in size
+		if(rebalancingFactor_ > 1.0f && size_t(float(index->sizeAtBuild()) * rebalancingFactor_) < index->size()+index->removedCount())
 		{
+			UDEBUG("Rebuilding FLANN index: %d -> %d", (int)index->sizeAtBuild(), (int)(index->size()+index->removedCount()));
 			index->buildIndex();
 		}
 		// if no more removed points, the index has been rebuilt
@@ -332,8 +342,9 @@ unsigned int FlannIndex::addPoints(const cv::Mat & features)
 			removedPts = index->removedCount();
 			index->addPoints(points, 0);
 			// Rebuild index if it doubles in size
-			if(index->sizeAtBuild() * 2 < index->size()+index->removedCount())
+			if(rebalancingFactor_ > 1.0f && size_t(float(index->sizeAtBuild()) * rebalancingFactor_) < index->size()+index->removedCount())
 			{
+				UDEBUG("Rebuilding FLANN index: %d -> %d", (int)index->sizeAtBuild(), (int)(index->size()+index->removedCount()));
 				index->buildIndex();
 			}
 			// if no more removed points, the index has been rebuilt
@@ -345,8 +356,9 @@ unsigned int FlannIndex::addPoints(const cv::Mat & features)
 			removedPts = index->removedCount();
 			index->addPoints(points, 0);
 			// Rebuild index if it doubles in size
-			if(index->sizeAtBuild() * 2 < index->size()+index->removedCount())
+			if(rebalancingFactor_ > 1.0f && size_t(float(index->sizeAtBuild()) * rebalancingFactor_) < index->size()+index->removedCount())
 			{
+				UDEBUG("Rebuilding FLANN index: %d -> %d", (int)index->sizeAtBuild(), (int)(index->size()+index->removedCount()));
 				index->buildIndex();
 			}
 			// if no more removed points, the index has been rebuilt
@@ -358,8 +370,9 @@ unsigned int FlannIndex::addPoints(const cv::Mat & features)
 			removedPts = index->removedCount();
 			index->addPoints(points, 0);
 			// Rebuild index if it doubles in size
-			if(index->sizeAtBuild() * 2 < index->size()+index->removedCount())
+			if(rebalancingFactor_ > 1.0f && size_t(float(index->sizeAtBuild()) * rebalancingFactor_) < index->size()+index->removedCount())
 			{
+				UDEBUG("Rebuilding FLANN index: %d -> %d", (int)index->sizeAtBuild(), (int)(index->size()+index->removedCount()));
 				index->buildIndex();
 			}
 			// if no more removed points, the index has been rebuilt
@@ -432,10 +445,10 @@ void FlannIndex::knnSearch(
 		UERROR("Flann index not yet created!");
 		return;
 	}
-	indices.create(query.rows, knn, CV_32S);
+	indices.create(query.rows, knn, sizeof(size_t)==8?CV_64F:CV_32S);
 	dists.create(query.rows, knn, featuresType_ == CV_8UC1?CV_32S:CV_32F);
 
-	rtflann::Matrix<int> indicesF((int*)indices.data, indices.rows, indices.cols);
+	rtflann::Matrix<size_t> indicesF((size_t*)indices.data, indices.rows, indices.cols);
 
 	rtflann::SearchParams params = rtflann::SearchParams(checks, eps, sorted);
 
