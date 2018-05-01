@@ -59,6 +59,7 @@ public:
 	float timeCapture;
 	float timeDisparity;
 	float timeMirroring;
+	float timeStereoExposureCompensation;
 	float timeImageDecimation;
 	float timeScanFromDepth;
 	float timeUndistortDepth;
@@ -66,6 +67,7 @@ public:
 	float timeTotal;
 	Transform odomPose;
 	cv::Mat odomCovariance;
+	std::vector<float> odomVelocity;
 };
 
 } // namespace rtabmap

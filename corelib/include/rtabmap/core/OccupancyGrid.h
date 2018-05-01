@@ -42,11 +42,14 @@ class RTABMAP_EXP OccupancyGrid
 public:
 	OccupancyGrid(const ParametersMap & parameters = ParametersMap());
 	void parseParameters(const ParametersMap & parameters);
+	void setMap(const cv::Mat & map, float xMin, float yMin, float cellSize, const std::map<int, Transform> & poses);
 	void setCellSize(float cellSize);
 	float getCellSize() const {return cellSize_;}
+	void setCloudAssembling(bool enabled);
 	float getMinMapSize() const {return minMapSize_;}
-	bool isGridFromDepth() const {return occupancyFromCloud_;}
+	bool isGridFromDepth() const {return occupancyFromDepth_;}
 	bool isFullUpdate() const {return fullUpdate_;}
+	float getUpdateError() const {return updateError_;}
 	bool isMapFrameProjection() const {return projMapFrame_;}
 	const std::map<int, Transform> & addedNodes() const {return addedNodes_;}
 	int cacheSize() const {return (int)cache_.size();}
@@ -63,17 +66,30 @@ public:
 
 	void createLocalMap(
 			const Signature & node,
-			cv::Mat & ground,
-			cv::Mat & obstacles,
+			cv::Mat & groundCells,
+			cv::Mat & obstacleCells,
+			cv::Mat & emptyCells,
 			cv::Point3f & viewPoint) const;
+
+	void createLocalMap(
+			const LaserScan & cloud,
+			const Transform & pose,
+			cv::Mat & groundCells,
+			cv::Mat & obstacleCells,
+			cv::Mat & emptyCells,
+			cv::Point3f & viewPointInOut) const;
 
 	void clear();
 	void addToCache(
 			int nodeId,
 			const cv::Mat & ground,
-			const cv::Mat & obstacles);
+			const cv::Mat & obstacles,
+			const cv::Mat & empty);
 	void update(const std::map<int, Transform> & poses);
-	const cv::Mat getMap(float & xMin, float & yMin) const;
+	cv::Mat getMap(float & xMin, float & yMin) const;
+	const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & getMapGround() const {return assembledGround_;}
+	const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & getMapObstacles() const {return assembledObstacles_;}
+	const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & getMapEmptyCells() const {return assembledEmptyCells_;}
 
 private:
 	ParametersMap parameters_;
@@ -86,7 +102,8 @@ private:
 	float footprintHeight_;
 	int scanDecimation_;
 	float cellSize_;
-	bool occupancyFromCloud_;
+	bool preVoxelFiltering_;
+	bool occupancyFromDepth_;
 	bool projMapFrame_;
 	float maxObstacleHeight_;
 	int normalKSearch_;
@@ -102,20 +119,25 @@ private:
 	float noiseFilteringRadius_;
 	int noiseFilteringMinNeighbors_;
 	bool scan2dUnknownSpaceFilled_;
-	double scan2dMaxUnknownSpaceFilledRange_;
-	bool projRayTracing_;
+	bool rayTracing_;
 	bool fullUpdate_;
 	float minMapSize_;
 	bool erode_;
 	float footprintRadius_;
+	float updateError_;
 
-	std::map<int, std::pair<cv::Mat, cv::Mat> > cache_;
+	std::map<int, std::pair<std::pair<cv::Mat, cv::Mat>, cv::Mat> > cache_; //<node id, < <ground, obstacles>, empty> >
 	cv::Mat map_;
 	cv::Mat mapInfo_;
 	std::map<int, std::pair<int, int> > cellCount_; //<node Id, cells>
 	float xMin_;
 	float yMin_;
 	std::map<int, Transform> addedNodes_;
+
+	bool cloudAssembling_;
+	pcl::PointCloud<pcl::PointXYZRGB>::Ptr assembledGround_;
+	pcl::PointCloud<pcl::PointXYZRGB>::Ptr assembledObstacles_;
+	pcl::PointCloud<pcl::PointXYZRGB>::Ptr assembledEmptyCells_;
 };
 
 }

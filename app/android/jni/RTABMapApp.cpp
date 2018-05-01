@@ -93,12 +93,13 @@ rtabmap::ParametersMap RTABMapApp::getRtabmapParameters()
 	parameters.insert(rtabmap::ParametersPair(rtabmap::Parameters::kKpParallelized(), std::string("false")));
 	parameters.insert(rtabmap::ParametersPair(rtabmap::Parameters::kKpMaxDepth(), std::string("10"))); // to avoid extracting features in invalid depth (as we compute transformation directly from the words)
 	parameters.insert(rtabmap::ParametersPair(rtabmap::Parameters::kRGBDOptimizeFromGraphEnd(), std::string("true")));
-	parameters.insert(rtabmap::ParametersPair(rtabmap::Parameters::kDbSqlite3InMemory(), std::string("true")));
 	parameters.insert(rtabmap::ParametersPair(rtabmap::Parameters::kVisMinInliers(), std::string("25")));
 	parameters.insert(rtabmap::ParametersPair(rtabmap::Parameters::kVisEstimationType(), std::string("0"))); // 0=3D-3D 1=PnP
-	parameters.insert(rtabmap::ParametersPair(rtabmap::Parameters::kRGBDOptimizeMaxError(), std::string("0.1")));
+	parameters.insert(rtabmap::ParametersPair(rtabmap::Parameters::kRGBDOptimizeMaxError(), std::string("1")));
 	parameters.insert(rtabmap::ParametersPair(rtabmap::Parameters::kRGBDProximityPathMaxNeighbors(), std::string("0"))); // disable scan matching to merged nodes
 	parameters.insert(rtabmap::ParametersPair(rtabmap::Parameters::kRGBDProximityBySpace(), std::string("false"))); // just keep loop closure detection
+	parameters.insert(rtabmap::ParametersPair(rtabmap::Parameters::kRGBDLinearUpdate(), std::string("0.05")));
+	parameters.insert(rtabmap::ParametersPair(rtabmap::Parameters::kRGBDAngularUpdate(), std::string("0.05")));
 
 	if(parameters.find(rtabmap::Parameters::kOptimizerStrategy()) != parameters.end())
 	{
@@ -183,11 +184,12 @@ RTABMapApp::RTABMapApp() :
 		lastDrawnCloudsCount_(0),
 		renderingTime_(0.0f),
 		lastPostRenderEventTime_(0.0),
-		processMemoryUsedBytes(0),
-		processGPUMemoryUsedBytes(0),
+		lastPoseEventTime_(0.0),
 		visualizingMesh_(false),
 		exportedMeshUpdated_(false),
 		optMesh_(new pcl::TextureMesh),
+		optRefId_(0),
+		optRefPose_(0),
 		mapToOdom_(rtabmap::Transform::getIdentity())
 
 {
@@ -195,28 +197,45 @@ RTABMapApp::RTABMapApp() :
 }
 
 RTABMapApp::~RTABMapApp() {
-  if(camera_)
-  {
-	  delete camera_;
-  }
-  if(rtabmapThread_)
-  {
-	  rtabmapThread_->close(false);
-	  delete rtabmapThread_;
-  }
-  if(logHandler_)
-  {
-	  delete logHandler_;
-  }
-  boost::mutex::scoped_lock  lock(rtabmapMutex_);
-  if(rtabmapEvents_.size())
-  {
-	  for(std::list<rtabmap::RtabmapEvent*>::iterator iter=rtabmapEvents_.begin(); iter!=rtabmapEvents_.end(); ++iter)
-	  {
-		  delete *iter;
-	  }
-  }
-  rtabmapEvents_.clear();
+	if(camera_)
+	{
+		delete camera_;
+	}
+	if(rtabmapThread_)
+	{
+		rtabmapThread_->close(false);
+		delete rtabmapThread_;
+	}
+	if(logHandler_)
+	{
+		delete logHandler_;
+	}
+	if(optRefPose_)
+	{
+		delete optRefPose_;
+	}
+	{
+		boost::mutex::scoped_lock  lock(rtabmapMutex_);
+		if(rtabmapEvents_.size())
+		{
+			for(std::list<rtabmap::RtabmapEvent*>::iterator iter=rtabmapEvents_.begin(); iter!=rtabmapEvents_.end(); ++iter)
+			{
+				delete *iter;
+			}
+		}
+		rtabmapEvents_.clear();
+	}
+	{
+		boost::mutex::scoped_lock  lock(visLocalizationMutex_);
+		if(visLocalizationEvents_.size())
+		{
+			for(std::list<rtabmap::RtabmapEvent*>::iterator iter=visLocalizationEvents_.begin(); iter!=visLocalizationEvents_.end(); ++iter)
+			{
+				delete *iter;
+			}
+		}
+		visLocalizationEvents_.clear();
+	}
 }
 
 void RTABMapApp::onCreate(JNIEnv* env, jobject caller_activity)
@@ -236,8 +255,7 @@ void RTABMapApp::onCreate(JNIEnv* env, jobject caller_activity)
 	lastDrawnCloudsCount_ = 0;
 	renderingTime_ = 0.0f;
 	lastPostRenderEventTime_ = 0.0;
-	processMemoryUsedBytes = 0;
-	processGPUMemoryUsedBytes = 0;
+	lastPoseEventTime_ = 0.0;
 	bufferedStatsData_.clear();
 	progressionStatus_.setJavaObjects(jvm, RTABMapActivity);
 	main_scene_.setBackgroundColor(backgroundColor_, backgroundColor_, backgroundColor_);
@@ -279,6 +297,13 @@ int RTABMapApp::openDatabase(const std::string & databasePath, bool databaseInMe
 	this->unregisterFromEventsManager(); // to ignore published init events when closing rtabmap
 	status_.first = rtabmap::RtabmapEventInit::kInitializing;
 	rtabmapMutex_.lock();
+	if(rtabmapEvents_.size())
+	{
+		for(std::list<rtabmap::RtabmapEvent*>::iterator iter=rtabmapEvents_.begin(); iter!=rtabmapEvents_.end(); ++iter)
+		{
+			delete *iter;
+		}
+	}
 	rtabmapEvents_.clear();
 	openingDatabase_ = true;
 	if(rtabmapThread_)
@@ -296,6 +321,12 @@ int RTABMapApp::openDatabase(const std::string & databasePath, bool databaseInMe
 	// Open visualization while we load (if there is an optimized mesh saved in database)
 	optMesh_.reset(new pcl::TextureMesh);
 	optTexture_ = cv::Mat();
+	optRefId_ = 0;
+	if(optRefPose_)
+	{
+		delete optRefPose_;
+		optRefPose_ = 0;
+	}
 	cv::Mat cloudMat;
 	std::vector<std::vector<std::vector<unsigned int> > > polygons;
 #if PCL_VERSION_COMPARE(>=, 1, 8, 0)
@@ -304,14 +335,13 @@ int RTABMapApp::openDatabase(const std::string & databasePath, bool databaseInMe
 	std::vector<std::vector<Eigen::Vector2f> > texCoords;
 #endif
 	cv::Mat textures;
-	std::map<int, rtabmap::Transform> optPoses;
 	if(!databaseSource.empty())
 	{
 		UEventsManager::post(new rtabmap::RtabmapEventInit(rtabmap::RtabmapEventInit::kInfo, "Loading optimized cloud/mesh..."));
 		rtabmap::DBDriver * driver = rtabmap::DBDriver::create();
 		if(driver->openConnection(databaseSource))
 		{
-			cloudMat = driver->loadOptimizedMesh(&optPoses, &polygons, &texCoords, &textures);
+			cloudMat = driver->loadOptimizedMesh(&polygons, &texCoords, &textures);
 			if(!cloudMat.empty())
 			{
 				LOGI("Open: Found optimized mesh! Visualizing it.");
@@ -403,7 +433,7 @@ int RTABMapApp::openDatabase(const std::string & databasePath, bool databaseInMe
 	}
 
 	{
-		LOGI("Creating the meshes (%d)....", poses.size());
+		LOGI("Creating the meshes (%d)....", (int)poses.size());
 		boost::mutex::scoped_lock  lock(meshesMutex_);
 		createdMeshes_.clear();
 		int i=0;
@@ -480,16 +510,6 @@ int RTABMapApp::openDatabase(const std::string & databasePath, bool databaseInMe
 							UERROR("Failed to uncompress data!");
 							status=-2;
 						}
-						const rtabmap::Signature & s = signatures.at(id);
-						processMemoryUsedBytes += data.imageCompressed().total();
-						processMemoryUsedBytes += data.depthOrRightCompressed().total();
-						processMemoryUsedBytes += data.laserScanCompressed().total();
-						processMemoryUsedBytes += s.getWords().size()*4*8;
-						processMemoryUsedBytes += s.getWords3().size()*4*4;
-						if(!s.getWordsDescriptors().empty())
-						{
-							processMemoryUsedBytes +=s.getWordsDescriptors().size()*(4+s.getWordsDescriptors().begin()->second.total());
-						}
 					}
 					else
 					{
@@ -564,6 +584,19 @@ int RTABMapApp::openDatabase(const std::string & databasePath, bool databaseInMe
 	rtabmapEvents_.push_back(new rtabmap::RtabmapEvent(stats));
 
 	rtabmap_->setOptimizedPoses(poses);
+
+	// for optimized mesh
+	if(poses.size())
+	{
+		// just take the last as reference
+		optRefId_ = poses.rbegin()->first;
+		optRefPose_ = new rtabmap::Transform(poses.rbegin()->second);
+	}
+
+	if(camera_)
+	{
+		camera_->resetOrigin();
+	}
 
 	// Start threads
 	LOGI("Start rtabmap thread");
@@ -735,7 +768,7 @@ std::vector<pcl::Vertices> RTABMapApp::filterOrganizedPolygons(
 	unsigned int biggestClusterSize = 0;
 	for(std::map<int, std::list<int> >::iterator iter=clusters.begin(); iter!=clusters.end(); ++iter)
 	{
-		LOGD("cluster %d = %d", iter->first, iter->second.size());
+		LOGD("cluster %d = %d", iter->first, (int)iter->second.size());
 
 		if(iter->second.size() > biggestClusterSize)
 		{
@@ -995,14 +1028,12 @@ int RTABMapApp::Render()
 				poseEvents_.clear();
 			}
 		}
-		rtabmap::Transform mapOdom = rtabmap::Transform::getIdentity();
 		if(!pose.isNull())
 		{
 			// update camera pose?
-			if(graphOptimization_ && !visualizingMesh_ && !mapToOdom_.isIdentity())
+			if(graphOptimization_ && !mapToOdom_.isIdentity())
 			{
-				mapOdom = mapToOdom_;
-				main_scene_.SetCameraPose(opengl_world_T_rtabmap_world*mapOdom*rtabmap_world_T_tango_world*pose);
+				main_scene_.SetCameraPose(opengl_world_T_rtabmap_world*mapToOdom_*rtabmap_world_T_tango_world*pose);
 			}
 			else
 			{
@@ -1013,6 +1044,7 @@ int RTABMapApp::Render()
 				notifyCameraStarted = true;
 				cameraJustInitialized_ = false;
 			}
+			lastPoseEventTime_ = UTimer::now();
 		}
 
 		rtabmap::OdometryEvent odomEvent;
@@ -1061,7 +1093,6 @@ int RTABMapApp::Render()
 						mesh.texCoords = optMesh_->tex_coordinates[0];
 						mesh.texture = optTexture_;
 					}
-
 					main_scene_.addMesh(g_optMeshId, mesh, opengl_world_T_rtabmap_world, true);
 				}
 				else
@@ -1070,6 +1101,58 @@ int RTABMapApp::Render()
 					pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
 					pcl::fromPCLPointCloud2(optMesh_->cloud, *cloud);
 					main_scene_.addCloud(g_optMeshId, cloud, indices, opengl_world_T_rtabmap_world);
+				}
+
+				// clean up old messages if there are ones
+				boost::mutex::scoped_lock  lock(visLocalizationMutex_);
+				if(visLocalizationEvents_.size())
+				{
+					for(std::list<rtabmap::RtabmapEvent*>::iterator iter=visLocalizationEvents_.begin(); iter!=visLocalizationEvents_.end(); ++iter)
+					{
+						delete *iter;
+					}
+				}
+				visLocalizationEvents_.clear();
+			}
+
+			std::list<rtabmap::RtabmapEvent*> visLocalizationEvents;
+			visLocalizationMutex_.lock();
+			visLocalizationEvents = visLocalizationEvents_;
+			visLocalizationEvents_.clear();
+			visLocalizationMutex_.unlock();
+
+			if(visLocalizationEvents.size())
+			{
+				const rtabmap::Statistics & stats = visLocalizationEvents.back()->getStats();
+				if(!stats.mapCorrection().isNull())
+				{
+					mapToOdom_ = stats.mapCorrection();
+				}
+
+				std::map<int, rtabmap::Transform>::const_iterator iter = stats.poses().find(optRefId_);
+				if(iter != stats.poses().end() && !iter->second.isNull() && optRefPose_)
+				{
+					// adjust opt mesh pose
+					main_scene_.setCloudPose(g_optMeshId, opengl_world_T_rtabmap_world * iter->second * (*optRefPose_).inverse());
+				}
+				int fastMovement = (int)uValue(stats.data(), rtabmap::Statistics::kMemoryFast_movement(), 0.0f);
+				int loopClosure = (int)uValue(stats.data(), rtabmap::Statistics::kLoopAccepted_hypothesis_id(), 0.0f);
+				int rejected = (int)uValue(stats.data(), rtabmap::Statistics::kLoopRejectedHypothesis(), 0.0f);
+				if(!paused_ && loopClosure>0)
+				{
+					main_scene_.setBackgroundColor(0, 0.5f, 0); // green
+				}
+				else if(!paused_ && rejected>0)
+				{
+					main_scene_.setBackgroundColor(0, 0.2f, 0); // dark green
+				}
+				else if(!paused_ && fastMovement)
+				{
+					main_scene_.setBackgroundColor(0.2f, 0, 0.2f); // dark magenta
+				}
+				else
+				{
+					main_scene_.setBackgroundColor(backgroundColor_, backgroundColor_, backgroundColor_);
 				}
 			}
 
@@ -1088,6 +1171,20 @@ int RTABMapApp::Render()
 
 			// revert state
 			main_scene_.setMeshRendering(isMeshRendering, isTextureRendering);
+
+			if(visLocalizationEvents.size())
+			{
+				// send statistics to GUI
+				UEventsManager::post(new PostRenderEvent(visLocalizationEvents.back()));
+				visLocalizationEvents.pop_back();
+
+				for(std::list<rtabmap::RtabmapEvent*>::iterator iter=visLocalizationEvents.begin(); iter!=visLocalizationEvents.end(); ++iter)
+				{
+					delete *iter;
+				}
+				visLocalizationEvents.clear();
+				lastPostRenderEventTime_ = UTimer::now();
+			}
 		}
 		else
 		{
@@ -1155,8 +1252,7 @@ int RTABMapApp::Render()
 				lastDrawnCloudsCount_ = 0;
 				renderingTime_ = 0.0f;
 				lastPostRenderEventTime_ = 0.0;
-				processMemoryUsedBytes = 0;
-				processGPUMemoryUsedBytes = 0;
+				lastPoseEventTime_ = 0.0;
 				bufferedStatsData_.clear();
 			}
 
@@ -1170,7 +1266,6 @@ int RTABMapApp::Render()
 				if(added.size() != meshes)
 				{
 					LOGI("added (%d) != meshes (%d)", (int)added.size(), meshes);
-					processGPUMemoryUsedBytes = 0;
 					boost::mutex::scoped_lock  lockRtabmap(rtabmapMutex_);
 					UASSERT(rtabmap_!=0);
 					for(std::map<int, Mesh>::iterator iter=createdMeshes_.begin(); iter!=createdMeshes_.end(); ++iter)
@@ -1205,14 +1300,6 @@ int RTABMapApp::Render()
 							main_scene_.addMesh(iter->first, iter->second, opengl_world_T_rtabmap_world*iter->second.pose);
 							main_scene_.setCloudVisible(iter->first, iter->second.visible);
 
-							long estimateGPUMem = 0;
-							estimateGPUMem += iter->second.cloud->size()*16; // 3*float + 1 float rgb
-							estimateGPUMem += iter->second.indices->size()*4; // int
-							estimateGPUMem += iter->second.polygons.size()*4*3; // 3 indices per polygon
-							estimateGPUMem += iter->second.polygonsLowRes.size()*4*3; // 3 indices per polygon
-
-							processGPUMemoryUsedBytes += estimateGPUMem + (iter->second.texture.empty()?0:iter->second.polygons.size()*3*8+iter->second.texture.total());
-
 							iter->second.texture = cv::Mat(); // don't keep textures in memory
 						}
 					}
@@ -1237,7 +1324,7 @@ int RTABMapApp::Render()
 
 				// update buffered signatures
 				std::map<int, rtabmap::SensorData> bufferedSensorData;
-				if(!trajectoryMode_ && !dataRecorderMode_)
+				if(!dataRecorderMode_)
 				{
 					for(std::list<rtabmap::RtabmapEvent*>::iterator iter=rtabmapEvents.begin(); iter!=rtabmapEvents.end(); ++iter)
 					{
@@ -1245,42 +1332,29 @@ int RTABMapApp::Render()
 
 						// Don't create mesh for the last node added if rehearsal happened or if discarded (small movement)
 						int smallMovement = (int)uValue(stats.data(), rtabmap::Statistics::kMemorySmall_movement(), 0.0f);
+						int fastMovement = (int)uValue(stats.data(), rtabmap::Statistics::kMemoryFast_movement(), 0.0f);
 						int rehearsalMerged = (int)uValue(stats.data(), rtabmap::Statistics::kMemoryRehearsal_merged(), 0.0f);
-						if(smallMovement == 0 && rehearsalMerged == 0)
+						if(!localizationMode_ && stats.getSignatures().size() &&
+							smallMovement == 0 && rehearsalMerged == 0 && fastMovement == 0)
 						{
-							for(std::map<int, rtabmap::Signature>::const_iterator jter=stats.getSignatures().begin(); jter!=stats.getSignatures().end(); ++jter)
+							int id = stats.getSignatures().rbegin()->first;
+							const rtabmap::Signature & s = stats.getSignatures().rbegin()->second;
+
+							if(!trajectoryMode_ &&
+							   !s.sensorData().imageRaw().empty() &&
+							   !s.sensorData().depthRaw().empty())
 							{
-								bool dataDetected = false;
-								if(!jter->second.sensorData().imageRaw().empty() &&
-								   !jter->second.sensorData().depthRaw().empty())
-								{
-									if(!localizationMode_)
-									{
-										uInsert(bufferedSensorData, std::make_pair(jter->first, jter->second.sensorData()));
-										uInsert(rawPoses_, std::make_pair(jter->first, jter->second.getPose()));
-										dataDetected = true;
-									}
-								}
-								if(dataDetected)
-								{
-									processMemoryUsedBytes += jter->second.sensorData().imageCompressed().total();
-									processMemoryUsedBytes += jter->second.sensorData().depthOrRightCompressed().total();
-									processMemoryUsedBytes += jter->second.sensorData().laserScanCompressed().total();
-									processMemoryUsedBytes += jter->second.getWords().size()*4*8;
-									processMemoryUsedBytes += jter->second.getWords3().size()*4*4;
-									if(!jter->second.getWordsDescriptors().empty())
-									{
-										processMemoryUsedBytes += jter->second.getWordsDescriptors().size()*(4+jter->second.getWordsDescriptors().begin()->second.total());
-									}
-								}
+								uInsert(bufferedSensorData, std::make_pair(id, s.sensorData()));
 							}
+
+							uInsert(rawPoses_, std::make_pair(id, s.getPose()));
 						}
 
 						int loopClosure = (int)uValue(stats.data(), rtabmap::Statistics::kLoopAccepted_hypothesis_id(), 0.0f);
 						int rejected = (int)uValue(stats.data(), rtabmap::Statistics::kLoopRejectedHypothesis(), 0.0f);
 						if(!paused_ && loopClosure>0)
 						{
-							main_scene_.setBackgroundColor(0, 0.7f, 0); // green
+							main_scene_.setBackgroundColor(0, 0.5f, 0); // green
 						}
 						else if(!paused_ && rejected>0)
 						{
@@ -1290,12 +1364,17 @@ int RTABMapApp::Render()
 						{
 							main_scene_.setBackgroundColor(0, 0, 0.2f); // blue
 						}
+						else if(!paused_ && fastMovement)
+						{
+							main_scene_.setBackgroundColor(0.2f, 0, 0.2f); // dark magenta
+						}
 						else
 						{
 							main_scene_.setBackgroundColor(backgroundColor_, backgroundColor_, backgroundColor_);
 						}
 					}
 				}
+
 #ifdef DEBUG_RENDERING_PERFORMANCE
 				LOGW("Looking fo data to load (%d) %fs", bufferedSensorData.size(), time.ticks());
 #endif
@@ -1431,13 +1510,6 @@ int RTABMapApp::Render()
 #ifdef DEBUG_RENDERING_PERFORMANCE
 									LOGW("Adding mesh to scene: %fs", time.ticks());
 #endif
-									long estimateCPUMem = 0;
-									estimateCPUMem += mesh.cloud->size()*16; // 3*float + 1 float rgb
-									estimateCPUMem += mesh.indices->size()*4; // int
-									estimateCPUMem += mesh.polygons.size()*4*3; // 3 indices per polygon
-
-									processMemoryUsedBytes += estimateCPUMem;
-									processGPUMemoryUsedBytes += estimateCPUMem + (mesh.texture.empty()?0:mesh.polygons.size()*3*8+mesh.texture.total());
 									mesh.texture = cv::Mat(); // don't keep textures in memory
 								}
 							}
@@ -1500,7 +1572,7 @@ int RTABMapApp::Render()
 										odomEvent.data().imageRaw().cols, odomEvent.data().imageRaw().rows,
 										odomEvent.data().depthRaw().cols, odomEvent.data().depthRaw().rows,
 									   (int)cloud->width, (int)cloud->height);
-								main_scene_.addCloud(-1, cloud, indices, opengl_world_T_rtabmap_world*mapOdom*odomEvent.pose());
+								main_scene_.addCloud(-1, cloud, indices, opengl_world_T_rtabmap_world*mapToOdom_*odomEvent.pose());
 								main_scene_.setCloudVisible(-1, true);
 							}
 							else
@@ -1584,6 +1656,12 @@ int RTABMapApp::Render()
 				rtabmapEvents.clear();
 
 				lastPostRenderEventTime_ = UTimer::now();
+
+				if(lastPoseEventTime_>0.0 && UTimer::now()-lastPoseEventTime_ > 1.0)
+				{
+					UERROR("TangoPoseEventNotReceived");
+					UEventsManager::post(new rtabmap::CameraTangoEvent(10, "TangoPoseEventNotReceived", uNumber2Str(UTimer::now()-lastPoseEventTime_)));
+				}
 			}
 		}
 
@@ -1697,7 +1775,10 @@ void RTABMapApp::setPausedMapping(bool paused)
 {
 	{
 		boost::mutex::scoped_lock  lock(renderingMutex_);
-		visualizingMesh_ = false;
+		if(!localizationMode_)
+		{
+			visualizingMesh_ = false;
+		}
 		main_scene_.setBackgroundColor(backgroundColor_, backgroundColor_, backgroundColor_);
 	}
 	paused_ = paused;
@@ -1975,6 +2056,14 @@ int RTABMapApp::setMappingParameter(const std::string & key, const std::string &
 	}
 }
 
+void RTABMapApp::setGPS(const rtabmap::GPS & gps)
+{
+	if(camera_)
+	{
+		camera_->setGPS(gps);
+	}
+}
+
 void RTABMapApp::resetMapping()
 {
 	LOGW("Reset!");
@@ -1983,6 +2072,11 @@ void RTABMapApp::resetMapping()
 
 	mapToOdom_.setIdentity();
 	clearSceneOnNextRender_ = true;
+
+	if(camera_)
+	{
+		camera_->resetOrigin();
+	}
 
 	UEventsManager::post(new rtabmap::RtabmapEventCmd(rtabmap::RtabmapEventCmd::kCmdResetMemory));
 }
@@ -2012,12 +2106,19 @@ void RTABMapApp::save(const std::string & databasePath)
 		dataRecorderMode_ = false;
 	}
 
-	if(appendModeBackup || dataRecorderModeBackup)
+	bool localizationModeBackup = localizationMode_;
+	if(localizationMode_)
+	{
+		localizationMode_ = false;
+	}
+
+	if(appendModeBackup || dataRecorderModeBackup || localizationModeBackup)
 	{
 		rtabmap::ParametersMap parameters = getRtabmapParameters();
 		rtabmap_->parseParameters(parameters);
 		appendMode_ = appendModeBackup;
 		dataRecorderMode_ = dataRecorderModeBackup;
+		localizationMode_ = localizationModeBackup;
 	}
 
 	std::map<int, rtabmap::Transform> poses = rtabmap_->getLocalOptimizedPoses();
@@ -2149,11 +2250,12 @@ bool RTABMapApp::exportMesh(
 						++iter)
 					{
 						std::map<int, Mesh>::iterator jter = createdMeshes_.find(iter->first);
-						pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud;
+						pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
 						pcl::IndicesPtr indices(new std::vector<int>);
 						rtabmap::CameraModel model;
 						cv::Mat depth;
-						float gains[3] = {1.0f};
+						float gains[3];
+						gains[0] = gains[1] = gains[2] = 1.0f;
 						if(jter != createdMeshes_.end())
 						{
 							cloud = jter->second.cloud;
@@ -2193,7 +2295,7 @@ bool RTABMapApp::exportMesh(
 							}
 
 							Eigen::Vector3f viewpoint( iter->second.x(),  iter->second.y(),  iter->second.z());
-							pcl::PointCloud<pcl::Normal>::Ptr normals = rtabmap::util3d::computeNormals(transformedCloud, normalK, viewpoint);
+							pcl::PointCloud<pcl::Normal>::Ptr normals = rtabmap::util3d::computeNormals(transformedCloud, normalK, 0.0f, viewpoint);
 
 							pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloudWithNormals(new pcl::PointCloud<pcl::PointXYZRGBNormal>);
 							pcl::concatenateFields(*transformedCloud, *normals, *cloudWithNormals);
@@ -2272,7 +2374,7 @@ bool RTABMapApp::exportMesh(
 						poisson.setDepth(optimizedDepth);
 						poisson.setInputCloud(mergedClouds);
 						poisson.reconstruct(*mesh);
-						LOGI("Mesh reconstruction... done! %fs (%d polygons)", timer.ticks(), mesh->polygons.size());
+						LOGI("Mesh reconstruction... done! %fs (%d polygons)", timer.ticks(), (int)mesh->polygons.size());
 
 						if(progressionStatus_.isCanceled())
 						{
@@ -2603,7 +2705,7 @@ bool RTABMapApp::exportMesh(
 						// save in database
 						pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZRGBNormal>);
 						pcl::fromPCLPointCloud2(polygonMesh->cloud, *cloud);
-						cv::Mat cloudMat = rtabmap::compressData2(rtabmap::util3d::laserScanFromPointCloud(*cloud)); // for database
+						cv::Mat cloudMat = rtabmap::compressData2(rtabmap::util3d::laserScanFromPointCloud(*cloud, rtabmap::Transform(), false)); // for database
 						std::vector<std::vector<std::vector<unsigned int> > > polygons(1);
 						polygons[0].resize(polygonMesh->polygons.size());
 						for(unsigned int p=0; p<polygonMesh->polygons.size(); ++p)
@@ -2611,7 +2713,8 @@ bool RTABMapApp::exportMesh(
 							polygons[0][p] = polygonMesh->polygons[p].vertices;
 						}
 						boost::mutex::scoped_lock  lock(rtabmapMutex_);
-						rtabmap_->getMemory()->saveOptimizedMesh(cloudMat, poses, polygons);
+
+						rtabmap_->getMemory()->saveOptimizedMesh(cloudMat, polygons);
 						success = true;
 					}
 				}
@@ -2619,7 +2722,7 @@ bool RTABMapApp::exportMesh(
 				{
 					pcl::PointCloud<pcl::PointNormal>::Ptr cloud(new pcl::PointCloud<pcl::PointNormal>);
 					pcl::fromPCLPointCloud2(textureMesh->cloud, *cloud);
-					cv::Mat cloudMat = rtabmap::compressData2(rtabmap::util3d::laserScanFromPointCloud(*cloud)); // for database
+					cv::Mat cloudMat = rtabmap::compressData2(rtabmap::util3d::laserScanFromPointCloud(*cloud, rtabmap::Transform(), false)); // for database
 
 					// save in database
 					std::vector<std::vector<std::vector<unsigned int> > > polygons(textureMesh->tex_polygons.size());
@@ -2632,7 +2735,7 @@ bool RTABMapApp::exportMesh(
 						}
 					}
 					boost::mutex::scoped_lock  lock(rtabmapMutex_);
-					rtabmap_->getMemory()->saveOptimizedMesh(cloudMat, poses, polygons, textureMesh->tex_coordinates, globalTextures);
+					rtabmap_->getMemory()->saveOptimizedMesh(cloudMat, polygons, textureMesh->tex_coordinates, globalTextures);
 					success = true;
 				}
 				else
@@ -2655,7 +2758,8 @@ bool RTABMapApp::exportMesh(
 				std::map<int, Mesh>::iterator jter=createdMeshes_.find(iter->first);
 				pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
 				pcl::IndicesPtr indices(new std::vector<int>);
-				float gains[3] = {1.0f};
+				float gains[3];
+				gains[0] = gains[1] = gains[2] = 1.0f;
 				if(regenerateCloud)
 				{
 					if(jter != createdMeshes_.end())
@@ -2754,7 +2858,7 @@ bool RTABMapApp::exportMesh(
 				{
 					cv::Mat cloudMat = rtabmap::compressData2(rtabmap::util3d::laserScanFromPointCloud(*mergedClouds)); // for database
 					boost::mutex::scoped_lock  lock(rtabmapMutex_);
-					rtabmap_->getMemory()->saveOptimizedMesh(cloudMat, poses);
+					rtabmap_->getMemory()->saveOptimizedMesh(cloudMat);
 					success = true;
 				}
 			}
@@ -2784,6 +2888,20 @@ bool RTABMapApp::exportMesh(
 	}
 	exporting_ = false;
 
+	optRefId_ = 0;
+	if(optRefPose_)
+	{
+		delete optRefPose_;
+		optRefPose_ = 0;
+	}
+	if(success && poses.size())
+	{
+		// for optimized mesh
+		// just take the last as reference
+		optRefId_ = poses.rbegin()->first;
+		optRefPose_ = new rtabmap::Transform(poses.rbegin()->second);
+	}
+
 	return success;
 }
 
@@ -2793,10 +2911,10 @@ bool RTABMapApp::postExportation(bool visualize)
 	optMesh_.reset(new pcl::TextureMesh);
 	optTexture_ = cv::Mat();
 	exportedMeshUpdated_ = false;
-	visualizingMesh_ = false;
 
 	if(visualize)
 	{
+		visualizingMesh_ = false;
 		cv::Mat cloudMat;
 		std::vector<std::vector<std::vector<unsigned int> > > polygons;
 #if PCL_VERSION_COMPARE(>=, 1, 8, 0)
@@ -2805,10 +2923,9 @@ bool RTABMapApp::postExportation(bool visualize)
 		std::vector<std::vector<Eigen::Vector2f> > texCoords;
 #endif
 		cv::Mat textures;
-		std::map<int, rtabmap::Transform> optPoses;
 		if(rtabmap_ && rtabmap_->getMemory())
 		{
-			cloudMat = rtabmap_->getMemory()->loadOptimizedMesh(&optPoses, &polygons, &texCoords, &textures);
+			cloudMat = rtabmap_->getMemory()->loadOptimizedMesh(&polygons, &texCoords, &textures);
 			if(!cloudMat.empty())
 			{
 				LOGI("postExportation: Found optimized mesh! Visualizing it.");
@@ -2824,6 +2941,19 @@ bool RTABMapApp::postExportation(bool visualize)
 				LOGI("postExportation: No optimized mesh found.");
 			}
 		}
+	}
+	else if(visualizingMesh_)
+	{
+		rtabmapMutex_.lock();
+		if(!rtabmap_->getLocalOptimizedPoses().empty())
+		{
+			rtabmap::Statistics stats;
+			stats.setPoses(rtabmap_->getLocalOptimizedPoses());
+			rtabmapEvents_.push_back(new rtabmap::RtabmapEvent(stats));
+		}
+		rtabmapMutex_.unlock();
+
+		visualizingMesh_ = false;
 	}
 
 	return visualizingMesh_;
@@ -2846,10 +2976,9 @@ bool RTABMapApp::writeExportedMesh(const std::string & directory, const std::str
 	std::vector<std::vector<Eigen::Vector2f> > texCoords;
 #endif
 	cv::Mat textures;
-	std::map<int, rtabmap::Transform> optPoses;
 	if(rtabmap_ && rtabmap_->getMemory())
 	{
-		cloudMat = rtabmap_->getMemory()->loadOptimizedMesh(&optPoses, &polygons, &texCoords, &textures);
+		cloudMat = rtabmap_->getMemory()->loadOptimizedMesh(&polygons, &texCoords, &textures);
 		if(!cloudMat.empty())
 		{
 			LOGI("writeExportedMesh: Found optimized mesh!");
@@ -3062,8 +3191,16 @@ bool RTABMapApp::handleEvent(UEvent * event)
 			LOGI("Received RtabmapEvent event!");
 			if(camera_->isRunning())
 			{
-				boost::mutex::scoped_lock lock(rtabmapMutex_);
-				rtabmapEvents_.push_back((rtabmap::RtabmapEvent*)event);
+				if(visualizingMesh_)
+				{
+					boost::mutex::scoped_lock lock(visLocalizationMutex_);
+					visLocalizationEvents_.push_back((rtabmap::RtabmapEvent*)event);
+				}
+				else
+				{
+					boost::mutex::scoped_lock lock(rtabmapMutex_);
+					rtabmapEvents_.push_back((rtabmap::RtabmapEvent*)event);
+				}
 				return true;
 			}
 		}
@@ -3170,8 +3307,11 @@ bool RTABMapApp::handleEvent(UEvent * event)
 			uInsert(bufferedStatsData_, std::make_pair<std::string, float>(rtabmap::Statistics::kLoopVisual_matches(), uValue(stats.data(), rtabmap::Statistics::kLoopVisual_matches(), 0.0f)));
 			uInsert(bufferedStatsData_, std::make_pair<std::string, float>(rtabmap::Statistics::kLoopRejectedHypothesis(), uValue(stats.data(), rtabmap::Statistics::kLoopRejectedHypothesis(), 0.0f)));
 			uInsert(bufferedStatsData_, std::make_pair<std::string, float>(rtabmap::Statistics::kLoopOptimization_max_error(), uValue(stats.data(), rtabmap::Statistics::kLoopOptimization_max_error(), 0.0f)));
+			uInsert(bufferedStatsData_, std::make_pair<std::string, float>(rtabmap::Statistics::kLoopOptimization_max_error_ratio(), uValue(stats.data(), rtabmap::Statistics::kLoopOptimization_max_error_ratio(), 0.0f)));
 			uInsert(bufferedStatsData_, std::make_pair<std::string, float>(rtabmap::Statistics::kMemoryRehearsal_sim(), uValue(stats.data(), rtabmap::Statistics::kMemoryRehearsal_sim(), 0.0f)));
 			uInsert(bufferedStatsData_, std::make_pair<std::string, float>(rtabmap::Statistics::kLoopHighest_hypothesis_value(), uValue(stats.data(), rtabmap::Statistics::kLoopHighest_hypothesis_value(), 0.0f)));
+			uInsert(bufferedStatsData_, std::make_pair<std::string, float>(rtabmap::Statistics::kMemoryDistance_travelled(), uValue(stats.data(), rtabmap::Statistics::kMemoryDistance_travelled(), 0.0f)));
+			uInsert(bufferedStatsData_, std::make_pair<std::string, float>(rtabmap::Statistics::kMemoryFast_movement(), uValue(stats.data(), rtabmap::Statistics::kMemoryFast_movement(), 0.0f)));
 		}
 		// else use last data
 
@@ -3185,8 +3325,17 @@ bool RTABMapApp::handleEvent(UEvent * event)
 		int matches = (int)uValue(bufferedStatsData_, rtabmap::Statistics::kLoopVisual_matches(), 0.0f);
 		int rejected = (int)uValue(bufferedStatsData_, rtabmap::Statistics::kLoopRejectedHypothesis(), 0.0f);
 		float optimizationMaxError = uValue(bufferedStatsData_, rtabmap::Statistics::kLoopOptimization_max_error(), 0.0f);
+		float optimizationMaxErrorRatio = uValue(bufferedStatsData_, rtabmap::Statistics::kLoopOptimization_max_error_ratio(), 0.0f);
 		float rehearsalValue = uValue(bufferedStatsData_, rtabmap::Statistics::kMemoryRehearsal_sim(), 0.0f);
 		float hypothesis = uValue(bufferedStatsData_, rtabmap::Statistics::kLoopHighest_hypothesis_value(), 0.0f);
+		float distanceTravelled = uValue(bufferedStatsData_, rtabmap::Statistics::kMemoryDistance_travelled(), 0.0f);
+		int fastMovement = (int)uValue(bufferedStatsData_, rtabmap::Statistics::kMemoryFast_movement(), 0.0f);
+		rtabmap::Transform currentPose = main_scene_.GetCameraPose();
+		float x=0.0f,y=0.0f,z=0.0f,roll=0.0f,pitch=0.0f,yaw=0.0f;
+		if(!currentPose.isNull())
+		{
+			currentPose.getTranslationAndEulerAngles(x,y,z,roll,pitch,yaw);
+		}
 
 		// Call JAVA callback with some stats
 		UINFO("Send statistics to GUI");
@@ -3200,7 +3349,7 @@ bool RTABMapApp::handleEvent(UEvent * event)
 				jclass clazz = env->GetObjectClass(RTABMapActivity);
 				if(clazz)
 				{
-					jmethodID methodID = env->GetMethodID(clazz, "updateStatsCallback", "(IIIIFIIIIIIIFIFIFF)V" );
+					jmethodID methodID = env->GetMethodID(clazz, "updateStatsCallback", "(IIIIFIIIIIIFIFIFFFFIFFFFFF)V" );
 					if(methodID)
 					{
 						env->CallVoidMethod(RTABMapActivity, methodID,
@@ -3211,7 +3360,6 @@ bool RTABMapApp::handleEvent(UEvent * event)
 								updateTime,
 								loopClosureId,
 								highestHypId,
-								(int)((processMemoryUsedBytes+processGPUMemoryUsedBytes)/(1024*1024)),
 								databaseMemoryUsed,
 								inliers,
 								matches,
@@ -3221,7 +3369,16 @@ bool RTABMapApp::handleEvent(UEvent * event)
 								renderingTime_>0.0f?1.0f/renderingTime_:0.0f,
 								rejected,
 								rehearsalValue,
-								optimizationMaxError);
+								optimizationMaxError,
+								optimizationMaxErrorRatio,
+								distanceTravelled,
+								fastMovement,
+								x,
+								y,
+								z,
+								roll,
+								pitch,
+								yaw);
 						success = true;
 					}
 				}

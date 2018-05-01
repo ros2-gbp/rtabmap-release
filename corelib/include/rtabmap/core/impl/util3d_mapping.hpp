@@ -83,8 +83,6 @@ void segmentObstaclesFromGround(
 				normalKSearch,
 				viewPoint);
 
-		UDEBUG("cloud=%d, indices=%d flatSurfaces=%d", (int)cloud->size(), (int)indices->size(), (int)flatSurfaces->size());
-
 		if(segmentFlatObstacles && flatSurfaces->size())
 		{
 			int biggestFlatSurfaceIndex;
@@ -95,7 +93,6 @@ void segmentObstaclesFromGround(
 					minClusterSize,
 					std::numeric_limits<int>::max(),
 					&biggestFlatSurfaceIndex);
-			UDEBUG("clusteredFlatSurfaces=%d", (int)clusteredFlatSurfaces.size());
 
 			// cluster all surfaces for which the centroid is in the Z-range of the bigger surface
 			if(clusteredFlatSurfaces.size())
@@ -112,8 +109,7 @@ void segmentObstaclesFromGround(
 						{
 							Eigen::Vector4f centroid(0,0,0,1);
 							pcl::compute3DCentroid(*cloud, *clusteredFlatSurfaces.at(i), centroid);
-							if(centroid[2] >= min[2]-0.01 &&
-							  (centroid[2] <= max[2]+0.01 || (maxGroundHeight!=0.0f && centroid[2] <= maxGroundHeight+0.01))) // epsilon
+							if(maxGroundHeight==0.0f || centroid[2] <= maxGroundHeight || centroid[2] <= max[2]) // epsilon
 							{
 								ground = util3d::concatenate(ground, clusteredFlatSurfaces.at(i));
 							}
@@ -139,8 +135,6 @@ void segmentObstaclesFromGround(
 		{
 			ground = flatSurfaces;
 		}
-
-		UDEBUG("ground=%d", (int)ground->size());
 
 		if(ground->size() != cloud->size())
 		{

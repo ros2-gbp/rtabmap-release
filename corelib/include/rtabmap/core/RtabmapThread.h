@@ -66,7 +66,6 @@ public:
 		kStateCleanDataBuffer,
 		kStatePublishingMap,
 		kStateTriggeringMap,
-		kStateAddingUserData,
 		kStateSettingGoal,
 		kStateCancellingGoal,
 		kStateLabelling
@@ -114,6 +113,7 @@ private:
 	std::queue<ParametersMap> _stateParam;
 
 	std::list<OdometryEvent> _dataBuffer;
+	std::list<double> _newMapEvents;
 	UMutex _dataMutex;
 	USemaphore _dataAdded;
 	unsigned int _dataBufferMaxSize;
