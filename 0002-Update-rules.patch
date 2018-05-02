@@ -1,4 +1,4 @@
-From ef36edfba8bd00c4b09592573a82cb3a0ff9445e Mon Sep 17 00:00:00 2001
+From 962eee8b19227d02db51a5cb7596a5143928d698 Mon Sep 17 00:00:00 2001
 From: matlabbe <matlabbe@gmail.com>
 Date: Fri, 4 Aug 2017 12:20:47 -0400
 Subject: [PATCH 2/2] Update rules
@@ -8,10 +8,10 @@ Subject: [PATCH 2/2] Update rules
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/debian/rules b/debian/rules
-index aa7d4ce..99a88cb 100755
+index 8da7234..8991f69 100755
 --- a/debian/rules
 +++ b/debian/rules
-@@ -52,7 +52,7 @@ override_dh_shlibdeps:
+@@ -48,7 +48,7 @@ override_dh_shlibdeps:
  	# in the install tree that was dropped by catkin, and source it.  It will
  	# set things like CMAKE_PREFIX_PATH, PKG_CONFIG_PATH, and PYTHONPATH.
  	if [ -f "/opt/ros/lunar/setup.sh" ]; then . "/opt/ros/lunar/setup.sh"; fi && \
