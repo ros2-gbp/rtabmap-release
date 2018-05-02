@@ -1,4 +1,4 @@
-From befb63c6c7352bc1a800b6ccf14562df7281ba12 Mon Sep 17 00:00:00 2001
+From 5e96105927d713820dec7cf6d9e679c4d2c74e32 Mon Sep 17 00:00:00 2001
 From: matlabbe <matlabbe@gmail.com>
 Date: Thu, 24 Mar 2016 09:10:45 -0400
 Subject: [PATCH 2/3] Update rules
@@ -8,10 +8,10 @@ Subject: [PATCH 2/3] Update rules
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/debian/rules b/debian/rules
-index 1546062..52b1d87 100755
+index fa94792..77909b1 100755
 --- a/debian/rules
 +++ b/debian/rules
-@@ -52,7 +52,7 @@ override_dh_shlibdeps:
+@@ -48,7 +48,7 @@ override_dh_shlibdeps:
  	# in the install tree that was dropped by catkin, and source it.  It will
  	# set things like CMAKE_PREFIX_PATH, PKG_CONFIG_PATH, and PYTHONPATH.
  	if [ -f "/opt/ros/indigo/setup.sh" ]; then . "/opt/ros/indigo/setup.sh"; fi && \
