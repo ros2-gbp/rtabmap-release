@@ -1,4 +1,4 @@
-From 757d27ddfc5e58df7fc7252c226b81916102f171 Mon Sep 17 00:00:00 2001
+From d720ad26e09b8c424fedecae541333c3612c4e2a Mon Sep 17 00:00:00 2001
 From: matlabbe <matlabbe@gmail.com>
 Date: Fri, 6 May 2016 14:13:01 -0400
 Subject: [PATCH 1/2] Update rules
@@ -8,10 +8,10 @@ Subject: [PATCH 1/2] Update rules
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/debian/rules b/debian/rules
-index 4bb6847..5a0eedc 100755
+index 928c8e7..e5448ca 100755
 --- a/debian/rules
 +++ b/debian/rules
-@@ -52,7 +52,7 @@ override_dh_shlibdeps:
+@@ -48,7 +48,7 @@ override_dh_shlibdeps:
  	# in the install tree that was dropped by catkin, and source it.  It will
  	# set things like CMAKE_PREFIX_PATH, PKG_CONFIG_PATH, and PYTHONPATH.
  	if [ -f "/opt/ros/kinetic/setup.sh" ]; then . "/opt/ros/kinetic/setup.sh"; fi && \
