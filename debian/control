@@ -1,0 +1,13 @@
+Source: ros-indigo-rtabmap
+Section: misc
+Priority: extra
+Maintainer: Mathieu Labbe <matlabbe@gmail.com>
+Build-Depends: debhelper (>= 9.0.0), cmake, libfreenect-dev, libopenni-dev, libpcl-1.7-all-dev, libproj-dev, libsqlite3-dev, libvtk5-qt4-dev, ros-indigo-cv-bridge, ros-indigo-libg2o, ros-indigo-octomap, ros-indigo-qt-gui-cpp, zlib1g-dev
+Homepage: http://introlab.github.io/rtabmap
+Standards-Version: 3.9.2
+
+Package: ros-indigo-rtabmap
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, libfreenect-dev, libopenni-dev, libpcl-1.7-all-dev, libsqlite3-dev, libvtk5-qt4-dev, ros-indigo-cv-bridge, ros-indigo-libg2o, ros-indigo-octomap, ros-indigo-qt-gui-cpp, zlib1g-dev
+Description: RTAB-Map's standalone library.
+ RTAB-Map is a RGB-D SLAM approach with real-time constraints.
