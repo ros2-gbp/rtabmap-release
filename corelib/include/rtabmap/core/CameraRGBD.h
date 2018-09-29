@@ -79,6 +79,15 @@ namespace rs
 	}
 }
 
+namespace rs2
+{
+	class context;
+	class device;
+	class syncer;
+}
+struct rs2_intrinsics;
+struct rs2_extrinsics;
+
 typedef struct _freenect_context freenect_context;
 typedef struct _freenect_device freenect_device;
 
@@ -370,6 +379,7 @@ class RTABMAP_EXP CameraRealSense :
 {
 public:
 	static bool available();
+	enum RGBSource {kColor, kInfrared, kFishEye};
 
 public:
 	// default local transform z in, x right, y down));
@@ -382,6 +392,8 @@ public:
 		const Transform & localTransform = Transform::getIdentity());
 	virtual ~CameraRealSense();
 
+	void setDepthScaledToRGBSize(bool enabled);
+	void setRGBSource(RGBSource source);
 	virtual bool init(const std::string & calibrationFolder = ".", const std::string & cameraName = "");
 	virtual bool isCalibrated() const;
 	virtual std::string getSerial() const;
@@ -398,6 +410,10 @@ private:
 	int presetRGB_;
 	int presetDepth_;
 	bool computeOdometry_;
+	bool depthScaledToRGBSize_;
+	RGBSource rgbSource_;
+	CameraModel cameraModel_;
+	std::vector<int> rsRectificationTable_;
 
 	int motionSeq_[2];
 	rs::slam::slam * slam_;
@@ -407,6 +423,53 @@ private:
 	std::pair<cv::Mat, cv::Mat> lastSyncFrames_;
 	UMutex dataMutex_;
 	USemaphore dataReady_;
+#endif
+};
+/////////////////////////
+// CameraRealSense2
+/////////////////////////
+class slam_event_handler;
+class RTABMAP_EXP CameraRealSense2 :
+	public Camera
+{
+public:
+	static bool available();
+
+public:
+	// default local transform z in, x right, y down));
+	CameraRealSense2(
+		const std::string & deviceId = "",
+		float imageRate = 0,
+		const Transform & localTransform = Transform::getIdentity());
+	virtual ~CameraRealSense2();
+
+	virtual bool init(const std::string & calibrationFolder = ".", const std::string & cameraName = "");
+	virtual bool isCalibrated() const;
+	virtual std::string getSerial() const;
+
+	// parameters are set during initialization
+	void setEmitterEnabled(bool enabled);
+	void setIRDepthFormat(bool enabled);
+
+protected:
+	virtual SensorData captureImage(CameraInfo * info = 0);
+
+private:
+#ifdef RTABMAP_REALSENSE2
+	rs2::context * ctx_;
+	rs2::device * dev_;
+	std::string deviceId_;
+	rs2::syncer * syncer_;
+	float depth_scale_meters_;
+	rs2_intrinsics * depthIntrinsics_;
+	rs2_intrinsics * rgbIntrinsics_;
+	rs2_extrinsics * depthToRGBExtrinsics_;
+	cv::Mat depthBuffer_;
+	cv::Mat rgbBuffer_;
+	CameraModel model_;
+
+	bool emitterEnabled_;
+	bool irDepth_;
 #endif
 };
 
