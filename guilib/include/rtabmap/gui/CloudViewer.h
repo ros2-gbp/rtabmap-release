@@ -32,6 +32,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "rtabmap/core/Transform.h"
 #include "rtabmap/core/StereoCameraModel.h"
+#include "rtabmap/gui/CloudViewerInteractorStyle.h"
 
 #include <QVTKWidget.h>
 #include <pcl/pcl_base.h>
@@ -48,8 +49,6 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <opencv2/opencv.hpp>
 #include <set>
 
-#include <pcl/visualization/mouse_event.h>
-#include <pcl/visualization/point_picking_event.h>
 #include <pcl/PCLPointCloud2.h>
 
 namespace pcl {
@@ -72,7 +71,7 @@ class RTABMAPGUI_EXP CloudViewer : public QVTKWidget
 	Q_OBJECT
 
 public:
-	CloudViewer(QWidget * parent = 0);
+	CloudViewer(QWidget * parent = 0, CloudViewerInteractorStyle* style = CloudViewerInteractorStyle::New());
 	virtual ~CloudViewer();
 
 	void saveSettings(QSettings & settings, const QString & group = "") const;
@@ -235,6 +234,26 @@ public:
 	void removeAllCubes();
 	const std::set<std::string> & getAddedCubes() const {return _cubes;}
 
+	void addOrUpdateQuad(
+			const std::string & id,
+			const Transform & pose,
+			float width,
+			float height,
+			const QColor & color,
+			bool foreground = false);
+	void addOrUpdateQuad(
+			const std::string & id,
+			const Transform & pose,
+			float widthLeft,
+			float widthRight,
+			float heightBottom,
+			float heightTop,
+			const QColor & color,
+			bool foreground = false);
+	void removeQuad(const std::string & id);
+	void removeAllQuads();
+	const std::set<std::string> & getAddedQuads() const {return _quads;}
+
 	void addOrUpdateFrustum(
 			const std::string & id,
 			const Transform & transform,
@@ -289,6 +308,9 @@ public:
 	const QColor & getDefaultBackgroundColor() const;
 	const QColor & getBackgroundColor() const;
 	Transform getTargetPose() const;
+	std::string getIdByActor(vtkProp * actor) const;
+	QColor getColor(const std::string & id);
+	void setColor(const std::string & id, const QColor & color);
 
 	void setBackfaceCulling(bool enabled, bool frontfaceCulling);
 	void setPolygonPicking(bool enabled);
@@ -296,6 +318,7 @@ public:
 	void setLighting(bool on);
 	void setShading(bool on);
 	void setEdgeVisibility(bool visible);
+	void setInteractorLayer(int layer);
 	double getRenderingRate() const;
 
 	void getCameraPosition(
@@ -306,6 +329,7 @@ public:
 	bool isCameraTargetFollow() const;
 	bool isCameraFree() const;
 	bool isCameraLockZ() const;
+	bool isCameraOrtho() const;
 	bool isGridShown() const;
 	unsigned int getGridCellCount() const;
 	float getGridCellSize() const;
@@ -318,6 +342,7 @@ public:
 	void setCameraTargetFollow(bool enabled = true);
 	void setCameraFree();
 	void setCameraLockZ(bool enabled = true);
+	void setCameraOrtho(bool enabled = true);
 	void setGridShown(bool shown);
 	void setNormalsShown(bool shown);
 	void setGridCellCount(unsigned int count);
@@ -330,7 +355,7 @@ public:
 	void buildPickingLocator(bool enable);
 	const std::map<std::string, vtkSmartPointer<vtkOBBTree> > & getLocators() const {return _locators;}
 
-public slots:
+public Q_SLOTS:
 	void setDefaultBackgroundColor(const QColor & color);
 	void setBackgroundColor(const QColor & color);
 	void setCloudVisibility(const std::string & id, bool isVisible);
@@ -339,7 +364,7 @@ public slots:
 	void setCloudPointSize(const std::string & id, int size);
 	virtual void clear();
 
-signals:
+Q_SIGNALS:
 	void configChanged();
 
 protected:
@@ -364,6 +389,7 @@ private:
     QAction * _aFollowCamera;
     QAction * _aResetCamera;
     QAction * _aLockViewZ;
+    QAction * _aCameraOrtho;
     QAction * _aShowTrajectory;
     QAction * _aSetTrajectorySize;
     QAction * _aClearTrajectory;
@@ -390,6 +416,7 @@ private:
     std::set<std::string> _lines;
     std::set<std::string> _spheres;
     std::set<std::string> _cubes;
+    std::set<std::string> _quads;
     QMap<std::string, Transform> _frustums;
     pcl::PointCloud<pcl::PointXYZ>::Ptr _trajectory;
     unsigned int _maxTrajectorySize;
