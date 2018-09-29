@@ -64,6 +64,7 @@ public:
 	int getFeaturesSize() const {return _featuresSize;}
 	bool isGraphicsViewMode() const;
 	bool isGraphicsViewScaled() const;
+	bool isGraphicsViewScaledToHeight() const;
 	const QColor & getDefaultBackgroundColor() const;
 	const QColor & getBackgroundColor() const;
 
@@ -75,6 +76,7 @@ public:
 	void setLinesShown(bool shown);
 	void setGraphicsViewMode(bool on);
 	void setGraphicsViewScaled(bool scaled);
+	void setGraphicsViewScaledToHeight(bool scaled);
 	void setDefaultBackgroundColor(const QColor & color);
 	void setBackgroundColor(const QColor & color);
 
@@ -83,6 +85,7 @@ public:
 	void addFeature(int id, const cv::KeyPoint & kpt, float depth, QColor color);
 	void addLine(float x1, float y1, float x2, float y2, QColor color, const QString & text = QString());
 	void setImage(const QImage & image);
+	void setImageDepth(const cv::Mat & imageDepth);
 	void setImageDepth(const QImage & image);
 	void setFeatureColor(int id, QColor color);
 	void setFeaturesColor(QColor color);
@@ -98,7 +101,7 @@ public:
 
 	virtual QSize sizeHint() const;
 
-signals:
+Q_SIGNALS:
 	void configChanged();
 
 protected:
@@ -106,7 +109,7 @@ protected:
 	virtual void resizeEvent(QResizeEvent* event);
 	virtual void contextMenuEvent(QContextMenuEvent * e);
 
-private slots:
+private Q_SLOTS:
 	void sceneRectChanged(const QRectF &rect);
 
 private:
@@ -129,6 +132,13 @@ private:
 	QAction * _setFeaturesSize;
 	QAction * _graphicsViewMode;
 	QAction * _graphicsViewScaled;
+	QAction * _graphicsViewScaledToHeight;
+	QAction * _graphicsViewNoScaling;
+	QAction * _colorMapWhiteToBlack;
+	QAction * _colorMapBlackToWhite;
+	QAction * _colorMapRedToBlue;
+	QAction * _colorMapBlueToRed;
+	QMenu * _scaleMenu;
 
 	QGraphicsView * _graphicsView;
 	QMultiMap<int, rtabmap::KeypointItem *> _features;
@@ -137,6 +147,7 @@ private:
 	QGraphicsPixmapItem * _imageDepthItem;
 	QPixmap _image;
 	QPixmap _imageDepth;
+	cv::Mat _imageDepthCv;
 };
 
 }
