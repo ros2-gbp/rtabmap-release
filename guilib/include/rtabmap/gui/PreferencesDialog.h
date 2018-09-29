@@ -92,6 +92,7 @@ public:
 		kSrcRealSense      = 6,
 		kSrcRGBDImages     = 7,
 		kSrcK4W2           = 8,
+		kSrcRealSense2     = 9,
 
 		kSrcStereo         = 100,
 		kSrcDC1394         = 100,
@@ -153,6 +154,8 @@ public:
 	int getOdomQualityWarnThr() const;
 	bool isOdomOnlyInliersShown() const;
 	bool isPosteriorGraphView() const;
+	bool isWordsCountGraphView() const;
+	bool isLocalizationsCountGraphView() const;
 	int getOdomRegistrationApproach() const;
 	bool isOdomDisabled() const;
 	bool isGroundTruthAligned() const;
@@ -264,6 +267,7 @@ public:
 	float getDetectionRate() const;
 	bool isSLAMMode() const;
 	bool isRGBDMode() const;
+	int getKpMaxFeatures() const;
 
 	//specific
 	bool isStatisticsPublished() const;
@@ -277,11 +281,11 @@ public:
 	//
 	void setMonitoringState(bool monitoringState) {_monitoringState = monitoringState;}
 
-signals:
+Q_SIGNALS:
 	void settingsChanged(PreferencesDialog::PANEL_FLAGS);
 	void settingsChanged(rtabmap::ParametersMap);
 
-public slots:
+public Q_SLOTS:
 	void setInputRate(double value);
 	void setDetectionRate(double value);
 	void setTimeLimit(float value);
@@ -290,7 +294,7 @@ public slots:
 	void calibrate();
 	void calibrateSimple();
 
-private slots:
+private Q_SLOTS:
 	void closeDialog ( QAbstractButton * button );
 	void resetApply ( QAbstractButton * button );
 	void resetSettings(int panelNumber);

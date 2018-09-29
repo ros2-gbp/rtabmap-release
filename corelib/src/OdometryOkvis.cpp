@@ -131,9 +131,11 @@ OdometryOkvis::OdometryOkvis(const ParametersMap & parameters) :
 #ifdef RTABMAP_OKVIS
 	okvisCallbackHandler_(new OkvisCallbackHandler),
 	okvisEstimator_(0),
+	imagesProcessed_(0),
+	initGravity_(false),
 #endif
 	okvisParameters_(parameters),
-	imagesProcessed_(0)
+	previousPose_(Transform::getIdentity())
 {
 #ifdef RTABMAP_OKVIS
 	Parameters::parse(parameters, Parameters::kOdomOKVISConfigPath(), configFilename_);
@@ -148,10 +150,7 @@ OdometryOkvis::~OdometryOkvis()
 {
 	UDEBUG("");
 #ifdef RTABMAP_OKVIS
-	if(okvisEstimator_)
-	{
-		delete okvisEstimator_;
-	}
+	delete okvisEstimator_;
 	delete okvisCallbackHandler_;
 #endif
 }
@@ -160,17 +159,22 @@ void OdometryOkvis::reset(const Transform & initialPose)
 {
 	Odometry::reset(initialPose);
 #ifdef RTABMAP_OKVIS
-	if(okvisEstimator_)
+	if(!initGravity_)
 	{
-		delete okvisEstimator_;
-		okvisEstimator_ = 0;
-	}
-	lastImu_ = IMU();
+		if(okvisEstimator_)
+		{
+			delete okvisEstimator_;
+			okvisEstimator_ = 0;
+		}
+		lastImu_ = IMU();
+		imagesProcessed_ = 0;
+		previousPose_.setIdentity();
 
-	delete okvisCallbackHandler_;
-	okvisCallbackHandler_ = new OkvisCallbackHandler();
+		delete okvisCallbackHandler_;
+		okvisCallbackHandler_ = new OkvisCallbackHandler();
+	}
+	initGravity_ = false;
 #endif
-	imagesProcessed_ = 0;
 }
 
 // return not null transform if odometry is correctly computed
@@ -304,6 +308,7 @@ Transform OdometryOkvis::computeTransform(
 
 				// non-hard coded parameters
 				parameters.imu.T_BS = okvis::kinematics::Transformation(lastImu_.localTransform().toEigen4d());
+				UINFO("Images are already rectified = %s", imagesAlreadyRectified()?"true":"false");
 				for(unsigned int i=0; i<models.size(); ++i)
 				{
 					okvis::cameras::NCameraSystem::DistortionType distType = okvis::cameras::NCameraSystem::NoDistortion;
@@ -451,8 +456,21 @@ Transform OdometryOkvis::computeTransform(
 		if(!p.isNull())
 		{
 			p = fixPos * p * fixRot;
+
+			if(this->getPose().rotation().isIdentity())
+			{
+				initGravity_ = true;
+				this->reset(this->getPose()*p.rotation());
+			}
+
+			if(previousPose_.isIdentity())
+			{
+				previousPose_ = p;
+			}
+
 			// make it incremental
-			t = this->getPose().inverse()*p;
+			t = previousPose_.inverse()*p;
+			previousPose_ = p;
 
 			if(info)
 			{
@@ -468,7 +486,10 @@ Transform OdometryOkvis::computeTransform(
 				}*/
 			}
 		}
-		UINFO("Odom update time = %fs p=%s", timer.elapsed(), p.prettyPrint().c_str());
+		if(imageUpdated)
+		{
+			UINFO("Odom update time = %fs p=%s", timer.elapsed(), p.prettyPrint().c_str());
+		}
 	}
 #else
 	UERROR("RTAB-Map is not built with OKVIS support! Select another visual odometry approach.");
