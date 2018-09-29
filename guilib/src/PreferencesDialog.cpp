@@ -35,6 +35,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <QtCore/QTimer>
 #include <QUrl>
 
+#include <QButtonGroup>
 #include <QFileDialog>
 #include <QInputDialog>
 #include <QMessageBox>
@@ -176,6 +177,12 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 #ifndef RTABMAP_OKVIS
 	_ui->odom_strategy->setItemData(6, 0, Qt::UserRole - 1);
 #endif
+#ifndef RTABMAP_LOAM
+	_ui->odom_strategy->setItemData(7, 0, Qt::UserRole - 1);
+#endif
+#ifndef RTABMAP_MSCKF_VIO
+	_ui->odom_strategy->setItemData(8, 0, Qt::UserRole - 1);
+#endif
 
 #ifndef RTABMAP_NONFREE
 		_ui->comboBox_detector_strategy->setItemData(0, 0, Qt::UserRole - 1);
@@ -183,7 +190,7 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 		_ui->reextract_type->setItemData(0, 0, Qt::UserRole - 1);
 		_ui->reextract_type->setItemData(1, 0, Qt::UserRole - 1);
 
-#if CV_MAJOR_VERSION == 3
+#if CV_MAJOR_VERSION >= 3
 		_ui->comboBox_detector_strategy->setItemData(0, 0, Qt::UserRole - 1);
 		_ui->comboBox_detector_strategy->setItemData(1, 0, Qt::UserRole - 1);
 		_ui->comboBox_detector_strategy->setItemData(3, 0, Qt::UserRole - 1);
@@ -254,44 +261,48 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 #endif
 	if(!CameraOpenni::available())
 	{
-		_ui->comboBox_cameraRGBD->setItemData(0, 0, Qt::UserRole - 1);
+		_ui->comboBox_cameraRGBD->setItemData(kSrcOpenNI_PCL - kSrcRGBD, 0, Qt::UserRole - 1);
 	}
 	if(!CameraFreenect::available())
 	{
-		_ui->comboBox_cameraRGBD->setItemData(1, 0, Qt::UserRole - 1);
+		_ui->comboBox_cameraRGBD->setItemData(kSrcFreenect - kSrcRGBD, 0, Qt::UserRole - 1);
 	}
 	if(!CameraOpenNICV::available())
 	{
-		_ui->comboBox_cameraRGBD->setItemData(2, 0, Qt::UserRole - 1);
-		_ui->comboBox_cameraRGBD->setItemData(3, 0, Qt::UserRole - 1);
+		_ui->comboBox_cameraRGBD->setItemData(kSrcOpenNI_CV - kSrcRGBD, 0, Qt::UserRole - 1);
+		_ui->comboBox_cameraRGBD->setItemData(kSrcOpenNI_CV_ASUS - kSrcRGBD, 0, Qt::UserRole - 1);
 	}
 	if(!CameraOpenNI2::available())
 	{
-		_ui->comboBox_cameraRGBD->setItemData(4, 0, Qt::UserRole - 1);
+		_ui->comboBox_cameraRGBD->setItemData(kSrcOpenNI2 - kSrcRGBD, 0, Qt::UserRole - 1);
 	}
 	if(!CameraFreenect2::available())
 	{
-		_ui->comboBox_cameraRGBD->setItemData(5, 0, Qt::UserRole - 1);
+		_ui->comboBox_cameraRGBD->setItemData(kSrcFreenect2 - kSrcRGBD, 0, Qt::UserRole - 1);
 	}
 	if (!CameraK4W2::available())
 	{
-		_ui->comboBox_cameraRGBD->setItemData(8, 0, Qt::UserRole - 1);
+		_ui->comboBox_cameraRGBD->setItemData(kSrcK4W2 - kSrcRGBD, 0, Qt::UserRole - 1);
 	}
 	if (!CameraRealSense::available())
 	{
-		_ui->comboBox_cameraRGBD->setItemData(6, 0, Qt::UserRole - 1);
+		_ui->comboBox_cameraRGBD->setItemData(kSrcRealSense - kSrcRGBD, 0, Qt::UserRole - 1);
+	}
+	if (!CameraRealSense2::available())
+	{
+		_ui->comboBox_cameraRGBD->setItemData(kSrcRealSense2 - kSrcRGBD, 0, Qt::UserRole - 1);
 	}
 	if(!CameraStereoDC1394::available())
 	{
-		_ui->comboBox_cameraStereo->setItemData(0, 0, Qt::UserRole - 1);
+		_ui->comboBox_cameraStereo->setItemData(kSrcDC1394 - kSrcStereo, 0, Qt::UserRole - 1);
 	}
 	if(!CameraStereoFlyCapture2::available())
 	{
-		_ui->comboBox_cameraStereo->setItemData(1, 0, Qt::UserRole - 1);
+		_ui->comboBox_cameraStereo->setItemData(kSrcFlyCapture2 - kSrcStereo, 0, Qt::UserRole - 1);
 	}
 	if (!CameraStereoZed::available())
 	{
-		_ui->comboBox_cameraStereo->setItemData(4, 0, Qt::UserRole - 1);
+		_ui->comboBox_cameraStereo->setItemData(kSrcStereoZed - kSrcStereo, 0, Qt::UserRole - 1);
 	}
 	_ui->openni2_exposure->setEnabled(CameraOpenNI2::exposureGainAvailable());
 	_ui->openni2_gain->setEnabled(CameraOpenNI2::exposureGainAvailable());
@@ -341,7 +352,10 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	connect(_ui->checkBox_notifyWhenNewGlobalPathIsReceived, SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteGeneralPanel()));
 	connect(_ui->spinBox_odomQualityWarnThr, SIGNAL(valueChanged(int)), this, SLOT(makeObsoleteGeneralPanel()));
 	connect(_ui->checkBox_odom_onlyInliersShown, SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteGeneralPanel()));
-	connect(_ui->checkBox_posteriorGraphView, SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteGeneralPanel()));
+	connect(_ui->radioButton_posteriorGraphView, SIGNAL(toggled(bool)), this, SLOT(makeObsoleteGeneralPanel()));
+	connect(_ui->radioButton_wordsGraphView, SIGNAL(toggled(bool)), this, SLOT(makeObsoleteGeneralPanel()));
+	connect(_ui->radioButton_localizationsGraphView, SIGNAL(toggled(bool)), this, SLOT(makeObsoleteGeneralPanel()));
+	connect(_ui->radioButton_nochangeGraphView, SIGNAL(toggled(bool)), this, SLOT(makeObsoleteGeneralPanel()));
 	connect(_ui->checkbox_odomDisabled, SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteGeneralPanel()));
 	connect(_ui->odom_registration, SIGNAL(currentIndexChanged(int)), this, SLOT(makeObsoleteGeneralPanel()));
 	connect(_ui->checkbox_groundTruthAlign, SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteGeneralPanel()));
@@ -559,6 +573,10 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	connect(_ui->comboBox_realsensePresetRGB, SIGNAL(currentIndexChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->comboBox_realsensePresetDepth, SIGNAL(currentIndexChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->checkbox_realsenseOdom, SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
+	connect(_ui->checkbox_realsenseDepthScaledToRGBSize, SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
+	connect(_ui->comboBox_realsenseRGBSource, SIGNAL(currentIndexChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
+	connect(_ui->checkbox_rs2_emitter, SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
+	connect(_ui->checkbox_rs2_irDepth, SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
 
 	connect(_ui->toolButton_cameraImages_timestamps, SIGNAL(clicked()), this, SLOT(selectSourceImagesStamps()));
 	connect(_ui->lineEdit_cameraImages_timestamps, SIGNAL(textChanged(const QString &)), this, SLOT(makeObsoleteSourcePanel()));
@@ -604,6 +622,8 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	connect(_ui->toolButton_cameraStereoVideo_path_2, SIGNAL(clicked()), this, SLOT(selectSourceStereoVideoPath2()));
 	connect(_ui->lineEdit_cameraStereoVideo_path, SIGNAL(textChanged(const QString &)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->lineEdit_cameraStereoVideo_path_2, SIGNAL(textChanged(const QString &)), this, SLOT(makeObsoleteSourcePanel()));
+
+	connect(_ui->spinBox_stereo_right_device, SIGNAL(valueChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
 
 	connect(_ui->comboBox_stereoZed_resolution, SIGNAL(currentIndexChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->comboBox_stereoZed_quality, SIGNAL(currentIndexChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
@@ -682,7 +702,9 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_ui->general_checkBox_createIntermediateNodes->setObjectName(Parameters::kRtabmapCreateIntermediateNodes().c_str());
 	_ui->general_spinBox_maxRetrieved->setObjectName(Parameters::kRtabmapMaxRetrieved().c_str());
 	_ui->general_checkBox_startNewMapOnLoopClosure->setObjectName(Parameters::kRtabmapStartNewMapOnLoopClosure().c_str());
+	_ui->general_checkBox_startNewMapOnGoodSignature->setObjectName(Parameters::kRtabmapStartNewMapOnGoodSignature().c_str());
 	_ui->general_checkBox_imagesAlreadyRectified->setObjectName(Parameters::kRtabmapImagesAlreadyRectified().c_str());
+	_ui->general_checkBox_rectifyOnlyFeatures->setObjectName(Parameters::kRtabmapRectifyOnlyFeatures().c_str());
 	_ui->lineEdit_workingDirectory->setObjectName(Parameters::kRtabmapWorkingDirectory().c_str());
 	connect(_ui->toolButton_workingDirectory, SIGNAL(clicked()), this, SLOT(changeWorkingDirectory()));
 
@@ -713,6 +735,7 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_ui->general_spinBox_laserScanNormalK->setObjectName(Parameters::kMemLaserScanNormalK().c_str());
 	_ui->general_doubleSpinBox_laserScanNormalRadius->setObjectName(Parameters::kMemLaserScanNormalRadius().c_str());
 	_ui->checkBox_useOdomFeatures->setObjectName(Parameters::kMemUseOdomFeatures().c_str());
+	_ui->memCovOffDiagIgnored->setObjectName(Parameters::kMemCovOffDiagIgnored().c_str());
 
 	// Database
 	_ui->checkBox_dbInMemory->setObjectName(Parameters::kDbSqlite3InMemory().c_str());
@@ -876,6 +899,7 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_ui->checkBox_localSpacePathOdomPosesUsed->setObjectName(Parameters::kRGBDProximityPathRawPosesUsed().c_str());
 	_ui->rgdb_localImmunizationRatio->setObjectName(Parameters::kRGBDLocalImmunizationRatio().c_str());
 	_ui->loopClosure_reextract->setObjectName(Parameters::kRGBDLoopClosureReextractFeatures().c_str());
+	_ui->loopClosure_bunlde->setObjectName(Parameters::kRGBDLocalBundleOnLoopClosure().c_str());
 	_ui->checkbox_rgbd_createOccupancyGrid->setObjectName(Parameters::kRGBDCreateOccupancyGrid().c_str());
 
 	// Registration
@@ -972,7 +996,11 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_ui->doubleSpinBox_grid_minMapSize->setObjectName(Parameters::kGridGlobalMinSize().c_str());
 	_ui->spinBox_grid_maxNodes->setObjectName(Parameters::kGridGlobalMaxNodes().c_str());
 	_ui->doubleSpinBox_grid_footprintRadius->setObjectName(Parameters::kGridGlobalFootprintRadius().c_str());
-	_ui->doubleSpinBox_grid_octomapOccThr->setObjectName(Parameters::kGridGlobalOctoMapOccupancyThr().c_str());
+	_ui->doubleSpinBox_grid_occThr->setObjectName(Parameters::kGridGlobalOccupancyThr().c_str());
+	_ui->doubleSpinBox_grid_probHit->setObjectName(Parameters::kGridGlobalProbHit().c_str());
+	_ui->doubleSpinBox_grid_probMiss->setObjectName(Parameters::kGridGlobalProbMiss().c_str());
+	_ui->doubleSpinBox_grid_clampingMin->setObjectName(Parameters::kGridGlobalProbClampingMin().c_str());
+	_ui->doubleSpinBox_grid_clampingMax->setObjectName(Parameters::kGridGlobalProbClampingMax().c_str());
 	_ui->checkBox_grid_erode->setObjectName(Parameters::kGridGlobalEroded().c_str());
 
 	//Odometry
@@ -1085,6 +1113,41 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_ui->lineEdit_OdomOkvisPath->setObjectName(Parameters::kOdomOKVISConfigPath().c_str());
 	connect(_ui->toolButton_OdomOkvisPath, SIGNAL(clicked()), this, SLOT(changeOdometryOKVISConfigPath()));
 
+	// Odometry LOAM
+	_ui->odom_loam_sensor->setObjectName(Parameters::kOdomLOAMSensor().c_str());
+	_ui->odom_loam_scan_period->setObjectName(Parameters::kOdomLOAMScanPeriod().c_str());
+	_ui->odom_loam_linvar->setObjectName(Parameters::kOdomLOAMLinVar().c_str());
+	_ui->odom_loam_angvar->setObjectName(Parameters::kOdomLOAMAngVar().c_str());
+	_ui->odom_loam_localMapping->setObjectName(Parameters::kOdomLOAMLocalMapping().c_str());
+
+	// Odometry MSCKF_VIO
+	_ui->OdomMSCKFGridRow->setObjectName(Parameters::kOdomMSCKFGridRow().c_str());
+	_ui->OdomMSCKFGridCol->setObjectName(Parameters::kOdomMSCKFGridCol().c_str());
+	_ui->OdomMSCKFGridMinFeatureNum->setObjectName(Parameters::kOdomMSCKFGridMinFeatureNum().c_str());
+	_ui->OdomMSCKFGridMaxFeatureNum->setObjectName(Parameters::kOdomMSCKFGridMaxFeatureNum().c_str());
+	_ui->OdomMSCKFPyramidLevels->setObjectName(Parameters::kOdomMSCKFPyramidLevels().c_str());
+	_ui->OdomMSCKFPatchSize->setObjectName(Parameters::kOdomMSCKFPatchSize().c_str());
+	_ui->OdomMSCKFFastThreshold->setObjectName(Parameters::kOdomMSCKFFastThreshold().c_str());
+	_ui->OdomMSCKFMaxIteration->setObjectName(Parameters::kOdomMSCKFMaxIteration().c_str());
+	_ui->OdomMSCKFMaxCamStateSize->setObjectName(Parameters::kOdomMSCKFMaxCamStateSize().c_str());
+	_ui->OdomMSCKFTrackPrecision->setObjectName(Parameters::kOdomMSCKFTrackPrecision().c_str());
+	_ui->OdomMSCKFRansacThreshold->setObjectName(Parameters::kOdomMSCKFRansacThreshold().c_str());
+	_ui->OdomMSCKFStereoThreshold->setObjectName(Parameters::kOdomMSCKFStereoThreshold().c_str());
+	_ui->OdomMSCKFPositionStdThreshold->setObjectName(Parameters::kOdomMSCKFPositionStdThreshold().c_str());
+	_ui->OdomMSCKFRotationThreshold->setObjectName(Parameters::kOdomMSCKFRotationThreshold().c_str());
+	_ui->OdomMSCKFTranslationThreshold->setObjectName(Parameters::kOdomMSCKFTranslationThreshold().c_str());
+	_ui->OdomMSCKFTrackingRateThreshold->setObjectName(Parameters::kOdomMSCKFTrackingRateThreshold().c_str());
+	_ui->OdomMSCKFOptTranslationThreshold->setObjectName(Parameters::kOdomMSCKFOptTranslationThreshold().c_str());
+	_ui->OdomMSCKFNoiseGyro->setObjectName(Parameters::kOdomMSCKFNoiseGyro().c_str());
+	_ui->OdomMSCKFNoiseAcc->setObjectName(Parameters::kOdomMSCKFNoiseAcc().c_str());
+	_ui->OdomMSCKFNoiseGyroBias->setObjectName(Parameters::kOdomMSCKFNoiseGyroBias().c_str());
+	_ui->OdomMSCKFNoiseAccBias->setObjectName(Parameters::kOdomMSCKFNoiseAccBias().c_str());
+	_ui->OdomMSCKFNoiseFeature->setObjectName(Parameters::kOdomMSCKFNoiseFeature().c_str());
+	_ui->OdomMSCKFInitCovVel->setObjectName(Parameters::kOdomMSCKFInitCovVel().c_str());
+	_ui->OdomMSCKFInitCovGyroBias->setObjectName(Parameters::kOdomMSCKFInitCovGyroBias().c_str());
+	_ui->OdomMSCKFInitCovAccBias->setObjectName(Parameters::kOdomMSCKFInitCovAccBias().c_str());
+	_ui->OdomMSCKFInitCovExRot->setObjectName(Parameters::kOdomMSCKFInitCovExRot().c_str());
+	_ui->OdomMSCKFInitCovExTrans->setObjectName(Parameters::kOdomMSCKFInitCovExTrans().c_str());
 
 	//Stereo
 	_ui->stereo_winWidth->setObjectName(Parameters::kStereoWinWidth().c_str());
@@ -1431,7 +1494,10 @@ void PreferencesDialog::resetSettings(QGroupBox * groupBox)
 		_ui->checkBox_imageHighestHypShown->setChecked(false);
 		_ui->spinBox_odomQualityWarnThr->setValue(50);
 		_ui->checkBox_odom_onlyInliersShown->setChecked(false);
-		_ui->checkBox_posteriorGraphView->setChecked(true);
+		_ui->radioButton_posteriorGraphView->setChecked(true);
+		_ui->radioButton_wordsGraphView->setChecked(false);
+		_ui->radioButton_localizationsGraphView->setChecked(false);
+		_ui->radioButton_nochangeGraphView->setChecked(false);
 		_ui->checkbox_odomDisabled->setChecked(false);
 		_ui->checkbox_groundTruthAlign->setChecked(true);
 	}
@@ -1596,6 +1662,10 @@ void PreferencesDialog::resetSettings(QGroupBox * groupBox)
 		_ui->comboBox_realsensePresetRGB->setCurrentIndex(0);
 		_ui->comboBox_realsensePresetDepth->setCurrentIndex(2);
 		_ui->checkbox_realsenseOdom->setChecked(false);
+		_ui->checkbox_realsenseDepthScaledToRGBSize->setChecked(false);
+		_ui->comboBox_realsenseRGBSource->setCurrentIndex(0);
+		_ui->checkbox_rs2_emitter->setChecked(true);
+		_ui->checkbox_rs2_irDepth->setChecked(false);
 		_ui->lineEdit_openniOniPath->clear();
 		_ui->lineEdit_openni2OniPath->clear();
 		_ui->lineEdit_cameraRGBDImages_path_rgb->setText("");
@@ -1614,9 +1684,10 @@ void PreferencesDialog::resetSettings(QGroupBox * groupBox)
 		_ui->spinBox_cameraStereoImages_startIndex->setValue(0);
 		_ui->lineEdit_cameraStereoVideo_path->setText("");
 		_ui->lineEdit_cameraStereoVideo_path_2->setText("");
+		_ui->spinBox_stereo_right_device->setValue(-1);
 		_ui->comboBox_stereoZed_resolution->setCurrentIndex(2);
 		_ui->comboBox_stereoZed_quality->setCurrentIndex(1);
-		_ui->checkbox_stereoZed_selfCalibration->setChecked(false);
+		_ui->checkbox_stereoZed_selfCalibration->setChecked(true);
 		_ui->comboBox_stereoZed_sensingMode->setCurrentIndex(0);
 		_ui->spinBox_stereoZed_confidenceThr->setValue(100);
 		_ui->checkbox_stereoZed_odom->setChecked(false);
@@ -1843,7 +1914,10 @@ void PreferencesDialog::readGuiSettings(const QString & filePath)
 	_ui->checkBox_notifyWhenNewGlobalPathIsReceived->setChecked(settings.value("notifyNewGlobalPath", _ui->checkBox_notifyWhenNewGlobalPathIsReceived->isChecked()).toBool());
 	_ui->spinBox_odomQualityWarnThr->setValue(settings.value("odomQualityThr", _ui->spinBox_odomQualityWarnThr->value()).toInt());
 	_ui->checkBox_odom_onlyInliersShown->setChecked(settings.value("odomOnlyInliersShown", _ui->checkBox_odom_onlyInliersShown->isChecked()).toBool());
-	_ui->checkBox_posteriorGraphView->setChecked(settings.value("posteriorGraphView", _ui->checkBox_posteriorGraphView->isChecked()).toBool());
+	_ui->radioButton_posteriorGraphView->setChecked(settings.value("posteriorGraphView", _ui->radioButton_posteriorGraphView->isChecked()).toBool());
+	_ui->radioButton_wordsGraphView->setChecked(settings.value("wordsGraphView", _ui->radioButton_wordsGraphView->isChecked()).toBool());
+	_ui->radioButton_localizationsGraphView->setChecked(settings.value("localizationsGraphView", _ui->radioButton_localizationsGraphView->isChecked()).toBool());
+	_ui->radioButton_nochangeGraphView->setChecked(settings.value("nochangeGraphView", _ui->radioButton_nochangeGraphView->isChecked()).toBool());
 	_ui->checkbox_odomDisabled->setChecked(settings.value("odomDisabled", _ui->checkbox_odomDisabled->isChecked()).toBool());
 	_ui->odom_registration->setCurrentIndex(settings.value("odomRegistration", _ui->odom_registration->currentIndex()).toInt());
 	_ui->checkbox_groundTruthAlign->setChecked(settings.value("gtAlign", _ui->checkbox_groundTruthAlign->isChecked()).toBool());
@@ -1988,6 +2062,13 @@ void PreferencesDialog::readCameraSettings(const QString & filePath)
 	_ui->comboBox_realsensePresetRGB->setCurrentIndex(settings.value("presetRGB", _ui->comboBox_realsensePresetRGB->currentIndex()).toInt());
 	_ui->comboBox_realsensePresetDepth->setCurrentIndex(settings.value("presetDepth", _ui->comboBox_realsensePresetDepth->currentIndex()).toInt());
 	_ui->checkbox_realsenseOdom->setChecked(settings.value("odom", _ui->checkbox_realsenseOdom->isChecked()).toBool());
+	_ui->checkbox_realsenseDepthScaledToRGBSize->setChecked(settings.value("depthScaled", _ui->checkbox_realsenseDepthScaledToRGBSize->isChecked()).toBool());
+	_ui->comboBox_realsenseRGBSource->setCurrentIndex(settings.value("rgbSource", _ui->comboBox_realsenseRGBSource->currentIndex()).toInt());
+	settings.endGroup(); // RealSense
+
+	settings.beginGroup("RealSense2");
+	_ui->checkbox_rs2_emitter->setChecked(settings.value("emitter", _ui->checkbox_rs2_emitter->isChecked()).toBool());
+	_ui->checkbox_rs2_irDepth->setChecked(settings.value("irdepth", _ui->checkbox_rs2_irDepth->isChecked()).toBool());
 	settings.endGroup(); // RealSense
 
 	settings.beginGroup("RGBDImages");
@@ -2007,6 +2088,7 @@ void PreferencesDialog::readCameraSettings(const QString & filePath)
 	settings.beginGroup("StereoVideo");
 	_ui->lineEdit_cameraStereoVideo_path->setText(settings.value("path", _ui->lineEdit_cameraStereoVideo_path->text()).toString());
 	_ui->lineEdit_cameraStereoVideo_path_2->setText(settings.value("path2", _ui->lineEdit_cameraStereoVideo_path_2->text()).toString());
+	_ui->spinBox_stereo_right_device->setValue(settings.value("device2", _ui->spinBox_stereo_right_device->value()).toInt());
 	settings.endGroup(); // StereoVideo
 
 	settings.beginGroup("StereoZed");
@@ -2192,12 +2274,12 @@ void PreferencesDialog::writeSettings(const QString & filePath)
 
 	if(_modifiedParameters.size())
 	{
-		emit settingsChanged(_modifiedParameters);
+		Q_EMIT settingsChanged(_modifiedParameters);
 	}
 
 	if(_obsoletePanels)
 	{
-		emit settingsChanged(_obsoletePanels);
+		Q_EMIT settingsChanged(_obsoletePanels);
 	}
 
 	for(ParametersMap::iterator iter = _modifiedParameters.begin(); iter!=_modifiedParameters.end(); ++iter)
@@ -2254,7 +2336,10 @@ void PreferencesDialog::writeGuiSettings(const QString & filePath) const
 	settings.setValue("notifyNewGlobalPath",  _ui->checkBox_notifyWhenNewGlobalPathIsReceived->isChecked());
 	settings.setValue("odomQualityThr",       _ui->spinBox_odomQualityWarnThr->value());
 	settings.setValue("odomOnlyInliersShown", _ui->checkBox_odom_onlyInliersShown->isChecked());
-	settings.setValue("posteriorGraphView",   _ui->checkBox_posteriorGraphView->isChecked());
+	settings.setValue("posteriorGraphView",   _ui->radioButton_posteriorGraphView->isChecked());
+	settings.setValue("wordsGraphView",       _ui->radioButton_wordsGraphView->isChecked());
+	settings.setValue("localizationsGraphView", _ui->radioButton_localizationsGraphView->isChecked());
+	settings.setValue("nochangeGraphView",    _ui->radioButton_nochangeGraphView->isChecked());
 	settings.setValue("odomDisabled",         _ui->checkbox_odomDisabled->isChecked());
 	settings.setValue("odomRegistration",     _ui->odom_registration->currentIndex());
 	settings.setValue("gtAlign",              _ui->checkbox_groundTruthAlign->isChecked());
@@ -2401,7 +2486,14 @@ void PreferencesDialog::writeCameraSettings(const QString & filePath) const
 	settings.setValue("presetRGB",           _ui->comboBox_realsensePresetRGB->currentIndex());
 	settings.setValue("presetDepth",         _ui->comboBox_realsensePresetDepth->currentIndex());
 	settings.setValue("odom",                _ui->checkbox_realsenseOdom->isChecked());
+	settings.setValue("depthScaled",         _ui->checkbox_realsenseDepthScaledToRGBSize->isChecked());
+	settings.setValue("rgbSource",           _ui->comboBox_realsenseRGBSource->currentIndex());
 	settings.endGroup(); // RealSense
+
+	settings.beginGroup("RealSense2");
+	settings.setValue("emitter",                _ui->checkbox_rs2_emitter->isChecked());
+	settings.setValue("irdepth",                _ui->checkbox_rs2_irDepth->isChecked());
+	settings.endGroup(); // RealSense2
 
 	settings.beginGroup("RGBDImages");
 	settings.setValue("path_rgb",            _ui->lineEdit_cameraRGBDImages_path_rgb->text());
@@ -2420,6 +2512,7 @@ void PreferencesDialog::writeCameraSettings(const QString & filePath) const
 	settings.beginGroup("StereoVideo");
 	settings.setValue("path", 			_ui->lineEdit_cameraStereoVideo_path->text());
 	settings.setValue("path2", 			_ui->lineEdit_cameraStereoVideo_path_2->text());
+	settings.setValue("device2",		_ui->spinBox_stereo_right_device->value());
 	settings.endGroup(); // StereoVideo
 
 	settings.beginGroup("StereoZed");
@@ -4249,20 +4342,24 @@ void PreferencesDialog::updateSourceGrpVisibility()
 			 _ui->comboBox_cameraRGBD->currentIndex() == kSrcK4W2 - kSrcRGBD ||
 			 _ui->comboBox_cameraRGBD->currentIndex() == kSrcRealSense - kSrcRGBD ||
 			 _ui->comboBox_cameraRGBD->currentIndex() == kSrcRGBDImages-kSrcRGBD ||
-			 _ui->comboBox_cameraRGBD->currentIndex() == kSrcOpenNI_PCL-kSrcRGBD));
+			 _ui->comboBox_cameraRGBD->currentIndex() == kSrcOpenNI_PCL-kSrcRGBD ||
+			 _ui->comboBox_cameraRGBD->currentIndex() == kSrcRealSense2-kSrcRGBD));
 	_ui->groupBox_openni2->setVisible(_ui->comboBox_sourceType->currentIndex() == 0 && _ui->comboBox_cameraRGBD->currentIndex() == kSrcOpenNI2-kSrcRGBD);
 	_ui->groupBox_freenect2->setVisible(_ui->comboBox_sourceType->currentIndex() == 0 && _ui->comboBox_cameraRGBD->currentIndex() == kSrcFreenect2-kSrcRGBD);
 	_ui->groupBox_k4w2->setVisible(_ui->comboBox_sourceType->currentIndex() == 0 && _ui->comboBox_cameraRGBD->currentIndex() == kSrcK4W2 - kSrcRGBD);
 	_ui->groupBox_realsense->setVisible(_ui->comboBox_sourceType->currentIndex() == 0 && _ui->comboBox_cameraRGBD->currentIndex() == kSrcRealSense - kSrcRGBD);
+	_ui->groupBox_realsense2->setVisible(_ui->comboBox_sourceType->currentIndex() == 0 && _ui->comboBox_cameraRGBD->currentIndex() == kSrcRealSense2 - kSrcRGBD);
 	_ui->groupBox_cameraRGBDImages->setVisible(_ui->comboBox_sourceType->currentIndex() == 0 && _ui->comboBox_cameraRGBD->currentIndex() == kSrcRGBDImages-kSrcRGBD);
 	_ui->groupBox_openni->setVisible(_ui->comboBox_sourceType->currentIndex() == 0 && _ui->comboBox_cameraRGBD->currentIndex() == kSrcOpenNI_PCL-kSrcRGBD);
 
 	_ui->stackedWidget_stereo->setVisible(_ui->comboBox_sourceType->currentIndex() == 1 && 
 		(_ui->comboBox_cameraStereo->currentIndex() == kSrcStereoVideo-kSrcStereo || 
 		 _ui->comboBox_cameraStereo->currentIndex() == kSrcStereoImages-kSrcStereo ||
-		 _ui->comboBox_cameraStereo->currentIndex() == kSrcStereoZed - kSrcStereo));
+		 _ui->comboBox_cameraStereo->currentIndex() == kSrcStereoZed - kSrcStereo ||
+		 _ui->comboBox_cameraStereo->currentIndex() == kSrcStereoUsb - kSrcStereo));
 	_ui->groupBox_cameraStereoImages->setVisible(_ui->comboBox_sourceType->currentIndex() == 1 && _ui->comboBox_cameraStereo->currentIndex() == kSrcStereoImages-kSrcStereo);
 	_ui->groupBox_cameraStereoVideo->setVisible(_ui->comboBox_sourceType->currentIndex() == 1 && _ui->comboBox_cameraStereo->currentIndex() == kSrcStereoVideo - kSrcStereo);
+	_ui->groupBox_cameraStereoUsb->setVisible(_ui->comboBox_sourceType->currentIndex() == 1 && _ui->comboBox_cameraStereo->currentIndex() == kSrcStereoUsb - kSrcStereo);
 	_ui->groupBox_cameraStereoZed->setVisible(_ui->comboBox_sourceType->currentIndex() == 1 && _ui->comboBox_cameraStereo->currentIndex() == kSrcStereoZed - kSrcStereo);
 
 	_ui->stackedWidget_image->setVisible(_ui->comboBox_sourceType->currentIndex() == 2 && (_ui->source_comboBox_image_type->currentIndex() == kSrcImages-kSrcRGB || _ui->source_comboBox_image_type->currentIndex() == kSrcVideo-kSrcRGB));
@@ -4360,7 +4457,15 @@ bool PreferencesDialog::isOdomOnlyInliersShown() const
 }
 bool PreferencesDialog::isPosteriorGraphView() const
 {
-	return _ui->checkBox_posteriorGraphView->isChecked();
+	return _ui->radioButton_posteriorGraphView->isChecked();
+}
+bool PreferencesDialog::isWordsCountGraphView() const
+{
+	return _ui->radioButton_wordsGraphView->isChecked();
+}
+bool PreferencesDialog::isLocalizationsCountGraphView() const
+{
+	return _ui->radioButton_localizationsGraphView->isChecked();
 }
 bool PreferencesDialog::isOdomDisabled() const
 {
@@ -4920,10 +5025,10 @@ Camera * PreferencesDialog::createCamera(bool useRawImages, bool useColor)
 	}
 	else if (driver == kSrcRealSense)
 	{
-		if(useRawImages)
+		if(useRawImages && _ui->comboBox_realsenseRGBSource->currentIndex()!=2)
 		{
 			QMessageBox::warning(this, tr("Calibration"),
-					tr("Using raw images for \"RealSense\" driver is not yet supported. "
+					tr("Using raw images for \"RealSense\" driver is not yet supported for color and infrared streams. "
 						"Factory calibration loaded from RealSense is used."), QMessageBox::Ok);
 			return 0;
 		}
@@ -4936,6 +5041,27 @@ Camera * PreferencesDialog::createCamera(bool useRawImages, bool useColor)
 				_ui->checkbox_realsenseOdom->isChecked(),
 				this->getGeneralInputRate(),
 				this->getSourceLocalTransform());
+			((CameraRealSense*)camera)->setDepthScaledToRGBSize(_ui->checkbox_realsenseDepthScaledToRGBSize->isChecked());
+			((CameraRealSense*)camera)->setRGBSource((CameraRealSense::RGBSource)_ui->comboBox_realsenseRGBSource->currentIndex());
+		}
+	}
+	else if (driver == kSrcRealSense2)
+	{
+		if(useRawImages)
+		{
+			QMessageBox::warning(this, tr("Calibration"),
+					tr("Using raw images for \"RealSense\" driver is not yet supported. "
+						"Factory calibration loaded from RealSense2 is used."), QMessageBox::Ok);
+			return 0;
+		}
+		else
+		{
+			camera = new CameraRealSense2(
+				this->getSourceDevice().toStdString(),
+				this->getGeneralInputRate(),
+				this->getSourceLocalTransform());
+			((CameraRealSense2*)camera)->setEmitterEnabled(_ui->checkbox_rs2_emitter->isChecked());
+			((CameraRealSense2*)camera)->setIRDepthFormat(_ui->checkbox_rs2_irDepth->isChecked());
 		}
 	}
 	else if(driver == kSrcRGBDImages)
@@ -5017,11 +5143,23 @@ Camera * PreferencesDialog::createCamera(bool useRawImages, bool useColor)
 	}
 	else if (driver == kSrcStereoUsb)
 	{
-		camera = new CameraStereoVideo(
-			this->getSourceDevice().isEmpty() ? 0 : atoi(this->getSourceDevice().toStdString().c_str()),
-			_ui->checkBox_stereo_rectify->isChecked() && !useRawImages,
-			this->getGeneralInputRate(),
-			this->getSourceLocalTransform());
+		if(_ui->spinBox_stereo_right_device->value()>=0)
+		{
+			camera = new CameraStereoVideo(
+				this->getSourceDevice().isEmpty() ? 0 : atoi(this->getSourceDevice().toStdString().c_str()),
+				_ui->spinBox_stereo_right_device->value(),
+				_ui->checkBox_stereo_rectify->isChecked() && !useRawImages,
+				this->getGeneralInputRate(),
+				this->getSourceLocalTransform());
+		}
+		else
+		{
+			camera = new CameraStereoVideo(
+				this->getSourceDevice().isEmpty() ? 0 : atoi(this->getSourceDevice().toStdString().c_str()),
+				_ui->checkBox_stereo_rectify->isChecked() && !useRawImages,
+				this->getGeneralInputRate(),
+				this->getSourceLocalTransform());
+		}
 	}
 	else if(driver == kSrcStereoVideo)
 	{
@@ -5248,6 +5386,10 @@ bool PreferencesDialog::isRGBDMode() const
 {
 	return _ui->general_checkBox_activateRGBD->isChecked();
 }
+int PreferencesDialog::getKpMaxFeatures() const
+{
+	return _ui->surf_spinBox_wordsPerImageTarget->value();
+}
 
 /*** SETTERS ***/
 void PreferencesDialog::setInputRate(double value)
@@ -5332,7 +5474,7 @@ void PreferencesDialog::testOdometry()
 	   this->getSourceDriver() == kSrcImages) &&
 	   !_ui->lineEdit_cameraImages_path_imu->text().isEmpty())
 	{
-		if(this->getOdomStrategy() != Odometry::kTypeOkvis)
+		if(this->getOdomStrategy() != Odometry::kTypeOkvis && this->getOdomStrategy() != Odometry::kTypeMSCKF)
 		{
 			QMessageBox::warning(this, tr("Source IMU Path"),
 					tr("IMU path is set but odometry chosen doesn't support IMU, ignoring IMU..."), QMessageBox::Ok);
@@ -5687,7 +5829,7 @@ void PreferencesDialog::calibrate()
 		}
 
 		bool freenect2 = driver == kSrcFreenect2;
-		_calibrationDialog->setStereoMode(this->getSourceType() != kSrcRGB, freenect2?"rgb":"left", freenect2?"depth":"right"); // RGB+Depth or left+right
+		_calibrationDialog->setStereoMode(this->getSourceType() != kSrcRGB && driver != kSrcRealSense, freenect2?"rgb":"left", freenect2?"depth":"right"); // RGB+Depth or left+right
 		_calibrationDialog->setSwitchedImages(freenect2);
 		_calibrationDialog->setSavingDirectory(this->getCameraInfoDir());
 		_calibrationDialog->registerToEventsManager();

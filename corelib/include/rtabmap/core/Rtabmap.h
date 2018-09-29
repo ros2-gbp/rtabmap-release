@@ -153,7 +153,8 @@ public:
 	void parseParameters(const ParametersMap & parameters);
 	const ParametersMap & getParameters() const {return _parameters;}
 	void setWorkingDirectory(std::string path);
-	void rejectLoopClosure(int oldId, int newId);
+	void rejectLastLoopClosure();
+	void deleteLastLocation();
 	void setOptimizedPoses(const std::map<int, Transform> & poses);
 	void get3DMap(std::map<int, Signature> & signatures,
 			std::map<int, Transform> & poses,
@@ -171,7 +172,7 @@ public:
 	int getPathStatus() const {return _pathStatus;} // -1=failed 0=idle/executing 1=success
 	void clearPath(int status); // -1=failed 0=idle/executing 1=success
 	bool computePath(int targetNode, bool global);
-	bool computePath(const Transform & targetPose); // only in current optimized map
+	bool computePath(const Transform & targetPose, float tolerance = -1.0f); // only in current optimized map, tolerance (m) < 0 means RGBD/LocalRadius, 0 means infinite
 	const std::vector<std::pair<int, Transform> > & getPath() const {return _path;}
 	std::vector<std::pair<int, Transform> > getPathNextPoses() const;
 	std::vector<int> getPathNextNodes() const;
@@ -190,6 +191,7 @@ private:
 	void optimizeCurrentMap(int id,
 			bool lookInDatabase,
 			std::map<int, Transform> & optimizedPoses,
+			cv::Mat & covariance,
 			std::multimap<int, Link> * constraints = 0,
 			double * error = 0,
 			int * iterationsDone = 0) const;
@@ -198,6 +200,7 @@ private:
 			const std::set<int> & ids,
 			const std::map<int, Transform> & guessPoses,
 			bool lookInDatabase,
+			cv::Mat & covariance,
 			std::multimap<int, Link> * constraints = 0,
 			double * error = 0,
 			int * iterationsDone = 0) const;
@@ -247,8 +250,9 @@ private:
 	float _proximityAngle;
 	std::string _databasePath;
 	bool _optimizeFromGraphEnd;
-	float _optimizationMaxLinearError;
+	float _optimizationMaxError;
 	bool _startNewMapOnLoopClosure;
+	bool _startNewMapOnGoodSignature;
 	float _goalReachedRadius; // meters
 	bool _goalsSavedInUserData;
 	int _pathStuckIterations;

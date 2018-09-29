@@ -175,8 +175,8 @@ class RTABMAP_EXP Parameters
     RTABMAP_PARAM(Rtabmap, PublishRAMUsage,              bool, false, "Publishing RAM usage in statistics (may add a small overhead to get info from the system).");
     RTABMAP_PARAM(Rtabmap, ComputeRMSE,                  bool, true,  "Compute root mean square error (RMSE) and publish it in statistics, if ground truth is provided.");
     RTABMAP_PARAM(Rtabmap, SaveWMState,                  bool, false, "Save working memory state after each update in statistics.");
-    RTABMAP_PARAM(Rtabmap, TimeThr,                      float, 0,    "Maximum time allowed for the detector (ms) (0 means infinity).");
-    RTABMAP_PARAM(Rtabmap, MemoryThr,                    int, 0,      "Maximum signatures in the Working Memory (ms) (0 means infinity).");
+    RTABMAP_PARAM(Rtabmap, TimeThr,                      float, 0,    "Maximum time allowed for map update (ms) (0 means infinity). When map update time exceeds this fixed time threshold, some nodes in Working Memory (WM) are transferred to Long-Term Memory to limit the size of the WM and decrease the update time.");
+    RTABMAP_PARAM(Rtabmap, MemoryThr,                    int, 0,      uFormat("Maximum nodes in the Working Memory (0 means infinity). Similar to \"%s\", when the number of nodes in Working Memory (WM) exceeds this treshold, some nodes are transferred to Long-Term Memory to keep WM size fixed.", kRtabmapTimeThr().c_str()));
     RTABMAP_PARAM(Rtabmap, DetectionRate,                float, 1,    "Detection rate (Hz). RTAB-Map will filter input images to satisfy this rate.");
     RTABMAP_PARAM(Rtabmap, ImageBufferSize,          unsigned int, 1, "Data buffer size (0 min inf).");
     RTABMAP_PARAM(Rtabmap, CreateIntermediateNodes,      bool, false, uFormat("Create intermediate nodes between loop closure detection. Only used when %s>0.", kRtabmapDetectionRate().c_str()));
@@ -186,7 +186,9 @@ class RTABMAP_EXP Parameters
     RTABMAP_PARAM(Rtabmap, StatisticLogged,              bool, false, "Logging enabled.");
     RTABMAP_PARAM(Rtabmap, StatisticLoggedHeaders,       bool, true,  "Add column header description to log files.");
     RTABMAP_PARAM(Rtabmap, StartNewMapOnLoopClosure,     bool, false, "Start a new map only if there is a global loop closure with a previous map.");
+    RTABMAP_PARAM(Rtabmap, StartNewMapOnGoodSignature,   bool, false, uFormat("Start a new map only if the first signature is not bad (i.e., has enough features, see %s).", kKpBadSignRatio().c_str()));
     RTABMAP_PARAM(Rtabmap, ImagesAlreadyRectified,       bool, true,  "Images are already rectified. By default RTAB-Map assumes that received images are rectified. If they are not, they can be rectified by RTAB-Map if this parameter is false.");
+    RTABMAP_PARAM(Rtabmap, RectifyOnlyFeatures,          bool, false,  uFormat("If \"%s\" is false and this parameter is true, the whole RGB image will not be rectified, only the features. Warning: As projection of RGB-D image to point cloud is assuming that images are rectified, the generated point cloud map will have wrong colors if this parameter is true.", kRtabmapImagesAlreadyRectified().c_str()));
 
     // Hypotheses selection
     RTABMAP_PARAM(Rtabmap, LoopThr,           float, 0.11,      "Loop closing threshold.");
@@ -218,8 +220,9 @@ class RTABMAP_EXP Parameters
     RTABMAP_PARAM(Mem, LaserScanDownsampleStepSize, int, 1,         "If > 1, downsample the laser scans when creating a signature.");
     RTABMAP_PARAM(Mem, LaserScanVoxelSize,          float, 0.0,     uFormat("If > 0 m, voxel filtering is done on laser scans when creating a signature. If the laser scan had normals, they will be removed. To recompute the normals, make sure to use \"%s\" or \"%s\" parameters.", kMemLaserScanNormalK().c_str(), kMemLaserScanNormalRadius().c_str()).c_str());
     RTABMAP_PARAM(Mem, LaserScanNormalK,            int, 0,         "If > 0 and laser scans don't have normals, normals will be computed with K search neighbors when creating a signature.");
-    RTABMAP_PARAM(Mem, LaserScanNormalRadius,       int, 0,         "If > 0 m and laser scans don't have normals, normals will be computed with radius search neighbors when creating a signature.");
+    RTABMAP_PARAM(Mem, LaserScanNormalRadius,       float, 0.0,     "If > 0 m and laser scans don't have normals, normals will be computed with radius search neighbors when creating a signature.");
     RTABMAP_PARAM(Mem, UseOdomFeatures,             bool, true,     "Use odometry features.");
+    RTABMAP_PARAM(Mem, CovOffDiagIgnored,           bool, true,     "Ignore off diagonal values of the covariance matrix.");
 
     // KeypointMemory (Keypoint-based)
     RTABMAP_PARAM(Kp, NNStrategy,               int, 1,       "kNNFlannNaive=0, kNNFlannKdTree=1, kNNFlannLSH=2, kNNBruteForce=3, kNNBruteForceGPU=4");
@@ -282,8 +285,8 @@ class RTABMAP_EXP Parameters
     RTABMAP_PARAM(FAST, GpuKeypointsRatio,  double, 0.05, "Used with FAST GPU.");
     RTABMAP_PARAM(FAST, MinThreshold,       int, 7,       "Minimum threshold. Used only when FAST/GridRows and FAST/GridCols are set.");
     RTABMAP_PARAM(FAST, MaxThreshold,       int, 200,     "Maximum threshold. Used only when FAST/GridRows and FAST/GridCols are set.");
-    RTABMAP_PARAM(FAST, GridRows,           int, 4,       "Grid rows (0 to disable). Adapts the detector to partition the source image into a grid and detect points in each cell.");
-    RTABMAP_PARAM(FAST, GridCols,           int, 4,       "Grid cols (0 to disable). Adapts the detector to partition the source image into a grid and detect points in each cell.");
+    RTABMAP_PARAM(FAST, GridRows,           int, 0,       "Grid rows (0 to disable). Adapts the detector to partition the source image into a grid and detect points in each cell.");
+    RTABMAP_PARAM(FAST, GridCols,           int, 0,       "Grid cols (0 to disable). Adapts the detector to partition the source image into a grid and detect points in each cell.");
 
     RTABMAP_PARAM(GFTT, QualityLevel,      double, 0.001, "");
     RTABMAP_PARAM(GFTT, MinDistance,       double, 3,    "");
@@ -348,6 +351,7 @@ class RTABMAP_EXP Parameters
     RTABMAP_PARAM(RGBD, ScanMatchingIdsSavedInLinks, bool, true,    "Save scan matching IDs in link's user data.");
     RTABMAP_PARAM(RGBD, NeighborLinkRefining,         bool, false,  uFormat("When a new node is added to the graph, the transformation of its neighbor link to the previous node is refined using registration approach selected (%s).", kRegStrategy().c_str()));
     RTABMAP_PARAM(RGBD, LoopClosureReextractFeatures, bool, false,  "Extract features even if there are some already in the nodes.");
+    RTABMAP_PARAM(RGBD, LocalBundleOnLoopClosure,     bool, false,  "Do local bundle adjustment with neighborhood of the loop closure.");
     RTABMAP_PARAM(RGBD, CreateOccupancyGrid,          bool, false,  "Create local occupancy grid maps. See \"Grid\" group for parameters.");
 
     // Local/Proximity loop closure detection
@@ -393,7 +397,7 @@ class RTABMAP_EXP Parameters
     RTABMAP_PARAM(GTSAM, Optimizer,       int, 1,          "0=Levenberg 1=GaussNewton 2=Dogleg");
 
     // Odometry
-    RTABMAP_PARAM(Odom, Strategy,               int, 0,       "0=Frame-to-Map (F2M) 1=Frame-to-Frame (F2F) 2=Fovis 3=viso2 4=DVO-SLAM 5=ORB_SLAM2 6=OKVIS");
+    RTABMAP_PARAM(Odom, Strategy,               int, 0,       "0=Frame-to-Map (F2M) 1=Frame-to-Frame (F2F) 2=Fovis 3=viso2 4=DVO-SLAM 5=ORB_SLAM2 6=OKVIS 7=LOAM 8=MSCKF_VIO");
     RTABMAP_PARAM(Odom, ResetCountdown,         int, 0,       "Automatically reset odometry after X consecutive images on which odometry cannot be computed (value=0 disables auto-reset).");
     RTABMAP_PARAM(Odom, Holonomic,              bool, true,   "If the robot is holonomic (strafing commands can be issued). If not, y value will be estimated from x and yaw values (y=x*tan(yaw)).");
     RTABMAP_PARAM(Odom, FillInfoData,           bool, true,   "Fill info with data (inliers/outliers features).");
@@ -489,6 +493,42 @@ class RTABMAP_EXP Parameters
 
     // Odometry OKVIS
     RTABMAP_PARAM_STR(OdomOKVIS, ConfigPath,     "",  "Path of OKVIS config file.");
+
+    // Odometry LOAM
+    RTABMAP_PARAM(OdomLOAM, Sensor,     int,    2,    "Velodyne sensor: 0=VLP-16, 1=HDL-32, 2=HDL-64E");
+    RTABMAP_PARAM(OdomLOAM, ScanPeriod, float,  0.1,  "Scan period (s)");
+    RTABMAP_PARAM(OdomLOAM, LinVar,     float,  0.01,  "Linear output variance.");
+    RTABMAP_PARAM(OdomLOAM, AngVar,     float,  0.01,  "Angular output variance.");
+    RTABMAP_PARAM(OdomLOAM, LocalMapping, bool,  true,  "Local mapping. It adds more time to compute odometry, but accuracy is significantly improved.");
+
+    // Odometry MSCKF_VIO
+    RTABMAP_PARAM(OdomMSCKF, GridRow,           int,  4,  "");
+    RTABMAP_PARAM(OdomMSCKF, GridCol,           int,  5,  "");
+    RTABMAP_PARAM(OdomMSCKF, GridMinFeatureNum, int,  3,  "");
+    RTABMAP_PARAM(OdomMSCKF, GridMaxFeatureNum, int,  4,  "");
+    RTABMAP_PARAM(OdomMSCKF, PyramidLevels,     int,  3,  "");
+    RTABMAP_PARAM(OdomMSCKF, PatchSize,         int,  15,  "");
+    RTABMAP_PARAM(OdomMSCKF, FastThreshold,     int,  10,  "");
+    RTABMAP_PARAM(OdomMSCKF, MaxIteration,      int,  30,  "");
+    RTABMAP_PARAM(OdomMSCKF, TrackPrecision,    double,  0.01,  "");
+    RTABMAP_PARAM(OdomMSCKF, RansacThreshold,   double,  3,  "");
+    RTABMAP_PARAM(OdomMSCKF, StereoThreshold,   double,  5,  "");
+    RTABMAP_PARAM(OdomMSCKF, PositionStdThreshold,    double,  8.0,  "");
+    RTABMAP_PARAM(OdomMSCKF, RotationThreshold,       double,  0.2618,  "");
+    RTABMAP_PARAM(OdomMSCKF, TranslationThreshold,    double,  0.4,  "");
+    RTABMAP_PARAM(OdomMSCKF, TrackingRateThreshold,   double,  0.5,  "");
+    RTABMAP_PARAM(OdomMSCKF, OptTranslationThreshold, double,  0,  "");
+    RTABMAP_PARAM(OdomMSCKF, NoiseGyro,     double,  0.005,  "");
+    RTABMAP_PARAM(OdomMSCKF, NoiseAcc,      double,  0.05,  "");
+    RTABMAP_PARAM(OdomMSCKF, NoiseGyroBias, double,  0.001,  "");
+    RTABMAP_PARAM(OdomMSCKF, NoiseAccBias,  double,  0.01,  "");
+    RTABMAP_PARAM(OdomMSCKF, NoiseFeature,  double,  0.035,  "");
+    RTABMAP_PARAM(OdomMSCKF, InitCovVel,    double,  0.25,  "");
+    RTABMAP_PARAM(OdomMSCKF, InitCovGyroBias, double,  0.01,  "");
+    RTABMAP_PARAM(OdomMSCKF, InitCovAccBias,  double,  0.01,  "");
+    RTABMAP_PARAM(OdomMSCKF, InitCovExRot,    double,  0.00030462,  "");
+    RTABMAP_PARAM(OdomMSCKF, InitCovExTrans,  double,  0.000025,  "");
+    RTABMAP_PARAM(OdomMSCKF, MaxCamStateSize,  int,  20,  "");
 
     // Common registration parameters
     RTABMAP_PARAM(Reg, RepeatOnce,               bool, true,    "Do a second registration with the output of the first registration as guess. Only done if no guess was provided for the first registration (like on loop closure). It can be useful if the registration approach used can use a guess to get better matches.");
@@ -639,7 +679,11 @@ class RTABMAP_EXP Parameters
     RTABMAP_PARAM(GridGlobal, MinSize,              float,  0.0,     "Minimum map size (m).");
     RTABMAP_PARAM(GridGlobal, Eroded,               bool,   false,   "Erode obstacle cells.");
     RTABMAP_PARAM(GridGlobal, MaxNodes,             int,    0,       "Maximum nodes assembled in the map starting from the last node (0=unlimited).");
-    RTABMAP_PARAM(GridGlobal, OctoMapOccupancyThr,  float,  0.5,     "OctoMap occupancy threshold (value between 0 and 1).");
+    RTABMAP_PARAM(GridGlobal, OccupancyThr,         float,  0.5,     "Occupancy threshold (value between 0 and 1).");
+    RTABMAP_PARAM(GridGlobal, ProbHit,              float,  0.7,     "Probability of a hit (value between 0.5 and 1).");
+    RTABMAP_PARAM(GridGlobal, ProbMiss,             float,  0.4,     "Probability of a miss (value between 0 and 0.5).");
+    RTABMAP_PARAM(GridGlobal, ProbClampingMin,      float,  0.1192,  "Probability clamping minimum (value between 0 and 1).");
+    RTABMAP_PARAM(GridGlobal, ProbClampingMax,      float,  0.971,   "Probability clamping maximum (value between 0 and 1).");
 
 public:
     virtual ~Parameters();

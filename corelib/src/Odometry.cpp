@@ -33,6 +33,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/core/OdometryDVO.h"
 #include "rtabmap/core/OdometryOkvis.h"
 #include "rtabmap/core/OdometryORBSLAM2.h"
+#include "rtabmap/core/OdometryLOAM.h"
+#include "rtabmap/core/OdometryMSCKF.h"
 #include "rtabmap/core/OdometryInfo.h"
 #include "rtabmap/core/util3d.h"
 #include "rtabmap/core/util3d_mapping.h"
@@ -79,6 +81,12 @@ Odometry * Odometry::create(Odometry::Type & type, const ParametersMap & paramet
 		break;
 	case Odometry::kTypeOkvis:
 		odometry = new OdometryOkvis(parameters);
+		break;
+	case Odometry::kTypeLOAM:
+		odometry = new OdometryLOAM(parameters);
+		break;
+	case Odometry::kTypeMSCKF:
+		odometry = new OdometryMSCKF(parameters);
 		break;
 	default:
 		odometry = new OdometryF2M(parameters);
@@ -289,7 +297,7 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 							R(0,0), R(0,1), R(0,2), 0,
 							R(1,0), R(1,1), R(1,2), 0,
 							R(2,0), R(2,1), R(2,2), coefficients.values.at(3));
-					_pose *= rotation;
+					this->reset(rotation);
 					success = true;
 				}
 			}
@@ -308,7 +316,7 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 	Transform guess = dt>0.0 && guessFromMotion_ && !previousVelocityTransform_.isNull()?Transform::getIdentity():Transform();
 	if(!(dt>0.0 || (dt == 0.0 && previousVelocityTransform_.isNull())))
 	{
-		if(guessFromMotion_)
+		if(guessFromMotion_ && !data.imageRaw().empty())
 		{
 			UERROR("Guess from motion is set but dt is invalid! Odometry is then computed without guess. (dt=%f previous transform=%s)", dt, previousVelocityTransform_.prettyPrint().c_str());
 		}

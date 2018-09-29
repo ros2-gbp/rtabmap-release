@@ -147,10 +147,7 @@ OdometryF2M::~OdometryF2M()
 	bundleLinks_.clear();
 	bundleModels_.clear();
 	bundlePoseReferences_.clear();
-	if(sba_)
-	{
-		delete sba_;
-	}
+	delete sba_;
 	delete regPipeline_;
 	UDEBUG("");
 }
@@ -335,7 +332,7 @@ Transform OdometryF2M::computeTransform(
 							}
 							else
 							{
-								UFATAL("no valid camera model!");
+								UFATAL("no valid camera model to do odometry bundle adjustment!");
 							}
 							bundleModels.insert(std::make_pair(lastFrame_->id(), model));
 							Transform invLocalTransform = model.localTransform().inverse();
