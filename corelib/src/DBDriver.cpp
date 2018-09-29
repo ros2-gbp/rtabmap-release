@@ -29,12 +29,12 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "rtabmap/core/Signature.h"
 #include "rtabmap/core/VisualWord.h"
+#include "rtabmap/core/DBDriverSqlite3.h"
 #include "rtabmap/utilite/UConversion.h"
 #include "rtabmap/utilite/UMath.h"
 #include "rtabmap/utilite/ULogger.h"
 #include "rtabmap/utilite/UTimer.h"
 #include "rtabmap/utilite/UStl.h"
-#include "DBDriverSqlite3.h"
 
 namespace rtabmap {
 
@@ -436,7 +436,7 @@ void DBDriver::saveOrUpdate(const std::vector<Signature *> & signatures)
 
 void DBDriver::saveOrUpdate(const std::vector<VisualWord *> & words) const
 {
-	ULOGGER_DEBUG("");
+	ULOGGER_DEBUG("words.size=%d", (int)words.size());
 	std::list<VisualWord *> toSave;
 	std::list<VisualWord *> toUpdate;
 	if(this->isConnected() && words.size())
@@ -511,10 +511,10 @@ void DBDriver::updateDepthImage(int nodeId, const cv::Mat & image)
 	_dbSafeAccessMutex.unlock();
 }
 
-void DBDriver::load(VWDictionary * dictionary) const
+void DBDriver::load(VWDictionary * dictionary, bool lastStateOnly) const
 {
 	_dbSafeAccessMutex.lock();
-	this->loadQuery(dictionary);
+	this->loadQuery(dictionary, lastStateOnly);
 	_dbSafeAccessMutex.unlock();
 }
 

@@ -37,6 +37,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap/utilite/UTimer.h>
 
 #include <opencv2/imgproc/imgproc.hpp>
+#include <opencv2/imgproc/types_c.h>
+#if CV_MAJOR_VERSION >= 3
+#include <opencv2/videoio/videoio_c.h>
+#endif
 
 #include <rtabmap/core/util3d.h>
 #include <rtabmap/core/util3d_filtering.h>
@@ -120,14 +124,8 @@ CameraImages::CameraImages(const std::string & path,
 CameraImages::~CameraImages()
 {
 	UDEBUG("");
-	if(_dir)
-	{
-		delete _dir;
-	}
-	if(_scanDir)
-	{
-		delete _scanDir;
-	}
+	delete _dir;
+	delete _scanDir;
 }
 
 bool CameraImages::init(const std::string & calibrationFolder, const std::string & cameraName)
