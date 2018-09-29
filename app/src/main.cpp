@@ -49,7 +49,7 @@ int main(int argc, char* argv[])
 	QApplication * app = new QApplication(argc, argv);
 	app->setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; }"); // selectable message box
 
-	ParametersMap parameters = Parameters::parseArguments(argc, argv, true);
+	ParametersMap parameters = Parameters::parseArguments(argc, argv, false);
 	MainWindow * mainWindow = new MainWindow();
     app->installEventFilter(mainWindow); // to catch FileOpen events.
     
@@ -85,9 +85,9 @@ int main(int argc, char* argv[])
     
     if(!database.empty())
     {
-    	mainWindow->openDatabase(database.c_str());
+    	mainWindow->openDatabase(database.c_str(), parameters);
     }
-    if(parameters.size())
+    else if(parameters.size())
     {
     	mainWindow->updateParameters(parameters);
     }

@@ -171,6 +171,7 @@ public:
 	bool setUserData(int id, const cv::Mat & data);
 	int getDatabaseMemoryUsed() const; // in bytes
 	std::string getDatabaseVersion() const;
+	std::string getDatabaseUrl() const;
 	double getDbSavingTime() const;
 	Transform getOdomPose(int signatureId, bool lookInDatabase = false) const;
 	Transform getGroundTruthPose(int signatureId, bool lookInDatabase = false) const;
@@ -290,8 +291,9 @@ private:
 	float _laserScanDownsampleStepSize;
 	float _laserScanVoxelSize;
 	int _laserScanNormalK;
-	int _laserScanNormalRadius;
+	float _laserScanNormalRadius;
 	bool _reextractLoopClosureFeatures;
+	bool _localBundleOnLoopClosure;
 	float _rehearsalMaxDistance;
 	float _rehearsalMaxAngle;
 	bool _rehearsalWeightIgnoredWhileMoving;
@@ -300,6 +302,8 @@ private:
 	int _visMaxFeatures;
 	int _visCorType;
 	bool _imagesAlreadyRectified;
+	bool _rectifyOnlyFeatures;
+	bool _covOffDiagonalIgnored;
 
 	int _idCount;
 	int _idMapCount;
@@ -309,6 +313,8 @@ private:
 	bool _linksChanged; // False by default, become true when links are modified.
 	int _signaturesAdded;
 	GPS _gpsOrigin;
+	std::vector<CameraModel> _rectCameraModels;
+	StereoCameraModel _rectStereoCameraModel;
 
 	std::map<int, Signature *> _signatures; // TODO : check if a signature is already added? although it is not supposed to occur...
 	std::set<int> _stMem; // id

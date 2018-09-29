@@ -145,7 +145,7 @@
          <rect>
           <x>0</x>
           <y>0</y>
-          <width>353</width>
+          <width>379</width>
           <height>816</height>
          </rect>
         </property>
@@ -172,7 +172,7 @@
             <item row="3" column="0">
              <widget class="QLabel" name="label_15">
               <property name="toolTip">
-               <string>Number of inner squares on the board</string>
+               <string/>
               </property>
               <property name="text">
                <string>Square size</string>
@@ -228,7 +228,7 @@
             <item row="0" column="0">
              <widget class="QLabel" name="label_21">
               <property name="toolTip">
-               <string>Number of inner squares on the board</string>
+               <string/>
               </property>
               <property name="text">
                <string>Download</string>
@@ -264,7 +264,7 @@
             <item row="4" column="0">
              <widget class="QLabel" name="label_22">
               <property name="toolTip">
-               <string>Number of inner squares on the board</string>
+               <string>If &gt; 1, image is scaled down to help board detection on high definition images</string>
               </property>
               <property name="text">
                <string>Max scale</string>
@@ -281,7 +281,14 @@
            </property>
            <layout class="QVBoxLayout" name="verticalLayout_6">
             <item>
-             <layout class="QGridLayout" name="gridLayout" columnstretch="0,1,1">
+             <layout class="QGridLayout" name="gridLayout" columnstretch="0,0,0">
+              <item row="5" column="0">
+               <widget class="QLabel" name="label_4">
+                <property name="text">
+                 <string>Skew</string>
+                </property>
+               </widget>
+              </item>
               <item row="0" column="0">
                <widget class="QLabel" name="label_19">
                 <property name="text">
@@ -417,13 +424,6 @@
                 </property>
                </widget>
               </item>
-              <item row="5" column="0">
-               <widget class="QLabel" name="label_4">
-                <property name="text">
-                 <string>Skew</string>
-                </property>
-               </widget>
-              </item>
               <item row="5" column="1">
                <widget class="QProgressBar" name="progressBar_skew">
                 <property name="value">
@@ -444,11 +444,18 @@
              </layout>
             </item>
             <item>
-             <layout class="QHBoxLayout" name="horizontalLayout_5" stretch="1,0">
+             <layout class="QHBoxLayout" name="horizontalLayout_5" stretch="1,0,0">
               <item>
                <widget class="QPushButton" name="pushButton_calibrate">
                 <property name="text">
                  <string>Calibrate</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QCheckBox" name="checkBox_fisheye">
+                <property name="text">
+                 <string>Fish eye</string>
                 </property>
                </widget>
               </item>
@@ -467,6 +474,13 @@
                <string>Camera intrinsic parameters</string>
               </property>
               <layout class="QGridLayout" name="gridLayout_2">
+               <item row="8" column="2">
+                <widget class="QLineEdit" name="lineEdit_P_2">
+                 <property name="readOnly">
+                  <bool>true</bool>
+                 </property>
+                </widget>
+               </item>
                <item row="0" column="1">
                 <widget class="QLabel" name="label_fx">
                  <property name="text">
@@ -676,13 +690,6 @@
                </item>
                <item row="7" column="2">
                 <widget class="QLineEdit" name="lineEdit_R_2">
-                 <property name="readOnly">
-                  <bool>true</bool>
-                 </property>
-                </widget>
-               </item>
-               <item row="8" column="2">
-                <widget class="QLineEdit" name="lineEdit_P_2">
                  <property name="readOnly">
                   <bool>true</bool>
                  </property>
