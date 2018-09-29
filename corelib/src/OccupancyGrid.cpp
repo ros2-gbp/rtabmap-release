@@ -74,6 +74,11 @@ OccupancyGrid::OccupancyGrid(const ParametersMap & parameters) :
 	erode_(Parameters::defaultGridGlobalEroded()),
 	footprintRadius_(Parameters::defaultGridGlobalFootprintRadius()),
 	updateError_(Parameters::defaultGridGlobalUpdateError()),
+	occupancyThr_(Parameters::defaultGridGlobalOccupancyThr()),
+	probHit_(logodds(Parameters::defaultGridGlobalProbHit())),
+	probMiss_(logodds(Parameters::defaultGridGlobalProbMiss())),
+	probClampingMin_(logodds(Parameters::defaultGridGlobalProbClampingMin())),
+	probClampingMax_(logodds(Parameters::defaultGridGlobalProbClampingMax())),
 	xMin_(0.0f),
 	yMin_(0.0f),
 	cloudAssembling_(false),
@@ -130,6 +135,27 @@ void OccupancyGrid::parseParameters(const ParametersMap & parameters)
 	Parameters::parse(parameters, Parameters::kGridGlobalEroded(), erode_);
 	Parameters::parse(parameters, Parameters::kGridGlobalFootprintRadius(), footprintRadius_);
 	Parameters::parse(parameters, Parameters::kGridGlobalUpdateError(), updateError_);
+
+	Parameters::parse(parameters, Parameters::kGridGlobalOccupancyThr(), occupancyThr_);
+	if(Parameters::parse(parameters, Parameters::kGridGlobalProbHit(), probHit_))
+	{
+		probHit_ = logodds(probHit_);
+		UASSERT_MSG(probHit_ >= 0.0f, uFormat("probHit_=%f",probHit_).c_str());
+	}
+	if(Parameters::parse(parameters, Parameters::kGridGlobalProbMiss(), probMiss_))
+	{
+		probMiss_ = logodds(probMiss_);
+		UASSERT_MSG(probMiss_ <= 0.0f, uFormat("probMiss_=%f",probMiss_).c_str());
+	}
+	if(Parameters::parse(parameters, Parameters::kGridGlobalProbClampingMin(), probClampingMin_))
+	{
+		probClampingMin_ = logodds(probClampingMin_);
+	}
+	if(Parameters::parse(parameters, Parameters::kGridGlobalProbClampingMax(), probClampingMax_))
+	{
+		probClampingMax_ = logodds(probClampingMax_);
+	}
+	UASSERT(probClampingMax_ > probClampingMin_);
 
 	UASSERT(minMapSize_ >= 0.0f);
 
@@ -205,7 +231,23 @@ void OccupancyGrid::setMap(const cv::Mat & map, float xMin, float yMin, float ce
 		UASSERT(cellSize > 0.0f);
 		UASSERT(map.type() == CV_8SC1);
 		map_ = map.clone();
-		mapInfo_ = cv::Mat::zeros(map.size(), CV_32FC3);
+		mapInfo_ = cv::Mat::zeros(map.size(), CV_32FC4);
+		for(int i=0; i<map_.rows; ++i)
+		{
+			for(int j=0; j<map_.cols; ++j)
+			{
+				const char value = map_.at<char>(i,j);
+				float * info = mapInfo_.ptr<float>(i,j);
+				if(value == 0)
+				{
+					info[3] = probClampingMin_;
+				}
+				else if(value == 100)
+				{
+					info[3] = probClampingMax_;
+				}
+			}
+		}
 		xMin_ = xMin;
 		yMin_ = yMin;
 		cellSize_ = cellSize;
@@ -563,11 +605,71 @@ cv::Mat OccupancyGrid::getMap(float & xMin, float & yMin) const
 {
 	xMin = xMin_;
 	yMin = yMin_;
-	if(erode_ && !map_.empty())
+
+	cv::Mat map = map_;
+
+	UTimer t;
+	if(occupancyThr_ != 0.0f && !map.empty())
 	{
-		return util3d::erodeMap(map_);
+		float occThr = logodds(occupancyThr_);
+		map = cv::Mat(map.size(), map.type());
+		UASSERT(mapInfo_.cols == map.cols && mapInfo_.rows == map.rows);
+		for(int i=0; i<map.rows; ++i)
+		{
+			for(int j=0; j<map.cols; ++j)
+			{
+				const float * info = mapInfo_.ptr<float>(i, j);
+				if(info[3] == 0.0f)
+				{
+					map.at<char>(i, j) = -1; // unknown
+				}
+				else if(info[3] >= occThr)
+				{
+					map.at<char>(i, j) = 100; // unknown
+				}
+				else
+				{
+					map.at<char>(i, j) = 0; // empty
+				}
+			}
+		}
+		UDEBUG("Converting map from probabilities (thr=%f) = %fs", occupancyThr_, t.ticks());
 	}
-	return map_;
+
+	if(erode_ && !map.empty())
+	{
+		map = util3d::erodeMap(map);
+		UDEBUG("Eroding map = %fs", t.ticks());
+	}
+	return map;
+}
+
+cv::Mat OccupancyGrid::getProbMap(float & xMin, float & yMin) const
+{
+	xMin = xMin_;
+	yMin = yMin_;
+
+	cv::Mat map;
+	if(!mapInfo_.empty())
+	{
+		map = cv::Mat(mapInfo_.size(), map_.type());
+		for(int i=0; i<map.rows; ++i)
+		{
+			for(int j=0; j<map.cols; ++j)
+			{
+				const float * info = mapInfo_.ptr<float>(i, j);
+				if(info[3] == 0.0f)
+				{
+					map.at<char>(i, j) = -1; // unknown
+				}
+				else
+				{
+					map.at<char>(i, j) = char(probability(info[3])*100.0f); // empty
+				}
+			}
+		}
+	}
+	return map;
 }
 
 void OccupancyGrid::addToCache(
@@ -786,7 +888,7 @@ void OccupancyGrid::update(const std::map<int, Transform> & posesIn)
 	{
 		if(addedNodes_.find(iter->first) == addedNodes_.end())
 		{
-			UDEBUG("Pose %d not found in current added poses, it be added to map", iter->first);
+			UDEBUG("Pose %d not found in current added poses, it will be added to map", iter->first);
 			poses.push_back(*iter);
 		}
 	}
@@ -996,7 +1098,7 @@ void OccupancyGrid::update(const std::map<int, Transform> & posesIn)
 			{
 				UDEBUG("Map empty!");
 				map = cv::Mat::ones(newMapSize, CV_8S)*-1;
-				mapInfo = cv::Mat::zeros(newMapSize, CV_32FC3);
+				mapInfo = cv::Mat::zeros(newMapSize, CV_32FC4);
 			}
 			else
 			{
@@ -1110,6 +1212,20 @@ void OccupancyGrid::update(const std::map<int, Transform> & posesIn)
 								cter->second.first+=1;
 							}
 							value = 0; // free space
+
+							// update odds
+							if(nodeId != kter->first)
+							{
+								info[3] += probMiss_;
+								if (info[3] < probClampingMin_)
+								{
+									info[3] = probClampingMin_;
+								}
+								if (info[3] > probClampingMax_)
+								{
+									info[3] = probClampingMax_;
+								}
+							}
 						}
 					}
 				}
@@ -1220,6 +1336,20 @@ void OccupancyGrid::update(const std::map<int, Transform> & posesIn)
 								cter->second.second+=1;
 							}
 							value = 100; // obstacles
+
+							// update odds
+							if(nodeId != kter->first)
+							{
+								info[3] += probHit_;
+								if (info[3] < probClampingMin_)
+								{
+									info[3] = probClampingMin_;
+								}
+								if (info[3] > probClampingMax_)
+								{
+									info[3] = probClampingMax_;
+								}
+							}
 						}
 					}
 				}

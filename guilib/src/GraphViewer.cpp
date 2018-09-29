@@ -64,11 +64,16 @@ public:
 		QGraphicsEllipseItem(QRectF(-radius*100.0f,-radius*100.0f,radius*100.0f*2.0f,radius*100.0f*2.0f)),
 		_id(id),
 		_mapId(mapId),
-		_pose(pose)
+		_pose(pose),
+		_line(0)
 	{
 		this->setPos(-pose.y()*100.0f,-pose.x()*100.0f);
 		this->setBrush(pen().color());
 		this->setAcceptHoverEvents(true);
+		float r,p,yaw;
+		pose.getEulerAngles(r, p, yaw);
+		radius*=100.0f;
+		_line = new QGraphicsLineItem(0,0,-radius*sin(yaw),-radius*cos(yaw), this);
 	}
 	virtual ~NodeItem() {}
 
@@ -80,6 +85,17 @@ public:
 		QBrush b = this->brush();
 		b.setColor(color);
 		this->setBrush(b);
+
+		_line->setPen(QPen(QColor(255-color.red(), 255-color.green(), 255-color.blue())));
+	}
+
+	void setRadius(float radius)
+	{
+		float r,p,yaw;
+		_pose.getEulerAngles(r, p, yaw);
+		radius*=100.0f;
+		this->setRect(-radius, -radius, radius*2.0f, radius*2.0f);
+		_line->setLine(0,0,-radius*sin(yaw),-radius*cos(yaw));
 	}
 
 	int id() const {return _id;};
@@ -105,6 +121,7 @@ private:
 	int _id;
 	int _mapId;
 	Transform _pose;
+	QGraphicsLineItem * _line;
 };
 
 class NodeGPSItem: public NodeItem
@@ -822,15 +839,17 @@ void GraphViewer::updateMap(const cv::Mat & map8U, float resolution, float xMin,
 	}
 }
 
-void GraphViewer::updatePosterior(const std::map<int, float> & posterior)
+void GraphViewer::updatePosterior(const std::map<int, float> & posterior, float max)
 {
 	//find max
-	float max = 0.0f;
-	for(std::map<int, float>::const_iterator iter = posterior.begin(); iter!=posterior.end(); ++iter)
+	if(max <= 0.0f)
 	{
-		if(iter->first > 0 && iter->second>max)
+		for(std::map<int, float>::const_iterator iter = posterior.begin(); iter!=posterior.end(); ++iter)
 		{
-			max = iter->second;
+			if(iter->first > 0 && iter->second>max)
+			{
+				max = iter->second;
+			}
 		}
 	}
 	if(max > 0.0f)
@@ -840,8 +859,8 @@ void GraphViewer::updatePosterior(const std::map<int, float> & posterior)
 			std::map<int,float>::const_iterator jter = posterior.find(iter.key());
 			if(jter != posterior.end())
 			{
-				//UDEBUG("id=%d max=%f hyp=%f color = %f", iter.key(), max, jter->second, (1-jter->second/max)*240.0f/360.0f);
-				iter.value()->setColor(QColor::fromHsvF((1-jter->second/max)*240.0f/360.0f, 1, 1, 1)); //0=red 240=blue
+				float v = jter->second>max?max:jter->second;
+				iter.value()->setColor(QColor::fromHsvF((1-v/max)*240.0f/360.0f, 1, 1, 1)); //0=red 240=blue
 			}
 			else
 			{
@@ -1168,15 +1187,15 @@ void GraphViewer::setNodeRadius(float radius)
 	_nodeRadius = radius;
 	for(QMap<int, NodeItem*>::iterator iter=_nodeItems.begin(); iter!=_nodeItems.end(); ++iter)
 	{
-		iter.value()->setRect(-_nodeRadius*100.0f, -_nodeRadius*100.0f, _nodeRadius*100.0f*2.0f, _nodeRadius*100.0f*2.0f);
+		iter.value()->setRadius(_nodeRadius);
 	}
 	for(QMap<int, NodeItem*>::iterator iter=_gtNodeItems.begin(); iter!=_gtNodeItems.end(); ++iter)
 	{
-		iter.value()->setRect(-_nodeRadius*100.0f, -_nodeRadius*100.0f, _nodeRadius*100.0f*2.0f, _nodeRadius*100.0f*2.0f);
+		iter.value()->setRadius(_nodeRadius);
 	}
 	for(QMap<int, NodeItem*>::iterator iter=_gpsNodeItems.begin(); iter!=_gpsNodeItems.end(); ++iter)
 	{
-		iter.value()->setRect(-_nodeRadius*100.0f, -_nodeRadius*100.0f, _nodeRadius*100.0f*2.0f, _nodeRadius*100.0f*2.0f);
+		iter.value()->setRadius(_nodeRadius);
 	}
 }
 void GraphViewer::setLinkWidth(float width)
@@ -1904,7 +1923,7 @@ void GraphViewer::contextMenuEvent(QContextMenuEvent * event)
 		this->setGridMapVisible(!this->isGridMapVisible());
 		if(_gridMap->isVisible())
 		{
-			emit mapShownRequested();
+			 mapShownRequested();
 		}
 	}
 	else if(r == aShowHideOrigin)
@@ -1954,7 +1973,7 @@ void GraphViewer::contextMenuEvent(QContextMenuEvent * event)
 
 	if(r)
 	{
-		emit configChanged();
+		Q_EMIT configChanged();
 	}
 }
 

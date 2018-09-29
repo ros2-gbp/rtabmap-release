@@ -25,7 +25,8 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#include "DBDriverSqlite3.h"
+#include "rtabmap/core/DBDriverSqlite3.h"
+#include <sqlite3.h>
 
 #include "rtabmap/core/Signature.h"
 #include "rtabmap/core/VisualWord.h"
@@ -42,8 +43,8 @@ namespace rtabmap {
 DBDriverSqlite3::DBDriverSqlite3(const ParametersMap & parameters) :
 	DBDriver(parameters),
 	_ppDb(0),
-	_memoryUsedEstimate(0),
 	_version("0.0.0"),
+	_memoryUsedEstimate(0),
 	_dbInMemory(Parameters::defaultDbSqlite3InMemory()),
 	_cacheSize(Parameters::defaultDbSqlite3CacheSize()),
 	_journalMode(Parameters::defaultDbSqlite3JournalMode()),
@@ -3957,7 +3958,7 @@ void DBDriverSqlite3::saveQuery(const std::list<VisualWord *> & words) const
 
 					//execute query
 					rc=sqlite3_step(ppStmt);
-					UASSERT_MSG(rc == SQLITE_DONE, uFormat("DB error (%s): %s", _version.c_str(), sqlite3_errmsg(_ppDb)).c_str());
+					UASSERT_MSG(rc == SQLITE_DONE, uFormat("DB error (%s): %s (word=%d)", _version.c_str(), sqlite3_errmsg(_ppDb), w->id()).c_str());
 
 					rc = sqlite3_reset(ppStmt);
 					UASSERT_MSG(rc == SQLITE_OK, uFormat("DB error (%s): %s", _version.c_str(), sqlite3_errmsg(_ppDb)).c_str());
