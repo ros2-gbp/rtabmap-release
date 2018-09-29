@@ -227,6 +227,9 @@ const std::map<std::string, std::pair<bool, std::string> > & Parameters::getRemo
 	{
 		// removed parameters
 
+		// 0.17.5
+		removedParameters_.insert(std::make_pair("Grid/OctoMapOccupancyThr",     std::make_pair(true,  Parameters::kGridGlobalOccupancyThr())));
+
 		// 0.17.0
 		removedParameters_.insert(std::make_pair("Grid/Scan2dMaxFilledRange",     std::make_pair(false,  Parameters::kGridRangeMax())));
 
@@ -514,7 +517,15 @@ void Parameters::parse(const ParametersMap & parameters, ParametersMap & paramet
 
 const char * Parameters::showUsage()
 {
-	return  "Logger options:\n"
+	return  "RTAB-Map options:\n"
+			"   --help                         Show usage.\n"
+			"   --version                      Show version of rtabmap and its dependencies.\n"
+			"   --params                       Show all parameters with their default value and description\n"
+			"   --\"parameter name\" \"value\"     Overwrite a specific RTAB-Map's parameter :\n"
+			"                                    --SURF/HessianThreshold 150\n"
+			"                                   For parameters in table format, add ',' between values :\n"
+			"                                    --Kp/RoiRatios 0,0,0.1,0\n"
+			"Logger options:\n"
 			"   --nolog              Disable logger\n"
 			"   --logconsole         Set logger console type\n"
 			"   --logfile \"path\"     Set logger file type\n"
@@ -526,12 +537,6 @@ const char * Parameters::showUsage()
 			"   --logtime \"bool\"     Print time when logging\n"
 			"   --logwhere \"bool\"    Print where when logging\n"
 			"   --logthread \"bool\"   Print thread id when logging\n"
-			"RTAB-Map options:\n"
-			"   --params                       Show all parameters with their default value and description\n"
-			"   --\"parameter name\" \"value\"     Overwrite a specific RTAB-Map's parameter :\n"
-			"                                    --SURF/HessianThreshold 150\n"
-			"                                   For parameters in table format, add ',' between values :\n"
-			"                                    --Kp/RoiRatios 0,0,0.1,0\n"
 			;
 }
 
@@ -545,7 +550,188 @@ ParametersMap Parameters::parseArguments(int argc, char * argv[], bool onlyParam
 		bool checkParameters = onlyParameters;
 		if(!checkParameters)
 		{
-			if(strcmp(argv[i], "--nolog") == 0)
+			if(strcmp(argv[i], "--help") == 0)
+			{
+				std::cout << showUsage() << std::endl;
+				exit(0);
+			}
+			else if(strcmp(argv[i], "--version") == 0)
+			{
+				std::string str = "RTAB-Map:";
+
+				int spacing = 30;
+				std::cout << str << std::setw(spacing - str.size()) << RTABMAP_VERSION << std::endl;
+				str = "OpenCV:";
+#ifdef RTABMAP_OPENCV3
+				std::cout << str << std::setw(spacing - str.size()) << "3" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "2" << std::endl;
+#endif
+				str = "With OpenCV nonfree:";
+#ifdef RTABMAP_NONFREE
+				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
+#endif
+				str = "With TORO:";
+#ifdef RTABMAP_TORO
+				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
+#endif
+				str = "With g2o:";
+#ifdef RTABMAP_G2O
+				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
+#endif
+				str = "With GTSAM:";
+#ifdef RTABMAP_GTSAM
+				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
+#endif
+				str = "With Vertigo:";
+#ifdef RTABMAP_VERTIGO
+				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
+#endif
+				str = "With CVSBA:";
+#ifdef RTABMAP_CVSBA
+				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
+#endif
+				str = "With OpenNI2:";
+#ifdef RTABMAP_OPENNI2
+				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
+#endif
+				str = "With Freenect:";
+#ifdef RTABMAP_FREENECT
+				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
+#endif
+				str = "With Freenect2:";
+#ifdef RTABMAP_FREENECT2
+				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
+#endif
+				str = "With K4W2:";
+#ifdef RTABMAP_K4W2
+				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
+#endif
+				str = "With DC1394:";
+#ifdef RTABMAP_DC1394
+				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
+#endif
+				str = "With FlyCapture2:";
+#ifdef RTABMAP_FLYCAPTURE2
+				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
+#endif
+				str = "With ZED:";
+#ifdef RTABMAP_ZED
+				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
+#endif
+				str = "With RealSense:";
+#ifdef RTABMAP_REALSENSE
+				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
+#endif
+				str = "With RealSense SLAM:";
+#ifdef RTABMAP_REALSENSE_SLAM
+				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
+#endif
+				str = "With RealSense2:";
+#ifdef RTABMAP_REALSENSE2
+				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
+#endif
+				str = "With libpointmatcher:";
+#ifdef RTABMAP_POINTMATCHER
+				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
+#endif
+				str = "With octomap:";
+#ifdef RTABMAP_OCTOMAP
+				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
+#endif
+				str = "With cpu-tsdf:";
+#ifdef RTABMAP_CPUTSDF
+				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
+#endif
+				str = "With open chisel:";
+#ifdef RTABMAP_OPENCHISEL
+				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
+#endif
+				str = "With LOAM:";
+#ifdef RTABMAP_LOAM
+				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
+#endif
+				str = "With FOVIS:";
+#ifdef RTABMAP_FOVIS
+				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
+#endif
+				str = "With Viso2:";
+#ifdef RTABMAP_VISO2
+				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
+#endif
+				str = "With DVO:";
+#ifdef RTABMAP_DVO
+				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
+#endif
+				str = "With ORB_SLAM2:";
+#ifdef RTABMAP_ORB_SLAM2
+				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
+#endif
+				str = "With OKVIS:";
+#ifdef RTABMAP_OKVIS
+				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
+#endif
+				str = "With MSCKF_VIO:";
+#ifdef RTABMAP_MSCKF_VIO
+				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
+#endif
+				exit(0);
+			}
+			else if(strcmp(argv[i], "--nolog") == 0)
 			{
 				ULogger::setType(ULogger::kTypeNoLog);
 			}
@@ -680,6 +866,18 @@ ParametersMap Parameters::parseArguments(int argc, char * argv[], bool onlyParam
 						ignore = true;
 					}
 #endif
+#ifndef RTABMAP_LOAM
+					if(group.compare("OdomLOAM") == 0)
+					{
+						ignore = true;
+					}
+#endif
+#ifndef RTABMAP_MSCKF_VIO
+					if(group.compare("OdomMSCKF") == 0)
+					{
+						ignore = true;
+					}
+#endif
 					if(!ignore)
 					{
 						std::string str = "Param: " + iter->first + " = \"" + iter->second + "\"";
@@ -796,17 +994,15 @@ void Parameters::readINI(const std::string & configFile, ParametersMap & paramet
 				key = uReplaceChar(key, '\\', '/'); // Ini files use \ by default for separators, so replace them
 
 				// look for old parameter name
-				bool addParameter = true;
 				std::map<std::string, std::pair<bool, std::string> >::const_iterator oldIter = Parameters::getRemovedParameters().find(key);
 				if(oldIter!=Parameters::getRemovedParameters().end())
 				{
-					addParameter = oldIter->second.first;
-					if(addParameter)
+					if(oldIter->second.first)
 					{
 						if(parameters.find(oldIter->second.second) == parameters.end())
 						{
 							key = oldIter->second.second;
-							UWARN("Parameter migration from \"%s\" to \"%s\" (value=%s, default=%s).",
+							UINFO("Parameter migration from \"%s\" to \"%s\" (value=%s, default=%s).",
 									oldIter->first.c_str(), oldIter->second.second.c_str(), iter->second, Parameters::getDefaultParameters().at(oldIter->second.second).c_str());
 						}
 					}
