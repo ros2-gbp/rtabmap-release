@@ -68,6 +68,8 @@ SET(SRC_FILES
 	OdometryDVO.cpp
 	OdometryOkvis.cpp
 	OdometryORBSLAM2.cpp
+	OdometryLOAM.cpp
+	OdometryMSCKF.cpp
 	
 	IMUThread.cpp
 	
@@ -81,9 +83,7 @@ SET(SRC_FILES
 		
 	rtflann/ext/lz4.c
 	rtflann/ext/lz4hc.c
-	FlannIndex.cpp
-	
-	sqlite3/sqlite3.c	
+	FlannIndex.cpp	
 	
 	#clams stuff
 	clams/discrete_depth_distortion_model_helpers.cpp
@@ -126,6 +126,26 @@ SET(LIBRARIES
 	${PCL_LIBRARIES} 
 	${ZLIB_LIBRARIES} 
 )
+
+IF(Sqlite3_FOUND)
+    SET(INCLUDE_DIRS
+		${INCLUDE_DIRS}
+		${Sqlite3_INCLUDE_DIRS}
+	)
+	SET(LIBRARIES
+		${LIBRARIES}
+		${Sqlite3_LIBRARIES}
+	)
+ELSE()
+	SET(SRC_FILES
+		${SRC_FILES}
+		sqlite3/sqlite3.c
+	)
+	 SET(INCLUDE_DIRS
+	    ${CMAKE_CURRENT_SOURCE_DIR}/sqlite3
+		${INCLUDE_DIRS}
+	)
+ENDIF()
 
 IF(Freenect_FOUND)
 	IF(Freenect_DASH_INCLUDES)
@@ -184,6 +204,24 @@ IF(RealSense_FOUND)
 		${RealSense_LIBRARIES}
 	)
 ENDIF(RealSense_FOUND)
+
+IF(realsense2_FOUND)
+	SET(INCLUDE_DIRS
+		${INCLUDE_DIRS}
+		${realsense2_INCLUDE_DIRS}
+	)
+	IF(WIN32)
+	    SET(LIBRARIES
+			${LIBRARIES}
+			${RealSense2_LIBRARIES}
+		)
+	ELSE()
+		SET(LIBRARIES
+			${LIBRARIES}
+			realsense2
+		)
+	ENDIF()
+ENDIF(realsense2_FOUND)
 
 IF(DC1394_FOUND)
 	SET(INCLUDE_DIRS
@@ -262,6 +300,17 @@ IF(libpointmatcher_FOUND)
 		${libpointmatcher_LIBRARIES}
 	)
 ENDIF(libpointmatcher_FOUND)
+
+IF(loam_velodyne_FOUND)
+	SET(INCLUDE_DIRS 
+		${INCLUDE_DIRS} 
+		${loam_velodyne_INCLUDE_DIRS}
+	)
+	SET(LIBRARIES
+		${LIBRARIES}
+		${loam_velodyne_LIBRARIES}
+	)
+ENDIF(loam_velodyne_FOUND)
 
 IF(ZED_FOUND)
 	SET(INCLUDE_DIRS
@@ -348,6 +397,17 @@ IF(okvis_FOUND)
 		${LIBRARIES}
 	)
 ENDIF(okvis_FOUND)
+
+IF(msckf_vio_FOUND)
+    SET(INCLUDE_DIRS
+		${msckf_vio_INCLUDE_DIRS}
+		${INCLUDE_DIRS}
+	)
+	SET(LIBRARIES
+		${msckf_vio_LIBRARIES}
+		${LIBRARIES}
+	)
+ENDIF(msckf_vio_FOUND)
 
 IF(ORB_SLAM2_FOUND)
     SET(INCLUDE_DIRS
