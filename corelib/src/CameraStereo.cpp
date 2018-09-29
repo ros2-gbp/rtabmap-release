@@ -39,6 +39,11 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap/utilite/UTimer.h>
 #include <rtabmap/utilite/UMath.h>
 
+#include <opencv2/imgproc/types_c.h>
+#if CV_MAJOR_VERSION >= 3
+#include <opencv2/videoio/videoio_c.h>
+#endif
+
 #ifdef RTABMAP_DC1394
 #include <dc1394/dc1394.h>
 #endif
@@ -361,10 +366,7 @@ CameraStereoDC1394::CameraStereoDC1394(float imageRate, const Transform & localT
 CameraStereoDC1394::~CameraStereoDC1394()
 {
 #ifdef RTABMAP_DC1394
-	if(device_)
-	{
-		delete device_;
-	}
+	delete device_;
 #endif
 }
 
@@ -829,10 +831,7 @@ CameraStereoZed::CameraStereoZed(
 CameraStereoZed::~CameraStereoZed()
 {
 #ifdef RTABMAP_ZED
-	if(zed_)
-	{
-		delete zed_;
-	}
+	delete zed_;
 #endif
 }
 
@@ -855,7 +854,7 @@ bool CameraStereoZed::init(const std::string & calibrationFolder, const std::str
 	param.depth_mode=(sl::DEPTH_MODE)quality_;
 	param.coordinate_units=sl::UNIT_METER;
 	param.coordinate_system=(sl::COORDINATE_SYSTEM)sl::COORDINATE_SYSTEM_IMAGE ;
-	param.sdk_verbose=false;
+	param.sdk_verbose=true;
 	param.sdk_gpu_id=-1;
 	param.depth_minimum_distance=-1;
 	param.camera_disable_self_calib=!selfCalibration_;
@@ -877,7 +876,7 @@ bool CameraStereoZed::init(const std::string & calibrationFolder, const std::str
 
 	if(r!=sl::ERROR_CODE::SUCCESS)
 	{
-		UERROR("Camera initialization failed: \"%s\"", errorCode2str(r).c_str());
+		UERROR("Camera initialization failed: \"%s\"", toString(r).c_str());
 		delete zed_;
 		zed_ = 0;
 		return false;
@@ -888,19 +887,26 @@ bool CameraStereoZed::init(const std::string & calibrationFolder, const std::str
 	      quality_, sl::UNIT_METER, sl::COORDINATE_SYSTEM_IMAGE , selfCalibration_?"true":"false");
 	UDEBUG("");
 
-	zed_->setConfidenceThreshold(confidenceThr_);
+	if(quality_!=sl::DEPTH_MODE_NONE)
+	{
+		zed_->setConfidenceThreshold(confidenceThr_);
+	}
 
 	if (computeOdometry_)
 	{
 		sl::TrackingParameters tparam;
 		tparam.enable_spatial_memory=false;
 		zed_->enableTracking(tparam);
+		if(r!=sl::ERROR_CODE::SUCCESS)
+		{
+			UERROR("Camera tracking initialization failed: \"%s\"", toString(r).c_str());
+		}
 	}
 
 	sl::CameraInformation infos = zed_->getCameraInformation();
 	sl::CalibrationParameters *stereoParams = &(infos.calibration_parameters );
 	sl::Resolution res = stereoParams->left_cam.image_size;
-				
+
 	stereoModel_ = StereoCameraModel(
 		stereoParams->left_cam.fx, 
 		stereoParams->left_cam.fy, 
@@ -993,16 +999,17 @@ SensorData CameraStereoZed::captureImage(CameraInfo * info)
 	{
 		UTimer timer;
 		bool res = zed_->grab(rparam);
-		while (src_ == CameraVideo::kUsbDevice && res && timer.elapsed() < 2.0)
+		while (src_ == CameraVideo::kUsbDevice && res!=sl::SUCCESS && timer.elapsed() < 2.0)
 		{
 			// maybe there is a latency with the USB, try again in 10 ms (for the next 2 seconds)
 			uSleep(10);
 			res = zed_->grab(rparam);
 		}
-		if(!res)
+		if(res==sl::SUCCESS)
 		{
 			// get left image
-			sl::Mat tmp;zed_->retrieveImage(tmp,sl::VIEW_LEFT);
+			sl::Mat tmp;
+			zed_->retrieveImage(tmp,sl::VIEW_LEFT);
 			cv::Mat rgbaLeft = slMat2cvMat(tmp);
 
 			cv::Mat left;
@@ -1032,28 +1039,37 @@ SensorData CameraStereoZed::captureImage(CameraInfo * info)
 			if (computeOdometry_ && info)
 			{
 				sl::Pose pose;
-				zed_->getPosition(pose);
-				int trackingConfidence = pose.pose_confidence;
-				// FIXME What does pose_confidence == -1 mean?
-				if (trackingConfidence>0)
+				sl::TRACKING_STATE tracking_state = zed_->getPosition(pose);
+				if (tracking_state == sl::TRACKING_STATE_OK)
 				{
-					info->odomPose = zedPoseToTransform(pose);
-					if (!info->odomPose.isNull())
+					int trackingConfidence = pose.pose_confidence;
+					// FIXME What does pose_confidence == -1 mean?
+					if (trackingConfidence>0)
 					{
-						//transform x->forward, y->left, z->up
-						Transform opticalTransform(0, 0, 1, 0, -1, 0, 0, 0, 0, -1, 0, 0);
-						info->odomPose = opticalTransform * info->odomPose * opticalTransform.inverse();
-
-						if (lost_)
+						info->odomPose = zedPoseToTransform(pose);
+						if (!info->odomPose.isNull())
 						{
-							info->odomCovariance = cv::Mat::eye(6, 6, CV_64FC1) * 9999.0f; // don't know transform with previous pose
-							lost_ = false;
-							UDEBUG("Init %s (var=%f)", info->odomPose.prettyPrint().c_str(), 9999.0f);
+							//transform x->forward, y->left, z->up
+							Transform opticalTransform(0, 0, 1, 0, -1, 0, 0, 0, 0, -1, 0, 0);
+							info->odomPose = opticalTransform * info->odomPose * opticalTransform.inverse();
+
+							if (lost_)
+							{
+								info->odomCovariance = cv::Mat::eye(6, 6, CV_64FC1) * 9999.0f; // don't know transform with previous pose
+								lost_ = false;
+								UDEBUG("Init %s (var=%f)", info->odomPose.prettyPrint().c_str(), 9999.0f);
+							}
+							else
+							{
+								info->odomCovariance = cv::Mat::eye(6, 6, CV_64FC1) * 1.0f / float(trackingConfidence);
+								UDEBUG("Run %s (var=%f)", info->odomPose.prettyPrint().c_str(), 1.0f / float(trackingConfidence));
+							}
 						}
 						else
 						{
-							info->odomCovariance = cv::Mat::eye(6, 6, CV_64FC1) * 1.0f / float(trackingConfidence);
-							UDEBUG("Run %s (var=%f)", info->odomPose.prettyPrint().c_str(), 1.0f / float(trackingConfidence));
+							info->odomCovariance = cv::Mat::eye(6, 6, CV_64FC1) * 9999.0f; // lost
+							lost_ = true;
+							UWARN("ZED lost! (trackingConfidence=%d)", trackingConfidence);
 						}
 					}
 					else
@@ -1065,9 +1081,7 @@ SensorData CameraStereoZed::captureImage(CameraInfo * info)
 				}
 				else
 				{
-					info->odomCovariance = cv::Mat::eye(6, 6, CV_64FC1) * 9999.0f; // lost
-					lost_ = true;
-					UWARN("ZED lost! (trackingConfidence=%d)", trackingConfidence);
+					UWARN("Tracking not ok: state=\"%s\"", toString(tracking_state).c_str());
 				}
 			}
 		}
@@ -1135,10 +1149,7 @@ CameraStereoImages::CameraStereoImages(
 CameraStereoImages::~CameraStereoImages()
 {
 	UDEBUG("");
-	if(camera2_)
-	{
-		delete camera2_;
-	}
+	delete camera2_;
 	UDEBUG("");
 }
 
@@ -1279,7 +1290,8 @@ CameraStereoVideo::CameraStereoVideo(
 		path_(path),
 		rectifyImages_(rectifyImages),
 		src_(CameraVideo::kVideoFile),
-		usbDevice_(0)
+		usbDevice_(0),
+		usbDevice2_(-1)
 {
 }
 
@@ -1294,7 +1306,8 @@ CameraStereoVideo::CameraStereoVideo(
 		path2_(pathRight),
 		rectifyImages_(rectifyImages),
 		src_(CameraVideo::kVideoFile),
-		usbDevice_(0)
+		usbDevice_(0),
+		usbDevice2_(-1)
 {
 }
 
@@ -1306,7 +1319,22 @@ CameraStereoVideo::CameraStereoVideo(
 	Camera(imageRate, localTransform),
 	rectifyImages_(rectifyImages),
 	src_(CameraVideo::kUsbDevice),
-	usbDevice_(device)
+	usbDevice_(device),
+	usbDevice2_(-1)
+{
+}
+
+CameraStereoVideo::CameraStereoVideo(
+	int deviceLeft,
+	int deviceRight,
+	bool rectifyImages,
+	float imageRate,
+	const Transform & localTransform) :
+	Camera(imageRate, localTransform),
+	rectifyImages_(rectifyImages),
+	src_(CameraVideo::kUsbDevice),
+	usbDevice_(deviceLeft),
+	usbDevice2_(deviceRight)
 {
 }
 
@@ -1330,20 +1358,27 @@ bool CameraStereoVideo::init(const std::string & calibrationFolder, const std::s
 
 	if (src_ == CameraVideo::kUsbDevice)
 	{
-		ULOGGER_DEBUG("CameraStereoVideo: Usb device initialization on device %d", usbDevice_);
 		capture_.open(usbDevice_);
+		if(usbDevice2_ < 0)
+		{
+			ULOGGER_DEBUG("CameraStereoVideo: Usb device initialization on device %d", usbDevice_);
+		}
+		else
+		{
+			ULOGGER_DEBUG("CameraStereoVideo: Usb device initialization on devices %d and %d", usbDevice_, usbDevice2_);
+			capture2_.open(usbDevice2_);
+		}
 	}
 	else if (src_ == CameraVideo::kVideoFile)
 	{
+		capture_.open(path_.c_str());
 		if(path2_.empty())
 		{
 			ULOGGER_DEBUG("CameraStereoVideo: filename=\"%s\"", path_.c_str());
-			capture_.open(path_.c_str());
 		}
 		else
 		{
 			ULOGGER_DEBUG("CameraStereoVideo: filenames=\"%s\" and \"%s\"", path_.c_str(), path2_.c_str());
-			capture_.open(path_.c_str());
 			capture2_.open(path2_.c_str());
 		}
 	}
@@ -1352,7 +1387,7 @@ bool CameraStereoVideo::init(const std::string & calibrationFolder, const std::s
 		ULOGGER_ERROR("CameraStereoVideo: Unknown source...");
 	}
 
-	if(!capture_.isOpened() || (!path2_.empty() && !capture2_.isOpened()))
+	if(!capture_.isOpened() || ((!path2_.empty() || usbDevice2_>=0) && !capture2_.isOpened()))
 	{
 		ULOGGER_ERROR("CameraStereoVideo: Failed to create a capture object!");
 		capture_.release();
@@ -1411,11 +1446,11 @@ SensorData CameraStereoVideo::captureImage(CameraInfo * info)
 	SensorData data;
 
 	cv::Mat img;
-	if(capture_.isOpened() && (path2_.empty() || capture2_.isOpened()))
+	if(capture_.isOpened() && ((path2_.empty() && usbDevice2_ < 0) || capture2_.isOpened()))
 	{
 		cv::Mat leftImage;
 		cv::Mat rightImage;
-		if(path2_.empty())
+		if(path2_.empty() && usbDevice2_ < 0)
 		{
 			if(!capture_.read(img))
 			{

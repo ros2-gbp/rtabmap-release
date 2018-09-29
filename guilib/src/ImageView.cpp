@@ -38,6 +38,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <QVBoxLayout>
 #include <QGraphicsRectItem>
 #include "rtabmap/utilite/ULogger.h"
+#include "rtabmap/utilite/UCv2Qt.h"
 #include "rtabmap/gui/KeypointItem.h"
 #include "rtabmap/core/util2d.h"
 
@@ -58,10 +59,7 @@ public:
 	}
 	virtual ~LineItem()
 	{
-		if(_placeHolder)
-		{
-			delete _placeHolder;
-		}
+		delete _placeHolder;
 	}
 
 	void setColor(const QColor & color);
@@ -186,10 +184,39 @@ ImageView::ImageView(QWidget * parent) :
 	_graphicsViewMode = _menu->addAction(tr("Graphics view"));
 	_graphicsViewMode->setCheckable(true);
 	_graphicsViewMode->setChecked(false);
-	_graphicsViewScaled = _menu->addAction(tr("Scale image"));
+	_scaleMenu = _menu->addMenu("Scale image");
+	_scaleMenu->setEnabled(false);
+	_graphicsViewScaled = _scaleMenu->addAction(tr("Fit in view"));
 	_graphicsViewScaled->setCheckable(true);
 	_graphicsViewScaled->setChecked(true);
-	_graphicsViewScaled->setEnabled(false);
+	_graphicsViewScaledToHeight = _scaleMenu->addAction(tr("Fit height"));
+	_graphicsViewScaledToHeight->setCheckable(true);
+	_graphicsViewScaledToHeight->setChecked(false);
+	_graphicsViewNoScaling = _scaleMenu->addAction(tr("No scale"));
+	_graphicsViewNoScaling->setCheckable(true);
+	_graphicsViewNoScaling->setChecked(false);
+	QActionGroup * group = new QActionGroup(this);
+	group->addAction(_graphicsViewScaled);
+	group->addAction(_graphicsViewScaledToHeight);
+	group->addAction(_graphicsViewNoScaling);
+	QMenu * colorMap = _menu->addMenu("Depth color map");
+	_colorMapWhiteToBlack = colorMap->addAction(tr("White to black"));
+	_colorMapWhiteToBlack->setCheckable(true);
+	_colorMapWhiteToBlack->setChecked(true);
+	_colorMapBlackToWhite = colorMap->addAction(tr("Black to white"));
+	_colorMapBlackToWhite->setCheckable(true);
+	_colorMapBlackToWhite->setChecked(false);
+	_colorMapRedToBlue = colorMap->addAction(tr("Red to blue"));
+	_colorMapRedToBlue->setCheckable(true);
+	_colorMapRedToBlue->setChecked(false);
+	_colorMapBlueToRed = colorMap->addAction(tr("Blue to red"));
+	_colorMapBlueToRed->setCheckable(true);
+	_colorMapBlueToRed->setChecked(false);
+	group = new QActionGroup(this);
+	group->addAction(_colorMapWhiteToBlack);
+	group->addAction(_colorMapBlackToWhite);
+	group->addAction(_colorMapRedToBlue);
+	group->addAction(_colorMapBlueToRed);
 	_setAlpha = _menu->addAction(tr("Set transparency..."));
 	_saveImage = _menu->addAction(tr("Save picture..."));
 	_saveImage->setEnabled(false);
@@ -216,6 +243,8 @@ void ImageView::saveSettings(QSettings & settings, const QString & group) const
 	settings.setValue("bg_color", this->getDefaultBackgroundColor());
 	settings.setValue("graphics_view", this->isGraphicsViewMode());
 	settings.setValue("graphics_view_scale", this->isGraphicsViewScaled());
+	settings.setValue("graphics_view_scale_to_height", this->isGraphicsViewScaledToHeight());
+	settings.setValue("colormap", _colorMapWhiteToBlack->isChecked()?0:_colorMapBlackToWhite->isChecked()?1:_colorMapRedToBlue->isChecked()?2:3);
 	if(!group.isEmpty())
 	{
 		settings.endGroup();
@@ -237,6 +266,12 @@ void ImageView::loadSettings(QSettings & settings, const QString & group)
 	this->setDefaultBackgroundColor(settings.value("bg_color", this->getDefaultBackgroundColor()).value<QColor>());
 	this->setGraphicsViewMode(settings.value("graphics_view", this->isGraphicsViewMode()).toBool());
 	this->setGraphicsViewScaled(settings.value("graphics_view_scale", this->isGraphicsViewScaled()).toBool());
+	this->setGraphicsViewScaledToHeight(settings.value("graphics_view_scale_to_height", this->isGraphicsViewScaledToHeight()).toBool());
+	int colorMap = settings.value("colormap", 0).toInt();
+	_colorMapWhiteToBlack->setChecked(colorMap==0);
+	_colorMapBlackToWhite->setChecked(colorMap==1);
+	_colorMapRedToBlue->setChecked(colorMap==2);
+	_colorMapBlueToRed->setChecked(colorMap==3);
 	if(!group.isEmpty())
 	{
 		settings.endGroup();
@@ -271,6 +306,11 @@ bool ImageView::isGraphicsViewMode() const
 bool ImageView::isGraphicsViewScaled() const
 {
 	return _graphicsViewScaled->isChecked();
+}
+
+bool ImageView::isGraphicsViewScaledToHeight() const
+{
+	return _graphicsViewScaledToHeight->isChecked();
 }
 
 const QColor & ImageView::getDefaultBackgroundColor() const
@@ -365,7 +405,7 @@ void ImageView::setGraphicsViewMode(bool on)
 {
 	_graphicsViewMode->setChecked(on);
 	_graphicsView->setVisible(on);
-	_graphicsViewScaled->setEnabled(on);
+	_scaleMenu->setEnabled(on);
 
 	if(on)
 	{
@@ -405,6 +445,12 @@ void ImageView::setGraphicsViewMode(bool on)
 		{
 			_graphicsView->fitInView(_graphicsView->sceneRect(), Qt::KeepAspectRatio);
 		}
+		else if(_graphicsViewScaledToHeight->isChecked())
+		{
+			QRectF rect = _graphicsView->sceneRect();
+			rect.setWidth(1);
+			_graphicsView->fitInView(rect, Qt::KeepAspectRatio);
+		}
 		else
 		{
 			_graphicsView->resetTransform();
@@ -423,6 +469,27 @@ void ImageView::setGraphicsViewScaled(bool scaled)
 	if(scaled)
 	{
 		_graphicsView->fitInView(_graphicsView->sceneRect(), Qt::KeepAspectRatio);
+	}
+	else
+	{
+		_graphicsView->resetTransform();
+	}
+
+	if(!_graphicsView->isVisible())
+	{
+		this->update();
+	}
+}
+
+void ImageView::setGraphicsViewScaledToHeight(bool scaled)
+{
+	_graphicsViewScaledToHeight->setChecked(scaled);
+
+	if(scaled)
+	{
+		QRectF rect = _graphicsView->sceneRect();
+		rect.setWidth(1);
+		_graphicsView->fitInView(rect, Qt::KeepAspectRatio);
 	}
 	else
 	{
@@ -569,9 +636,18 @@ void ImageView::paintEvent(QPaintEvent *event)
 void ImageView::resizeEvent(QResizeEvent* event)
 {
 	QWidget::resizeEvent(event);
-	if(_graphicsView->isVisible() && _graphicsViewScaled->isChecked())
+	if(_graphicsView->isVisible())
 	{
-		_graphicsView->fitInView(_graphicsView->sceneRect(), Qt::KeepAspectRatio);
+		if(_graphicsViewScaled->isChecked())
+		{
+			_graphicsView->fitInView(_graphicsView->sceneRect(), Qt::KeepAspectRatio);
+		}
+		else if(_graphicsViewScaledToHeight->isChecked())
+		{
+			QRectF rect = _graphicsView->sceneRect();
+			rect.setWidth(1);
+			_graphicsView->fitInView(rect, Qt::KeepAspectRatio);
+		}
 	}
 }
 
@@ -608,32 +684,43 @@ void ImageView::contextMenuEvent(QContextMenuEvent * e)
 	else if(action == _showFeatures)
 	{
 		this->setFeaturesShown(_showFeatures->isChecked());
-		emit configChanged();
+		Q_EMIT configChanged();
 	}
 	else if(action == _showImage)
 	{
 		this->setImageShown(_showImage->isChecked());
-		emit configChanged();
+		Q_EMIT configChanged();
 	}
 	else if(action == _showImageDepth)
 	{
 		this->setImageDepthShown(_showImageDepth->isChecked());
-		emit configChanged();
+		Q_EMIT configChanged();
 	}
 	else if(action == _showLines)
 	{
 		this->setLinesShown(_showLines->isChecked());
-		emit configChanged();
+		Q_EMIT configChanged();
 	}
 	else if(action == _graphicsViewMode)
 	{
 		this->setGraphicsViewMode(_graphicsViewMode->isChecked());
-		emit configChanged();
+		Q_EMIT configChanged();
 	}
 	else if(action == _graphicsViewScaled)
 	{
 		this->setGraphicsViewScaled(_graphicsViewScaled->isChecked());
-		emit configChanged();
+		Q_EMIT configChanged();
+	}
+	else if(action == _graphicsViewScaledToHeight || action == _graphicsViewNoScaling)
+	{
+		this->setGraphicsViewScaledToHeight(_graphicsViewScaledToHeight->isChecked());
+		Q_EMIT configChanged();
+	}
+	else if(action == _colorMapBlackToWhite || action == _colorMapWhiteToBlack || action == _colorMapRedToBlue || action == _colorMapBlueToRed)
+	{
+		if(!_imageDepthCv.empty())
+			this->setImageDepth(_imageDepthCv);
+		Q_EMIT configChanged();
 	}
 	else if(action == _setAlpha)
 	{
@@ -642,7 +729,7 @@ void ImageView::contextMenuEvent(QContextMenuEvent * e)
 		if(ok)
 		{
 			this->setAlpha(value);
-			emit configChanged();
+			Q_EMIT configChanged();
 		}
 	}
 	else if(action == _setFeaturesSize)
@@ -652,14 +739,14 @@ void ImageView::contextMenuEvent(QContextMenuEvent * e)
 		if(ok)
 		{
 			this->setFeaturesSize(value);
-			emit configChanged();
+			Q_EMIT configChanged();
 		}
 	}
 
 	if(action == _showImage || action ==_showImageDepth)
 	{
 		this->updateOpacity();
-		emit configChanged();
+		Q_EMIT configChanged();
 	}
 }
 
@@ -808,6 +895,25 @@ void ImageView::setImage(const QImage & image)
 	}
 }
 
+void ImageView::setImageDepth(const cv::Mat & imageDepth)
+{
+	_imageDepthCv = imageDepth;
+	uCvQtDepthColorMap colorMap = uCvQtDepthWhiteToBlack;
+	if(_colorMapBlackToWhite->isChecked())
+	{
+		colorMap = uCvQtDepthBlackToWhite;
+	}
+	else if(_colorMapRedToBlue->isChecked())
+	{
+		colorMap = uCvQtDepthRedToBlue;
+	}
+	else if(_colorMapBlueToRed->isChecked())
+	{
+		colorMap = uCvQtDepthBlueToRed;
+	}
+	setImageDepth(uCvMat2QImage(_imageDepthCv, true, colorMap));
+}
+
 void ImageView::setImageDepth(const QImage & imageDepth)
 {
 	_imageDepth = QPixmap::fromImage(imageDepth);
@@ -935,6 +1041,12 @@ void ImageView::setSceneRect(const QRectF & rect)
 	if(_graphicsViewScaled->isChecked())
 	{
 		_graphicsView->fitInView(_graphicsView->sceneRect(), Qt::KeepAspectRatio);
+	}
+	else if(_graphicsViewScaledToHeight->isChecked())
+	{
+		QRectF rect = _graphicsView->sceneRect();
+		rect.setWidth(1);
+		_graphicsView->fitInView(rect, Qt::KeepAspectRatio);
 	}
 	else
 	{
