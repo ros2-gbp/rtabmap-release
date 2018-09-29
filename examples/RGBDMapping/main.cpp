@@ -46,7 +46,7 @@ void showUsage()
 {
 	printf("\nUsage:\n"
 			"rtabmap-rgbd_mapping driver\n"
-			"  driver       Driver number to use: 0=OpenNI-PCL, 1=OpenNI2, 2=Freenect, 3=OpenNI-CV, 4=OpenNI-CV-ASUS, 5=Freenect2, 6=ZED SDK, 7=RealSense\n\n");
+			"  driver       Driver number to use: 0=OpenNI-PCL, 1=OpenNI2, 2=Freenect, 3=OpenNI-CV, 4=OpenNI-CV-ASUS, 5=Freenect2, 6=ZED SDK, 7=RealSense, 8=RealSense2\n\n");
 	exit(1);
 }
 
@@ -64,9 +64,9 @@ int main(int argc, char * argv[])
 	else
 	{
 		driver = atoi(argv[argc-1]);
-		if(driver < 0 || driver > 7)
+		if(driver < 0 || driver > 8)
 		{
-			UERROR("driver should be between 0 and 7.");
+			UERROR("driver should be between 0 and 8.");
 			showUsage();
 		}
 	}
@@ -141,6 +141,15 @@ int main(int argc, char * argv[])
 		}
 		camera = new CameraRealSense(0, 0, 0, false, 0, opticalRotation);
 	}
+	else if (driver == 8)
+	{
+		if (!CameraRealSense2::available())
+		{
+			UERROR("Not built with RealSense2 support...");
+			exit(-1);
+		}
+		camera = new CameraRealSense2("", 0, opticalRotation);
+	}
 	else
 	{
 		camera = new rtabmap::CameraOpenni("", 0, opticalRotation);
@@ -163,9 +172,12 @@ int main(int argc, char * argv[])
 	OdometryThread odomThread(new OdometryF2M());
 
 
+	ParametersMap params;
+	//param.insert(ParametersPair(Parameters::kRGBDCreateOccupancyGrid(), "true")); // uncomment to create local occupancy grids
+
 	// Create RTAB-Map to process OdometryEvent
 	Rtabmap * rtabmap = new Rtabmap();
-	rtabmap->init();
+	rtabmap->init(params);
 	RtabmapThread rtabmapThread(rtabmap); // ownership is transfered
 
 	// Setup handlers

@@ -46,7 +46,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "g2o/core/optimization_algorithm_gauss_newton.h"
 #include "g2o/core/optimization_algorithm_levenberg.h"
 #include "g2o/core/robust_kernel_impl.h"
-#include "g2o/core/linear_solver.h"
+namespace g2o {
+// bug #include "g2o/core/eigen_types.h" not found on Indigo
+typedef Eigen::Matrix<double,Eigen::Dynamic,Eigen::Dynamic,Eigen::ColMajor> MatrixXD;
+}
 
 #ifdef RTABMAP_G2O
 #include "g2o/types/sba/types_sba.h"
@@ -164,10 +167,12 @@ std::map<int, Transform> OptimizerG2O::optimize(
 		int rootId,
 		const std::map<int, Transform> & poses,
 		const std::multimap<int, Link> & edgeConstraints,
+		cv::Mat & outputCovariance,
 		std::list<std::map<int, Transform> > * intermediateGraphes,
 		double * finalError,
 		int * iterationsDone)
 {
+	outputCovariance = cv::Mat::eye(6,6,CV_64FC1);
 	std::map<int, Transform> optimizedPoses;
 #ifdef RTABMAP_G2O
 	UDEBUG("Optimizing graph...");
@@ -530,7 +535,14 @@ std::map<int, Transform> OptimizerG2O::optimize(
 		UDEBUG("Initial optimization...");
 		optimizer.initializeOptimization();
 
-		UASSERT(optimizer.verifyInformationMatrices());
+		UASSERT_MSG(optimizer.verifyInformationMatrices(true),
+				"This error can be caused by (1) bad covariance matrix "
+				"set in odometry messages "
+				"(see requirements in g2o::OptimizableGraph::verifyInformationMatrices() function) "
+				"or that (2) PCL and g2o hadn't "
+				"been built both with or without \"-march=native\" compilation "
+				"flag (if one library is built with this flag and not the other, "
+				"this is causing Eigen to not work properly, resulting in segmentation faults).");
 
 		UINFO("g2o optimizing begin (max iterations=%d, robust=%d)", iterations(), isRobust()?1:0);
 		int it = 0;
@@ -659,6 +671,41 @@ std::map<int, Transform> OptimizerG2O::optimize(
 					UERROR("Vertex %d not found!?", iter->first);
 				}
 			}
+
+			g2o::VertexSE2* v = (g2o::VertexSE2*)optimizer.vertex(poses.rbegin()->first);
+			if(v)
+			{
+				UTimer t;
+				g2o::SparseBlockMatrix<g2o::MatrixXD> spinv;
+				optimizer.computeMarginals(spinv, v);
+				UINFO("Computed marginals = %fs (cols=%d rows=%d, v=%d id=%d)", t.ticks(), spinv.cols(), spinv.rows(), v->hessianIndex(), poses.rbegin()->first);
+				if(v->hessianIndex() >= 0 && v->hessianIndex() < (int)spinv.blockCols().size())
+				{
+					g2o::SparseBlockMatrix<g2o::MatrixXD>::SparseMatrixBlock * block = spinv.blockCols()[v->hessianIndex()].begin()->second;
+					UASSERT(block && block->cols() == 3 && block->cols() == 3);
+					outputCovariance.at<double>(0,0) = (*block)(0,0); // x-x
+					outputCovariance.at<double>(0,1) = (*block)(0,1); // x-y
+					outputCovariance.at<double>(0,5) = (*block)(0,2); // x-theta
+					outputCovariance.at<double>(1,0) = (*block)(1,0); // y-x
+					outputCovariance.at<double>(1,1) = (*block)(1,1); // y-y
+					outputCovariance.at<double>(1,5) = (*block)(1,2); // y-theta
+					outputCovariance.at<double>(5,0) = (*block)(2,0); // theta-x
+					outputCovariance.at<double>(5,1) = (*block)(2,1); // theta-y
+					outputCovariance.at<double>(5,5) = (*block)(2,2); // theta-theta
+				}
+				else if(v->hessianIndex() < 0)
+				{
+					UWARN("Computing marginals: vertex %d has negative hessian index (%d). Cannot compute last pose covariance.", poses.rbegin()->first, v->hessianIndex());
+				}
+				else
+				{
+					UWARN("Computing marginals: vertex %d has hessian not valid (%d > block size=%d). Cannot compute last pose covariance.", poses.rbegin()->first, v->hessianIndex(), (int)spinv.blockCols().size());
+				}
+			}
+			else
+			{
+				UERROR("Vertex %d not found!? Cannot compute marginals...", poses.rbegin()->first);
+			}
 		}
 		else
 		{
@@ -675,6 +722,35 @@ std::map<int, Transform> OptimizerG2O::optimize(
 				{
 					UERROR("Vertex %d not found!?", iter->first);
 				}
+			}
+
+			g2o::VertexSE3* v = (g2o::VertexSE3*)optimizer.vertex(poses.rbegin()->first);
+			if(v)
+			{
+				UTimer t;
+				g2o::SparseBlockMatrix<g2o::MatrixXD> spinv;
+				optimizer.computeMarginals(spinv, v);
+				UINFO("Computed marginals = %fs (cols=%d rows=%d, v=%d id=%d)", t.ticks(), spinv.cols(), spinv.rows(), v->hessianIndex(), poses.rbegin()->first);
+				if(v->hessianIndex() >= 0 && v->hessianIndex() < (int)spinv.blockCols().size())
+				{
+					g2o::SparseBlockMatrix<g2o::MatrixXD>::SparseMatrixBlock * block = spinv.blockCols()[v->hessianIndex()].begin()->second;
+					UASSERT(block && block->cols() == 6 && block->cols() == 6);
+					memcpy(outputCovariance.data, block->data(), outputCovariance.total()*sizeof(double));
+				}
+				else if(v->hessianIndex() < 0)
+				{
+					UWARN("Computing marginals: vertex %d has negative hessian index (%d). Cannot compute last pose covariance.", poses.rbegin()->first, v->hessianIndex());
+				}
+#ifdef RTABMAP_G2O_CPP11
+				else
+				{
+					UWARN("Computing marginals: vertex %d has hessian not valid (%d > block size=%d). Cannot compute last pose covariance.", poses.rbegin()->first, v->hessianIndex(), (int)spinv.blockCols().size());
+				}
+#endif
+			}
+			else
+			{
+				UERROR("Vertex %d not found!? Cannot compute marginals...", poses.rbegin()->first);
 			}
 		}
 	}
@@ -975,16 +1051,31 @@ std::map<int, Transform> OptimizerG2O::optimizeBA(
 
 		UDEBUG("fill 3D points to g2o...");
 		const int stepVertexId = poses.rbegin()->first+1;
+		int negVertexOffset = stepVertexId;
+		if(wordReferences.size() && wordReferences.rbegin()->first>0)
+		{
+			negVertexOffset += wordReferences.rbegin()->first;
+		}
+		UDEBUG("stepVertexId=%d, negVertexOffset=%d", stepVertexId, negVertexOffset);
 		std::list<g2o::OptimizableGraph::Edge*> edges;
 		for(std::map<int, std::map<int, cv::Point3f> >::const_iterator iter = wordReferences.begin(); iter!=wordReferences.end(); ++iter)
 		{
-			if(points3DMap.find(iter->first) != points3DMap.end())
+			int id = iter->first;
+			if(points3DMap.find(id) != points3DMap.end())
 			{
-				cv::Point3f pt3d = points3DMap.at(iter->first);
+				cv::Point3f pt3d = points3DMap.at(id);
 				g2o::VertexSBAPointXYZ* vpt3d = new g2o::VertexSBAPointXYZ();
 
 				vpt3d->setEstimate(Eigen::Vector3d(pt3d.x, pt3d.y, pt3d.z));
-				vpt3d->setId(stepVertexId + iter->first);
+				if(id<0)
+				{
+					vpt3d->setId(negVertexOffset + id*-1);
+				}
+				else
+				{
+					vpt3d->setId(stepVertexId + id);
+				}
+				UASSERT(vpt3d->id() > 0);
 				vpt3d->setMarginalized(true);
 				optimizer.addVertex(vpt3d);
 
@@ -1142,7 +1233,15 @@ std::map<int, Transform> OptimizerG2O::optimizeBA(
 						UDEBUG("Ignoring edge (%d<->%d) d=%f var=%f kernel=%f chi2=%f", (*iter)->vertex(0)->id()-stepVertexId, (*iter)->vertex(1)->id(), d, 1.0/((g2o::EdgeProjectP2SC*)(*iter))->information()(0,0), (*iter)->robustKernel()->delta(), (*iter)->chi2());
 #endif
 
-						cv::Point3f pt3d = points3DMap.at((*iter)->vertex(0)->id()-stepVertexId);
+						cv::Point3f pt3d;
+						if((*iter)->vertex(0)->id() > negVertexOffset)
+						{
+							pt3d = points3DMap.at(negVertexOffset - (*iter)->vertex(0)->id());
+						}
+						else
+						{
+							pt3d = points3DMap.at((*iter)->vertex(0)->id()-stepVertexId);
+						}
 						((g2o::VertexSBAPointXYZ*)(*iter)->vertex(0))->setEstimate(Eigen::Vector3d(pt3d.x, pt3d.y, pt3d.z));
 
 						if(outliers)
@@ -1218,7 +1317,17 @@ std::map<int, Transform> OptimizerG2O::optimizeBA(
 
 		for(std::map<int, cv::Point3f>::iterator iter = points3DMap.begin(); iter!=points3DMap.end(); ++iter)
 		{
-			const g2o::VertexSBAPointXYZ* v = (const g2o::VertexSBAPointXYZ*)optimizer.vertex(stepVertexId + iter->first);
+			const g2o::VertexSBAPointXYZ* v;
+			int id = iter->first;
+			if(id<0)
+			{
+				v = (const g2o::VertexSBAPointXYZ*)optimizer.vertex(negVertexOffset + id*-1);
+			}
+			else
+			{
+				v = (const g2o::VertexSBAPointXYZ*)optimizer.vertex(stepVertexId + id);
+			}
+
 			if(v)
 			{
 				cv::Point3f p(v->estimate()[0], v->estimate()[1], v->estimate()[2]);
