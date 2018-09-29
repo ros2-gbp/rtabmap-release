@@ -55,10 +55,12 @@ std::map<int, Transform> OptimizerTORO::optimize(
 		int rootId,
 		const std::map<int, Transform> & poses,
 		const std::multimap<int, Link> & edgeConstraints,
+		cv::Mat & outputCovariance,
 		std::list<std::map<int, Transform> > * intermediateGraphes, // contains poses after tree init to last one before the end
 		double * finalError,
 		int * iterationsDone)
 {
+	outputCovariance = cv::Mat::eye(6,6,CV_64FC1);
 	std::map<int, Transform> optimizedPoses;
 #ifdef RTABMAP_TORO
 	UDEBUG("Optimizing graph (pose=%d constraints=%d)...", (int)poses.size(), (int)edgeConstraints.size());
@@ -312,6 +314,8 @@ std::map<int, Transform> OptimizerTORO::optimize(
 				optimizedPoses.insert(std::pair<int, Transform>(iter->first, newPose));
 			}
 		}
+
+		// TORO doesn't compute marginals...
 	}
 	else if(poses.size() == 1 || iterations() <= 0)
 	{

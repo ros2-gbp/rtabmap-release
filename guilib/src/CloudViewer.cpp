@@ -26,6 +26,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include "rtabmap/gui/CloudViewer.h"
+#include "rtabmap/gui/CloudViewerCellPicker.h"
 
 #include <rtabmap/core/Version.h>
 #include <rtabmap/core/util3d_transforms.h>
@@ -66,9 +67,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <vtkTIFFReader.h>
 #include <vtkOpenGLRenderWindow.h>
 #include <vtkPointPicker.h>
-#include <vtkCellPicker.h>
 #include <vtkTextActor.h>
 #include <vtkOBBTree.h>
+#include <vtkObjectFactory.h>
+#include <vtkQuad.h>
 #include <opencv/vtkImageMatSource.h>
 
 #ifdef RTABMAP_OCTOMAP
@@ -77,295 +79,13 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 namespace rtabmap {
 
-class MyInteractorStyle: public pcl::visualization::PCLVisualizerInteractorStyle
-{
-public:
-	MyInteractorStyle(CloudViewer * viewer) :
-		pcl::visualization::PCLVisualizerInteractorStyle(),
-		NumberOfClicks(0),
-		ResetPixelDistance(0),
-		pointsHolder_(new pcl::PointCloud<pcl::PointXYZRGB>),
-		viewer_(viewer)
-	{
-		UASSERT(viewer_!=0);
-		PreviousPosition[0] = PreviousPosition[1] = 0;
-		PreviousMeasure[0] = PreviousMeasure[1] =  PreviousMeasure[2] = 0.0f;
-	}
-	virtual void Rotate()
-	{
-		if (this->CurrentRenderer == NULL)
-		{
-			return;
-		}
-
-		vtkRenderWindowInteractor *rwi = this->Interactor;
-
-		int dx = rwi->GetEventPosition()[0] - rwi->GetLastEventPosition()[0];
-		int dy = rwi->GetEventPosition()[1] - rwi->GetLastEventPosition()[1];
-
-		int *size = this->CurrentRenderer->GetRenderWindow()->GetSize();
-
-		double delta_elevation = -20.0 / size[1];
-		double delta_azimuth = -20.0 / size[0];
-
-		double rxf = dx * delta_azimuth * this->MotionFactor;
-		double ryf = dy * delta_elevation * this->MotionFactor;
-
-		vtkCamera *camera = this->CurrentRenderer->GetActiveCamera();
-		UASSERT(camera);
-		camera->Azimuth(rxf);
-		camera->Elevation(ryf);
-		camera->OrthogonalizeViewUp();
-
-		if (this->AutoAdjustCameraClippingRange)
-		{
-			this->CurrentRenderer->ResetCameraClippingRange();
-		}
-
-		if (rwi->GetLightFollowCamera())
-		{
-			this->CurrentRenderer->UpdateLightsGeometryToFollowCamera();
-		}
-
-		//rwi->Render();
-	}
-
-protected:
-	virtual void OnMouseMove()
-	{
-		if(this->CurrentRenderer &&
-			this->CurrentRenderer->GetLayer() == 1 &&
-			this->GetInteractor()->GetControlKey() &&
-			viewer_->getLocators().size())
-		{
-			vtkCellPicker * cellPicker = dynamic_cast<vtkCellPicker*>(this->Interactor->GetPicker());
-			if(cellPicker)
-			{
-				int pickPosition[2];
-				this->GetInteractor()->GetEventPosition(pickPosition);
-				this->Interactor->GetPicker()->Pick(pickPosition[0], pickPosition[1],
-						0,  // always zero.
-						this->CurrentRenderer);
-				double picked[3];
-				this->Interactor->GetPicker()->GetPickPosition(picked);
-
-				UDEBUG("Control move! Picked value: %f %f %f", picked[0], picked[1], picked[2]);
-
-				float textSize = 0.05;
-
-				viewer_->removeCloud("interactor_points_ctrl");
-				pointsHolder_->resize(2);
-				pcl::PointXYZRGB pt(255,0,0);
-				pt.x = picked[0];
-				pt.y = picked[1];
-				pt.z = picked[2];
-				pointsHolder_->at(0) = pt;
-
-				viewer_->removeLine("interactor_ray_ctrl");
-				viewer_->removeText("interactor_ray_text_ctrl");
-
-				// Intersect the locator with the line
-				double length = 5.0;
-				double pickedNormal[3];
-				cellPicker->GetPickNormal(pickedNormal);
-				double lineP0[3] = {picked[0], picked[1], picked[2]};
-				double lineP1[3] = {picked[0]+pickedNormal[0]*length, picked[1]+pickedNormal[1]*length, picked[2]+pickedNormal[2]*length};
-				vtkSmartPointer<vtkPoints> intersectPoints = vtkSmartPointer<vtkPoints>::New();
-
-				viewer_->getLocators().begin()->second->IntersectWithLine(lineP0, lineP1, intersectPoints, NULL);
-
-				// Display list of intersections
-				double intersection[3];
-				double previous[3] = {picked[0], picked[1], picked[2]};
-				for(int i = 0; i < intersectPoints->GetNumberOfPoints(); i++ )
-				{
-					intersectPoints->GetPoint(i, intersection);
-
-					Eigen::Vector3f v(intersection[0]-previous[0], intersection[1]-previous[1], intersection[2]-previous[2]);
-					float n = v.norm();
-					if(n  > 0.01f)
-					{
-						v/=n;
-						v *= n/2.0f;
-						pt.r = 125;
-						pt.g = 125;
-						pt.b = 125;
-						pt.x = intersection[0];
-						pt.y = intersection[1];
-						pt.z = intersection[2];
-						pointsHolder_->at(1) = pt;
-						viewer_->addOrUpdateText("interactor_ray_text_ctrl", uFormat("%.2f m", n),
-								Transform(previous[0]+v[0], previous[1]+v[1],previous[2]+v[2], 0, 0, 0),
-								textSize,
-								Qt::gray);
-						viewer_->addOrUpdateLine("interactor_ray_ctrl",
-								Transform(previous[0], previous[1], previous[2], 0, 0, 0),
-								Transform(intersection[0], intersection[1], intersection[2], 0, 0, 0),
-								Qt::gray);
-
-						previous[0] = intersection[0];
-						previous[1] = intersection[1];
-						previous[2] = intersection[2];
-						break;
-					}
-				}
-				viewer_->addCloud("interactor_points_ctrl", pointsHolder_);
-				viewer_->setCloudPointSize("interactor_points_ctrl", 15);
-				viewer_->setCloudOpacity("interactor_points_ctrl", 0.5);
-			}
-		}
-		// Forward events
-		PCLVisualizerInteractorStyle::OnMouseMove();
-	}
-
-	virtual void OnLeftButtonDown()
-	{
-		// http://www.vtk.org/Wiki/VTK/Examples/Cxx/Interaction/DoubleClick
-		// http://www.vtk.org/Wiki/VTK/Examples/Cxx/Interaction/PointPicker
-		if(this->CurrentRenderer && this->CurrentRenderer->GetLayer() == 1)
-		{
-			this->NumberOfClicks++;
-			int pickPosition[2];
-			this->GetInteractor()->GetEventPosition(pickPosition);
-			int xdist = pickPosition[0] - this->PreviousPosition[0];
-			int ydist = pickPosition[1] - this->PreviousPosition[1];
-
-			this->PreviousPosition[0] = pickPosition[0];
-			this->PreviousPosition[1] = pickPosition[1];
-
-			int moveDistance = (int)sqrt((double)(xdist*xdist + ydist*ydist));
-
-			// Reset numClicks - If mouse moved further than resetPixelDistance
-			if(moveDistance > this->ResetPixelDistance)
-			{
-				this->NumberOfClicks = 1;
-			}
-
-			if(this->NumberOfClicks >= 2)
-			{
-				this->NumberOfClicks = 0;
-				this->Interactor->GetPicker()->Pick(pickPosition[0], pickPosition[1],
-						0,  // always zero.
-						this->CurrentRenderer);
-				double picked[3];
-				this->Interactor->GetPicker()->GetPickPosition(picked);
-				UDEBUG("Double clicked! Picked value: %f %f %f", picked[0], picked[1], picked[2]);
-				if(this->GetInteractor()->GetShiftKey()==0)
-				{
-					vtkCamera *camera = this->CurrentRenderer->GetActiveCamera();
-					UASSERT(camera);
-					double position[3];
-					double focal[3];
-					camera->GetPosition(position[0], position[1], position[2]);
-					camera->GetFocalPoint(focal[0], focal[1], focal[2]);
-					//camera->SetPosition (position[0] + (picked[0]-focal[0]), position[1] + (picked[1]-focal[1]), position[2] + (picked[2]-focal[2]));
-					camera->SetFocalPoint (picked[0], picked[1], picked[2]);
-					camera->OrthogonalizeViewUp();
-
-					if (this->AutoAdjustCameraClippingRange)
-					{
-						this->CurrentRenderer->ResetCameraClippingRange();
-					}
-
-					if (this->Interactor->GetLightFollowCamera())
-					{
-						this->CurrentRenderer->UpdateLightsGeometryToFollowCamera();
-					}
-				}
-				else
-				{
-					viewer_->removeText("interactor_pose");
-					viewer_->removeLine("interactor_line");
-					viewer_->removeCloud("interactor_points");
-					viewer_->removeLine("interactor_ray");
-					viewer_->removeText("interactor_ray_text");
-					viewer_->removeCloud("interactor_points_ctrl");
-					viewer_->removeLine("interactor_ray_ctrl");
-					viewer_->removeText("interactor_ray_text_ctrl");
-					PreviousMeasure[0] = 0.0f;
-					PreviousMeasure[1] = 0.0f;
-					PreviousMeasure[2] = 0.0f;
-				}
-			}
-			else if(this->GetInteractor()->GetShiftKey())
-			{
-				this->Interactor->GetPicker()->Pick(pickPosition[0], pickPosition[1],
-						0,  // always zero.
-						this->CurrentRenderer);
-				double picked[3];
-				this->Interactor->GetPicker()->GetPickPosition(picked);
-
-				UDEBUG("Shift clicked! Picked value: %f %f %f", picked[0], picked[1], picked[2]);
-
-				float textSize = 0.05;
-
-				viewer_->removeCloud("interactor_points");
-				pointsHolder_->clear();
-				pcl::PointXYZRGB pt(255,0,0);
-				pt.x = picked[0];
-				pt.y = picked[1];
-				pt.z = picked[2];
-				pointsHolder_->push_back(pt);
-
-				viewer_->removeLine("interactor_ray");
-				viewer_->removeText("interactor_ray_text");
-
-				if(	PreviousMeasure[0] != 0.0f && PreviousMeasure[1] != 0.0f && PreviousMeasure[2] != 0.0f &&
-					viewer_->getAddedLines().find("interactor_line") == viewer_->getAddedLines().end())
-				{
-					viewer_->addOrUpdateLine("interactor_line",
-							Transform(PreviousMeasure[0], PreviousMeasure[1], PreviousMeasure[2], 0, 0, 0),
-							Transform(picked[0], picked[1], picked[2], 0, 0, 0),
-							Qt::red);
-					pt.x = PreviousMeasure[0];
-					pt.y = PreviousMeasure[1];
-					pt.z = PreviousMeasure[2];
-					pointsHolder_->push_back(pt);
-
-					Eigen::Vector3f v(picked[0]-PreviousMeasure[0], picked[1]-PreviousMeasure[1], picked[2]-PreviousMeasure[2]);
-					float n = v.norm();
-					v/=n;
-					v *= n/2.0f;
-					viewer_->addOrUpdateText("interactor_pose", uFormat("%.2f m", n),
-							Transform(PreviousMeasure[0]+v[0], PreviousMeasure[1]+v[1],PreviousMeasure[2]+v[2], 0, 0, 0),
-							textSize,
-							Qt::red);
-				}
-				else
-				{
-					viewer_->removeText("interactor_pose");
-					viewer_->removeLine("interactor_line");
-				}
-				PreviousMeasure[0] = picked[0];
-				PreviousMeasure[1] = picked[1];
-				PreviousMeasure[2] = picked[2];
-
-				viewer_->addCloud("interactor_points", pointsHolder_);
-				viewer_->setCloudPointSize("interactor_points", 15);
-				viewer_->setCloudOpacity("interactor_points", 0.5);
-			}
-		}
-
-		// Forward events
-		PCLVisualizerInteractorStyle::OnLeftButtonDown();
-	}
-
-private:
-	unsigned int NumberOfClicks;
-	int PreviousPosition[2];
-	int ResetPixelDistance;
-	float PreviousMeasure[3];
-	pcl::PointCloud<pcl::PointXYZRGB>::Ptr pointsHolder_;
-	CloudViewer * viewer_;
-};
-
-
-CloudViewer::CloudViewer(QWidget *parent) :
+CloudViewer::CloudViewer(QWidget *parent, CloudViewerInteractorStyle * style) :
 		QVTKWidget(parent),
 		_aLockCamera(0),
 		_aFollowCamera(0),
 		_aResetCamera(0),
 		_aLockViewZ(0),
+		_aCameraOrtho(0),
 		_aShowTrajectory(0),
 		_aSetTrajectorySize(0),
 		_aClearTrajectory(0),
@@ -406,11 +126,13 @@ CloudViewer::CloudViewer(QWidget *parent) :
 	this->setMinimumSize(200, 200);
 
 	int argc = 0;
+	UASSERT(style!=0);
+	style->setCloudViewer(this);
 	_visualizer = new pcl::visualization::PCLVisualizer(
 		argc, 
 		0, 
 		"PCLVisualizer", 
-		vtkSmartPointer<MyInteractorStyle>(new MyInteractorStyle(this)),
+		style,
 		false);
 
 	_visualizer->setShowFPS(false);
@@ -503,6 +225,9 @@ void CloudViewer::createMenu()
 	_aLockViewZ = new QAction("Lock view Z", this);
 	_aLockViewZ->setCheckable(true);
 	_aLockViewZ->setChecked(true);
+	_aCameraOrtho = new QAction("Ortho mode", this);
+	_aCameraOrtho->setCheckable(true);
+	_aCameraOrtho->setChecked(false);
 	_aResetCamera = new QAction("Reset position", this);
 	_aShowTrajectory= new QAction("Show trajectory", this);
 	_aShowTrajectory->setCheckable(true);
@@ -546,6 +271,7 @@ void CloudViewer::createMenu()
 	cameraMenu->addAction(freeCamera);
 	cameraMenu->addSeparator();
 	cameraMenu->addAction(_aLockViewZ);
+	cameraMenu->addAction(_aCameraOrtho);
 	cameraMenu->addAction(_aResetCamera);
 	QActionGroup * group = new QActionGroup(this);
 	group->addAction(_aLockCamera);
@@ -637,6 +363,7 @@ void CloudViewer::saveSettings(QSettings & settings, const QString & group) cons
 	settings.setValue("camera_target_follow", this->isCameraTargetFollow());
 	settings.setValue("camera_free", this->isCameraFree());
 	settings.setValue("camera_lockZ", this->isCameraLockZ());
+	settings.setValue("camera_ortho", this->isCameraOrtho());
 
 	settings.setValue("bg_color", this->getDefaultBackgroundColor());
 	settings.setValue("rendering_rate", this->getRenderingRate());
@@ -683,6 +410,7 @@ void CloudViewer::loadSettings(QSettings & settings, const QString & group)
 		this->setCameraFree();
 	}
 	this->setCameraLockZ(settings.value("camera_lockZ", this->isCameraLockZ()).toBool());
+	this->setCameraOrtho(settings.value("camera_ortho", this->isCameraOrtho()).toBool());
 
 	this->setDefaultBackgroundColor(settings.value("bg_color", this->getDefaultBackgroundColor()).value<QColor>());
 	
@@ -915,6 +643,7 @@ bool CloudViewer::addCloudMesh(
 	UDEBUG("Adding %s with %d points and %d polygons", id.c_str(), (int)cloud->size(), (int)polygons.size());
 	if(_visualizer->addPolygonMesh<pcl::PointXYZ>(cloud, polygons, id, 1))
 	{
+		_visualizer->getCloudActorMap()->find(id)->second.actor->GetProperty()->SetAmbient(0.5);
 		_visualizer->getCloudActorMap()->find(id)->second.actor->GetProperty()->SetLighting(_aSetLighting->isChecked());
 		_visualizer->getCloudActorMap()->find(id)->second.actor->GetProperty()->SetInterpolation(_aSetFlatShading->isChecked()?VTK_FLAT:VTK_PHONG);
 		_visualizer->getCloudActorMap()->find(id)->second.actor->GetProperty()->SetEdgeVisibility(_aSetEdgeVisibility->isChecked());
@@ -948,6 +677,7 @@ bool CloudViewer::addCloudMesh(
 	UDEBUG("Adding %s with %d points and %d polygons", id.c_str(), (int)cloud->size(), (int)polygons.size());
 	if(_visualizer->addPolygonMesh<pcl::PointXYZRGB>(cloud, polygons, id, 1))
 	{
+		_visualizer->getCloudActorMap()->find(id)->second.actor->GetProperty()->SetAmbient(0.5);
 		_visualizer->getCloudActorMap()->find(id)->second.actor->GetProperty()->SetLighting(_aSetLighting->isChecked());
 		_visualizer->getCloudActorMap()->find(id)->second.actor->GetProperty()->SetInterpolation(_aSetFlatShading->isChecked()?VTK_FLAT:VTK_PHONG);
 		_visualizer->getCloudActorMap()->find(id)->second.actor->GetProperty()->SetEdgeVisibility(_aSetEdgeVisibility->isChecked());
@@ -981,6 +711,7 @@ bool CloudViewer::addCloudMesh(
 	UDEBUG("Adding %s with %d points and %d polygons", id.c_str(), (int)cloud->size(), (int)polygons.size());
 	if(_visualizer->addPolygonMesh<pcl::PointXYZRGBNormal>(cloud, polygons, id, 1))
 	{
+		_visualizer->getCloudActorMap()->find(id)->second.actor->GetProperty()->SetAmbient(0.5);
 		_visualizer->getCloudActorMap()->find(id)->second.actor->GetProperty()->SetLighting(_aSetLighting->isChecked());
 		_visualizer->getCloudActorMap()->find(id)->second.actor->GetProperty()->SetInterpolation(_aSetFlatShading->isChecked()?VTK_FLAT:VTK_PHONG);
 		_visualizer->getCloudActorMap()->find(id)->second.actor->GetProperty()->SetEdgeVisibility(_aSetEdgeVisibility->isChecked());
@@ -1013,6 +744,7 @@ bool CloudViewer::addCloudMesh(
 	UDEBUG("Adding %s with %d polygons", id.c_str(), (int)mesh->polygons.size());
 	if(_visualizer->addPolygonMesh(*mesh, id, 1))
 	{
+		_visualizer->getCloudActorMap()->find(id)->second.actor->GetProperty()->SetAmbient(0.5);
 		_visualizer->getCloudActorMap()->find(id)->second.actor->GetProperty()->SetLighting(_aSetLighting->isChecked());
 		_visualizer->getCloudActorMap()->find(id)->second.actor->GetProperty()->SetEdgeVisibility(_aSetEdgeVisibility->isChecked());
 		_visualizer->getCloudActorMap()->find(id)->second.actor->GetProperty()->SetBackfaceCulling(_aBackfaceCulling->isChecked());
@@ -1459,6 +1191,7 @@ bool CloudViewer::addTextureMesh (
   // Save the viewpoint transformation matrix to the global actor map
   (*_visualizer->getCloudActorMap())[id].viewpoint_transformation_ = transformation;
 
+  _visualizer->getCloudActorMap()->find(id)->second.actor->GetProperty()->SetAmbient(0.5);
   _visualizer->getCloudActorMap()->find(id)->second.actor->GetProperty()->SetLighting(_aSetLighting->isChecked());
   _visualizer->getCloudActorMap()->find(id)->second.actor->GetProperty()->SetInterpolation(_aSetFlatShading->isChecked()?VTK_FLAT:VTK_PHONG);
   _visualizer->getCloudActorMap()->find(id)->second.actor->GetProperty()->SetEdgeVisibility(_aSetEdgeVisibility->isChecked());
@@ -1554,7 +1287,7 @@ void CloudViewer::addOrUpdateCoordinate(
 		_visualizer->addCoordinateSystem(scale, transform.toEigen3f(), id, foreground?2:1);
 #else
 		// Well, on older versions, just update the main coordinate
-		_visualizer->addCoordinateSystem(scale, transform.toEigen3f(), foreground?2:1);
+		_visualizer->addCoordinateSystem(scale, transform.toEigen3f(), 0);
 #endif
 	}
 }
@@ -1787,6 +1520,148 @@ void CloudViewer::removeAllCubes()
 		this->removeCube(*iter);
 	}
 	UASSERT(_cubes.empty());
+}
+
+void CloudViewer::addOrUpdateQuad(
+		const std::string & id,
+		const Transform & pose,
+		float width,
+		float height,
+		const QColor & color,
+		bool foreground)
+{
+	addOrUpdateQuad(id, pose, width/2.0f, width/2.0f, height/2.0f, height/2.0f, color, foreground);
+}
+
+void CloudViewer::addOrUpdateQuad(
+		const std::string & id,
+		const Transform & pose,
+		float widthLeft,
+		float widthRight,
+		float heightBottom,
+		float heightTop,
+		const QColor & color,
+		bool foreground)
+{
+	if(id.empty())
+	{
+		UERROR("id should not be empty!");
+		return;
+	}
+
+	removeQuad(id);
+
+	if(!pose.isNull())
+	{
+		_quads.insert(id);
+
+		QColor c = Qt::gray;
+		if(color.isValid())
+		{
+			c = color;
+		}
+
+		// Create four points (must be in counter clockwise order)
+		double p0[3] = {0.0, -widthLeft, heightTop};
+		double p1[3] = {0.0, -widthLeft, -heightBottom};
+		double p2[3] = {0.0, widthRight, -heightBottom};
+		double p3[3] = {0.0, widthRight, heightTop};
+
+		// Add the points to a vtkPoints object
+		vtkSmartPointer<vtkPoints> points =
+				vtkSmartPointer<vtkPoints>::New();
+		points->InsertNextPoint(p0);
+		points->InsertNextPoint(p1);
+		points->InsertNextPoint(p2);
+		points->InsertNextPoint(p3);
+
+		// Create a quad on the four points
+		vtkSmartPointer<vtkQuad> quad =
+				vtkSmartPointer<vtkQuad>::New();
+		quad->GetPointIds()->SetId(0,0);
+		quad->GetPointIds()->SetId(1,1);
+		quad->GetPointIds()->SetId(2,2);
+		quad->GetPointIds()->SetId(3,3);
+
+		// Create a cell array to store the quad in
+		vtkSmartPointer<vtkCellArray> quads =
+				vtkSmartPointer<vtkCellArray>::New();
+		quads->InsertNextCell(quad);
+
+		// Create a polydata to store everything in
+		vtkSmartPointer<vtkPolyData> polydata =
+				vtkSmartPointer<vtkPolyData>::New();
+
+		// Add the points and quads to the dataset
+		polydata->SetPoints(points);
+		polydata->SetPolys(quads);
+
+		// Setup actor and mapper
+		vtkSmartPointer<vtkPolyDataMapper> mapper =
+				vtkSmartPointer<vtkPolyDataMapper>::New();
+#if VTK_MAJOR_VERSION <= 5
+		mapper->SetInput(polydata);
+#else
+		mapper->SetInputData(polydata);
+#endif
+
+		vtkSmartPointer<vtkLODActor> actor =
+				vtkSmartPointer<vtkLODActor>::New();
+		actor->SetMapper(mapper);
+		actor->GetProperty()->SetColor(c.redF(), c.greenF(), c.blueF());
+
+		//_visualizer->addActorToRenderer (actor, viewport);
+		// Add it to all renderers
+		_visualizer->getRendererCollection()->InitTraversal ();
+		vtkRenderer* renderer = NULL;
+		int i = 0;
+		while ((renderer = _visualizer->getRendererCollection()->GetNextItem ()) != NULL)
+		{
+			if ((foreground?2:1) == i)               // add the actor only to the specified viewport
+			{
+				renderer->AddActor (actor);
+			}
+			++i;
+		}
+
+		// Save the pointer/ID pair to the global actor map
+		(*_visualizer->getCloudActorMap())[id].actor = actor;
+
+		// Save the viewpoint transformation matrix to the global actor map
+		vtkSmartPointer<vtkMatrix4x4> transformation = vtkSmartPointer<vtkMatrix4x4>::New ();
+		pcl::visualization::PCLVisualizer::convertToVtkMatrix (pose.toEigen3f().matrix (), transformation);
+		(*_visualizer->getCloudActorMap())[id].viewpoint_transformation_ = transformation;
+		(*_visualizer->getCloudActorMap())[id].actor->SetUserMatrix (transformation);
+		(*_visualizer->getCloudActorMap())[id].actor->Modified ();
+
+		(*_visualizer->getCloudActorMap())[id].actor->GetProperty()->SetLighting(false);
+		_visualizer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_OPACITY, c.alphaF(), id);
+	}
+}
+
+void CloudViewer::removeQuad(const std::string & id)
+{
+	if(id.empty())
+	{
+		UERROR("id should not be empty!");
+		return;
+	}
+
+	if(_quads.find(id) != _quads.end())
+	{
+		_visualizer->removeShape(id);
+		_quads.erase(id);
+	}
+}
+
+void CloudViewer::removeAllQuads()
+{
+	std::set<std::string> quads = _quads;
+	for(std::set<std::string>::iterator iter = quads.begin(); iter!=quads.end(); ++iter)
+	{
+		this->removeQuad(*iter);
+	}
+	UASSERT(_quads.empty());
 }
 
 static const float frustum_vertices[] = {
@@ -2157,7 +2032,14 @@ void CloudViewer::resetCamera()
 	{
 		// reset relative to last current pose
 		cv::Point3f pt = util3d::transformPoint(cv::Point3f(_lastPose.x(), _lastPose.y(), _lastPose.z()), ( _lastPose.rotation()*Transform(-1, 0, 0)).translation());
-		if(_aLockViewZ->isChecked())
+		if(_aCameraOrtho->isChecked())
+		{
+			_visualizer->setCameraPosition(
+					_lastPose.x(), _lastPose.y(), _lastPose.z()+5,
+					_lastPose.x(), _lastPose.y(), _lastPose.z(),
+					1, 0, 0, 1);
+		}
+		else if(_aLockViewZ->isChecked())
 		{
 			_visualizer->setCameraPosition(
 					pt.x, pt.y, pt.z,
@@ -2171,6 +2053,13 @@ void CloudViewer::resetCamera()
 					_lastPose.x(), _lastPose.y(), _lastPose.z(),
 					_lastPose.r31(), _lastPose.r32(), _lastPose.r33(), 1);
 		}
+	}
+	else if(_aCameraOrtho->isChecked())
+	{
+		_visualizer->setCameraPosition(
+				0, 0, 5,
+				0, 0, 0,
+				1, 0, 0, 1);
 	}
 	else
 	{
@@ -2219,6 +2108,115 @@ Transform CloudViewer::getTargetPose() const
 	return _lastPose;
 }
 
+std::string CloudViewer::getIdByActor(vtkProp * actor) const
+{
+	pcl::visualization::CloudActorMapPtr cloudActorMap = _visualizer->getCloudActorMap();
+	for(pcl::visualization::CloudActorMap::iterator iter=cloudActorMap->begin(); iter!=cloudActorMap->end(); ++iter)
+	{
+		if(iter->second.actor.GetPointer() == actor)
+		{
+			return iter->first;
+		}
+	}
+
+#if PCL_VERSION_COMPARE(>=, 1, 7, 2)
+	// getShapeActorMap() not available in version < 1.7.2
+	pcl::visualization::ShapeActorMapPtr shapeActorMap = _visualizer->getShapeActorMap();
+	for(pcl::visualization::ShapeActorMap::iterator iter=shapeActorMap->begin(); iter!=shapeActorMap->end(); ++iter)
+	{
+		if(iter->second.GetPointer() == actor)
+		{
+			std::string id = iter->first;
+			while(id.back() == '*')
+			{
+				id.erase(id.size()-1);
+			}
+
+			return id;
+		}
+	}
+#endif
+	return std::string();
+}
+
+QColor CloudViewer::getColor(const std::string & id)
+{
+	QColor color;
+	pcl::visualization::CloudActorMap::iterator iter = _visualizer->getCloudActorMap()->find(id);
+	if(iter != _visualizer->getCloudActorMap()->end())
+	{
+		double r,g,b,a;
+		iter->second.actor->GetProperty()->GetColor(r,g,b);
+		a = iter->second.actor->GetProperty()->GetOpacity();
+		color.setRgbF(r, g, b, a);
+	}
+#if PCL_VERSION_COMPARE(>=, 1, 7, 2)
+	// getShapeActorMap() not available in version < 1.7.2
+	else
+	{
+		std::string idLayer1 = id+"*";
+		std::string idLayer2 = id+"**";
+		pcl::visualization::ShapeActorMap::iterator iter = _visualizer->getShapeActorMap()->find(id);
+		if(iter == _visualizer->getShapeActorMap()->end())
+		{
+			iter = _visualizer->getShapeActorMap()->find(idLayer1);
+			if(iter == _visualizer->getShapeActorMap()->end())
+			{
+				iter = _visualizer->getShapeActorMap()->find(idLayer2);
+			}
+		}
+		if(iter != _visualizer->getShapeActorMap()->end())
+		{
+			vtkActor * actor = vtkActor::SafeDownCast(iter->second);
+			if(actor)
+			{
+				double r,g,b,a;
+				actor->GetProperty()->GetColor(r,g,b);
+				a = actor->GetProperty()->GetOpacity();
+				color.setRgbF(r, g, b, a);
+			}
+		}
+	}
+#endif
+	return color;
+}
+
+void CloudViewer::setColor(const std::string & id, const QColor & color)
+{
+	pcl::visualization::CloudActorMap::iterator iter = _visualizer->getCloudActorMap()->find(id);
+	if(iter != _visualizer->getCloudActorMap()->end())
+	{
+		iter->second.actor->GetProperty()->SetColor(color.redF(),color.greenF(),color.blueF());
+		iter->second.actor->GetProperty()->SetOpacity(color.alphaF());
+	}
+#if PCL_VERSION_COMPARE(>=, 1, 7, 2)
+	// getShapeActorMap() not available in version < 1.7.2
+	else
+	{
+		std::string idLayer1 = id+"*";
+		std::string idLayer2 = id+"**";
+		pcl::visualization::ShapeActorMap::iterator iter = _visualizer->getShapeActorMap()->find(id);
+		if(iter == _visualizer->getShapeActorMap()->end())
+		{
+			iter = _visualizer->getShapeActorMap()->find(idLayer1);
+			if(iter == _visualizer->getShapeActorMap()->end())
+			{
+				iter = _visualizer->getShapeActorMap()->find(idLayer2);
+			}
+		}
+		if(iter != _visualizer->getShapeActorMap()->end())
+		{
+			vtkActor * actor = vtkActor::SafeDownCast(iter->second);
+			if(actor)
+			{
+				actor->GetProperty()->SetColor(color.redF(),color.greenF(),color.blueF());
+				actor->GetProperty()->SetOpacity(color.alphaF());
+			}
+		}
+	}
+#endif
+}
+
 void CloudViewer::setBackfaceCulling(bool enabled, bool frontfaceCulling)
 {
 	_aBackfaceCulling->setChecked(enabled);
@@ -2246,7 +2244,7 @@ void CloudViewer::setPolygonPicking(bool enabled)
 	}
 	else
 	{
-		vtkSmartPointer<vtkCellPicker> pp = vtkSmartPointer<vtkCellPicker>::New ();
+		vtkSmartPointer<CloudViewerCellPicker> pp = vtkSmartPointer<CloudViewerCellPicker>::New ();
 		pp->SetTolerance (pp->GetTolerance());
 		this->GetInteractor()->SetPicker (pp);
 		setMouseTracking(true);
@@ -2292,6 +2290,24 @@ void CloudViewer::setEdgeVisibility(bool visible)
 		iter->second.actor->GetProperty()->SetEdgeVisibility(_aSetEdgeVisibility->isChecked());
 	}
 	this->update();
+}
+
+void CloudViewer::setInteractorLayer(int layer)
+{
+	_visualizer->getRendererCollection()->InitTraversal ();
+	vtkRenderer* renderer = NULL;
+	int i =0;
+	while ((renderer = _visualizer->getRendererCollection()->GetNextItem ()) != NULL)
+	{
+		if(i==layer)
+		{
+			_visualizer->getInteractorStyle()->SetDefaultRenderer(renderer);
+			_visualizer->getInteractorStyle()->SetCurrentRenderer(renderer);
+			return;
+		}
+		++i;
+	}
+	UWARN("Could not set layer %d to interactor (layers=%d).", layer, _visualizer->getRendererCollection()->GetNumberOfItems());
 }
 
 void CloudViewer::getCameraPosition(
@@ -2376,7 +2392,7 @@ void CloudViewer::updateCameraTargetPosition(const Transform & pose)
 			std::vector<pcl::visualization::Camera> cameras;
 			_visualizer->getCameras(cameras);
 
-			if(_aLockCamera->isChecked())
+			if(_aLockCamera->isChecked() || _aCameraOrtho->isChecked())
 			{
 				//update camera position
 				Eigen::Vector3f diff = pos - Eigen::Vector3f(_lastPose.x(), _lastPose.y(), _lastPose.z());
@@ -2604,6 +2620,17 @@ void CloudViewer::setCameraLockZ(bool enabled)
 	_lastCameraOrientation= _lastCameraPose = cv::Vec3f(0,0,0);
 	_aLockViewZ->setChecked(enabled);
 }
+void CloudViewer::setCameraOrtho(bool enabled)
+{
+	_lastCameraOrientation= _lastCameraPose = cv::Vec3f(0,0,0);
+	CloudViewerInteractorStyle * interactor = CloudViewerInteractorStyle::SafeDownCast(this->GetInteractor()->GetInteractorStyle());
+	if(interactor)
+	{
+		interactor->setOrthoMode(enabled);
+		this->update();
+	}
+	_aCameraOrtho->setChecked(enabled);
+}
 bool CloudViewer::isCameraTargetLocked() const
 {
 	return _aLockCamera->isChecked();
@@ -2619,6 +2646,10 @@ bool CloudViewer::isCameraFree() const
 bool CloudViewer::isCameraLockZ() const
 {
 	return _aLockViewZ->isChecked();
+}
+bool CloudViewer::isCameraOrtho() const
+{
+	return _aCameraOrtho->isChecked();
 }
 double CloudViewer::getRenderingRate() const
 {
@@ -2914,7 +2945,7 @@ void CloudViewer::keyPressEvent(QKeyEvent * event)
 
 		update();
 
-		emit configChanged();
+		Q_EMIT configChanged();
 	}
 	else
 	{
@@ -2939,7 +2970,7 @@ void CloudViewer::mouseMoveEvent(QMouseEvent * event)
 	QVTKWidget::mouseMoveEvent(event);
 
 	// camera view up z locked?
-	if(_aLockViewZ->isChecked())
+	if(_aLockViewZ->isChecked() && !_aCameraOrtho->isChecked())
 	{
 		std::vector<pcl::visualization::Camera> cameras;
 		_visualizer->getCameras(cameras);
@@ -2960,6 +2991,18 @@ void CloudViewer::mouseMoveEvent(QMouseEvent * event)
 			_lastCameraOrientation = newCameraOrientation;
 			_lastCameraPose = cv::Vec3d(cameras.front().pos);
 		}
+		else
+		{
+			if(cameras.front().view[2] == 0)
+			{
+				cameras.front().pos[0] -= 0.00001*cameras.front().view[0];
+				cameras.front().pos[1] -= 0.00001*cameras.front().view[1];
+			}
+			else
+			{
+				cameras.front().pos[0] -= 0.00001;
+			}
+		}
 		cameras.front().view[0] = 0;
 		cameras.front().view[1] = 0;
 		cameras.front().view[2] = 1;
@@ -2972,19 +3015,19 @@ void CloudViewer::mouseMoveEvent(QMouseEvent * event)
 	}
 	this->update();
 
-	emit configChanged();
+	Q_EMIT configChanged();
 }
 
 void CloudViewer::wheelEvent(QWheelEvent * event)
 {
 	QVTKWidget::wheelEvent(event);
-	if(_aLockViewZ->isChecked())
+	if(_aLockViewZ->isChecked() && !_aCameraOrtho->isChecked())
 	{
 		std::vector<pcl::visualization::Camera> cameras;
 		_visualizer->getCameras(cameras);
 		_lastCameraPose = cv::Vec3d(cameras.front().pos);
 	}
-	emit configChanged();
+	Q_EMIT configChanged();
 }
 
 void CloudViewer::contextMenuEvent(QContextMenuEvent * event)
@@ -2993,7 +3036,7 @@ void CloudViewer::contextMenuEvent(QContextMenuEvent * event)
 	if(a)
 	{
 		handleAction(a);
-		emit configChanged();
+		Q_EMIT configChanged();
 	}
 }
 
@@ -3116,6 +3159,10 @@ void CloudViewer::handleAction(QAction * a)
 		{
 			this->update();
 		}
+	}
+	else if(a == _aCameraOrtho)
+	{
+		this->setCameraOrtho(_aCameraOrtho->isChecked());
 	}
 	else if(a == _aSetLighting)
 	{
