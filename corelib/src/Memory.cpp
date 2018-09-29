@@ -57,9 +57,11 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/core/Compression.h"
 #include "rtabmap/core/Graph.h"
 #include "rtabmap/core/Stereo.h"
+#include "rtabmap/core/OptimizerG2O.h"
 #include <pcl/io/pcd_io.h>
 #include <pcl/common/common.h>
 #include <rtabmap/core/OccupancyGrid.h>
+#include <opencv2/imgproc/types_c.h>
 
 namespace rtabmap {
 
@@ -93,6 +95,7 @@ Memory::Memory(const ParametersMap & parameters) :
 	_laserScanNormalK(Parameters::defaultMemLaserScanNormalK()),
 	_laserScanNormalRadius(Parameters::defaultMemLaserScanNormalRadius()),
 	_reextractLoopClosureFeatures(Parameters::defaultRGBDLoopClosureReextractFeatures()),
+	_localBundleOnLoopClosure(Parameters::defaultRGBDLocalBundleOnLoopClosure()),
 	_rehearsalMaxDistance(Parameters::defaultRGBDLinearUpdate()),
 	_rehearsalMaxAngle(Parameters::defaultRGBDAngularUpdate()),
 	_rehearsalWeightIgnoredWhileMoving(Parameters::defaultMemRehearsalWeightIgnoredWhileMoving()),
@@ -101,6 +104,8 @@ Memory::Memory(const ParametersMap & parameters) :
 	_visMaxFeatures(Parameters::defaultVisMaxFeatures()),
 	_visCorType(Parameters::defaultVisCorType()),
 	_imagesAlreadyRectified(Parameters::defaultRtabmapImagesAlreadyRectified()),
+	_rectifyOnlyFeatures(Parameters::defaultRtabmapRectifyOnlyFeatures()),
+	_covOffDiagonalIgnored(Parameters::defaultMemCovOffDiagIgnored()),
 	_idCount(kIdStart),
 	_idMapCount(kIdStart),
 	_lastSignature(0),
@@ -279,25 +284,32 @@ void Memory::loadDataFromDb(bool postInitClosingEvents)
 			}
 
 			UDEBUG("load words %d", (int)wordIds.size());
-			if(wordIds.size())
+			if(_vwd->isIncremental())
 			{
-				std::list<VisualWord*> words;
-				_dbDriver->loadWords(wordIds, words);
-				for(std::list<VisualWord*>::iterator iter = words.begin(); iter!=words.end(); ++iter)
+				if(wordIds.size())
 				{
-					_vwd->addWord(*iter);
+					std::list<VisualWord*> words;
+					_dbDriver->loadWords(wordIds, words);
+					for(std::list<VisualWord*>::iterator iter = words.begin(); iter!=words.end(); ++iter)
+					{
+						_vwd->addWord(*iter);
+					}
+					// Get Last word id
+					int id = 0;
+					_dbDriver->getLastWordId(id);
+					_vwd->setLastWordId(id);
 				}
-				// Get Last word id
-				int id = 0;
-				_dbDriver->getLastWordId(id);
-				_vwd->setLastWordId(id);
+			}
+			else
+			{
+				_dbDriver->load(_vwd, false);
 			}
 		}
 		else
 		{
 			UDEBUG("load words");
 			// load the last dictionary
-			_dbDriver->load(_vwd);
+			_dbDriver->load(_vwd, _vwd->isIncremental());
 		}
 		UDEBUG("%d words loaded!", _vwd->getUnusedWordsSize());
 		_vwd->update();
@@ -327,7 +339,7 @@ void Memory::loadDataFromDb(bool postInitClosingEvents)
 		}
 		if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(uFormat("Adding word references, done! (%d)", _vwd->getTotalActiveReferences())));
 
-		if(_vwd->getUnusedWordsSize())
+		if(_vwd->getUnusedWordsSize() && _vwd->isIncremental())
 		{
 			UWARN("_vwd->getUnusedWordsSize() must be empty... size=%d", _vwd->getUnusedWordsSize());
 		}
@@ -420,26 +432,11 @@ Memory::~Memory()
 	{
 		UWARN("Please call Memory::close() before");
 	}
-	if(_feature2D)
-	{
-		delete _feature2D;
-	}
-	if(_vwd)
-	{
-		delete _vwd;
-	}
-	if(_registrationPipeline)
-	{
-		delete _registrationPipeline;
-	}
-	if(_registrationIcpMulti)
-	{
-		delete _registrationIcpMulti;
-	}
-	if(_occupancy)
-	{
-		delete _occupancy;
-	}
+	delete _feature2D;
+	delete _vwd;
+	delete _registrationPipeline;
+	delete _registrationIcpMulti;
+	delete _occupancy;
 }
 
 void Memory::parseParameters(const ParametersMap & parameters)
@@ -473,6 +470,7 @@ void Memory::parseParameters(const ParametersMap & parameters)
 	Parameters::parse(params, Parameters::kMemLaserScanNormalK(), _laserScanNormalK);
 	Parameters::parse(params, Parameters::kMemLaserScanNormalRadius(), _laserScanNormalRadius);
 	Parameters::parse(params, Parameters::kRGBDLoopClosureReextractFeatures(), _reextractLoopClosureFeatures);
+	Parameters::parse(params, Parameters::kRGBDLocalBundleOnLoopClosure(), _localBundleOnLoopClosure);
 	Parameters::parse(params, Parameters::kRGBDLinearUpdate(), _rehearsalMaxDistance);
 	Parameters::parse(params, Parameters::kRGBDAngularUpdate(), _rehearsalMaxAngle);
 	Parameters::parse(params, Parameters::kMemRehearsalWeightIgnoredWhileMoving(), _rehearsalWeightIgnoredWhileMoving);
@@ -489,6 +487,8 @@ void Memory::parseParameters(const ParametersMap & parameters)
 		uInsert(params, ParametersPair(Parameters::kVisCorType(), "0"));
 	}
 	Parameters::parse(params, Parameters::kRtabmapImagesAlreadyRectified(), _imagesAlreadyRectified);
+	Parameters::parse(params, Parameters::kRtabmapRectifyOnlyFeatures(), _rectifyOnlyFeatures);
+	Parameters::parse(params, Parameters::kMemCovOffDiagIgnored(), _covOffDiagonalIgnored);
 
 
 	UASSERT_MSG(_maxStMemSize >= 0, uFormat("value=%d", _maxStMemSize).c_str());
@@ -649,7 +649,10 @@ void Memory::parseParameters(const ParametersMap & parameters)
 void Memory::preUpdate()
 {
 	_signaturesAdded = 0;
-	this->cleanUnusedWords();
+	if(_vwd->isIncremental())
+	{
+		this->cleanUnusedWords();
+	}
 	if(_vwd && !_parallelized)
 	{
 		//When parallelized, it is done in CreateSignature
@@ -798,7 +801,30 @@ void Memory::addSignatureToStm(Signature * signature, const cv::Mat & covariance
 				   !_signatures.at(*_stMem.rbegin())->getPose().isNull())
 				{
 					UASSERT(covariance.cols == 6 && covariance.rows == 6 && covariance.type() == CV_64FC1);
-					cv::Mat infMatrix = covariance.inv();
+					double maxAngVar = uMax3(covariance.at<double>(3,3), covariance.at<double>(4,4), covariance.at<double>(5,5));
+					if(maxAngVar != 1.0 && maxAngVar > 0.1)
+					{
+						UWARN("Very large angular variance (%f) detected! Please fix odometry "
+								"twist covariance, otherwise poor graph optimizations are "
+								"expected and wrong loop closure detections creating a lot "
+								"of errors in the map could be accepted.", maxAngVar);
+					}
+
+					cv::Mat infMatrix;
+					if(_covOffDiagonalIgnored)
+					{
+						infMatrix = cv::Mat::zeros(6,6,CV_64FC1);
+						infMatrix.at<double>(0,0) = 1.0 / covariance.at<double>(0,0);
+						infMatrix.at<double>(1,1) = 1.0 / covariance.at<double>(1,1);
+						infMatrix.at<double>(2,2) = 1.0 / covariance.at<double>(2,2);
+						infMatrix.at<double>(3,3) = 1.0 / covariance.at<double>(3,3);
+						infMatrix.at<double>(4,4) = 1.0 / covariance.at<double>(4,4);
+						infMatrix.at<double>(5,5) = 1.0 / covariance.at<double>(5,5);
+					}
+					else
+					{
+						infMatrix = covariance.inv();
+					}
 					if((uIsFinite(covariance.at<double>(0,0)) && covariance.at<double>(0,0)>0.0) &&
 						!(uIsFinite(infMatrix.at<double>(0,0)) && infMatrix.at<double>(0,0)>0.0))
 					{
@@ -823,16 +849,19 @@ void Memory::addSignatureToStm(Signature * signature, const cv::Mat & covariance
 						*_stMem.rbegin(), signature->id(),
 						_signatures.at(*_stMem.rbegin())->mapId(), signature->mapId());
 
-				//Tag the first node of the map
-				std::string tag = uFormat("map%d", signature->mapId());
-				if(getSignatureIdByLabel(tag, false) == 0)
+				if(_mapLabelsAdded && isIncremental())
 				{
-					UINFO("Tagging node %d with label \"%s\"", signature->id(), tag.c_str());
-					signature->setLabel(tag);
+					//Tag the first node of the map
+					std::string tag = uFormat("map%d", signature->mapId());
+					if(getSignatureIdByLabel(tag, false) == 0)
+					{
+						UINFO("Tagging node %d with label \"%s\"", signature->id(), tag.c_str());
+						signature->setLabel(tag);
+					}
 				}
 			}
 		}
-		else if(_mapLabelsAdded)
+		else if(_mapLabelsAdded && isIncremental())
 		{
 			//Tag the first node of the map
 			std::string tag = uFormat("map%d", signature->mapId());
@@ -1363,6 +1392,16 @@ std::string Memory::getDatabaseVersion() const
 	return version;
 }
 
+std::string Memory::getDatabaseUrl() const
+{
+	std::string url = "";
+	if(_dbDriver)
+	{
+		url = _dbDriver->getUrl();
+	}
+	return url;
+}
+
 double Memory::getDbSavingTime() const
 {
 	return _dbDriver?_dbDriver->getEmptyTrashesTime():0;
@@ -1478,6 +1517,8 @@ void Memory::clear()
 	_memoryChanged = false;
 	_linksChanged = false;
 	_gpsOrigin = GPS();
+	_rectCameraModels.clear();
+	_rectStereoCameraModel = StereoCameraModel();
 
 	if(_dbDriver)
 	{
@@ -1584,7 +1625,7 @@ std::map<int, float> Memory::computeLikelihood(const Signature * signature, cons
 				{
 					// "Inverted index" - Pour chaque endroit contenu dans chaque mot
 					vw = _vwd->getWord(*i);
-					UASSERT(vw!=0);
+					UASSERT_MSG(vw!=0, uFormat("Word %d not found in dictionary!?", *i).c_str());
 
 					const std::map<int, int> & refs = vw->getReferences();
 					nw = refs.size();
@@ -2055,7 +2096,7 @@ void Memory::moveToTrash(Signature * s, bool keepLinkedToGraph, std::list<int> *
 		}
 
 		this->disableWordsRef(s->id());
-		if(!keepLinkedToGraph)
+		if(!keepLinkedToGraph && _vwd->isIncremental())
 		{
 			std::list<int> keys = uUniqueKeys(s->getWords());
 			for(std::list<int>::const_iterator i=keys.begin(); i!=keys.end(); ++i)
@@ -2102,7 +2143,7 @@ void Memory::moveToTrash(Signature * s, bool keepLinkedToGraph, std::list<int> *
 			_lastGlobalLoopClosureId = 0;
 		}
 
-		if(	(_notLinkedNodesKeptInDb || keepLinkedToGraph) &&
+		if(	(_notLinkedNodesKeptInDb || keepLinkedToGraph || s->isSaved()) &&
 			_dbDriver &&
 			s->id()>0 &&
 			(_incrementalMemory || s->isSaved()))
@@ -2375,6 +2416,7 @@ Transform Memory::computeTransform(
 		RegistrationInfo * info,
 		bool useKnownCorrespondencesIfPossible) const
 {
+	UDEBUG("");
 	Transform transform;
 
 	// make sure we have all data needed
@@ -2447,6 +2489,173 @@ Transform Memory::computeTransform(
 			if(!guess.isNull())
 			{
 				transform = _registrationPipeline->computeTransformationMod(tmpFrom, tmpTo, guess, info);
+			}
+		}
+		else if(_localBundleOnLoopClosure &&
+				_registrationPipeline->isImageRequired() &&
+			   !_registrationPipeline->isScanRequired() &&
+			   !_registrationPipeline->isUserDataRequired() &&
+			   !tmpTo.getWordsDescriptors().empty() &&
+			   !tmpTo.getWords().empty() &&
+			   !tmpFrom.getWordsDescriptors().empty() &&
+			   !tmpFrom.getWords().empty() &&
+			   !tmpFrom.getWords3().empty())
+		{
+			std::multimap<int, cv::Point3f> words3DMap;
+			std::multimap<int, cv::KeyPoint> wordsMap;
+			std::multimap<int, cv::Mat> wordsDescriptorsMap;
+
+			const std::map<int, Link> & links = fromS.getLinks();
+			{
+				const std::map<int, cv::Point3f> & words3 = uMultimapToMapUnique(fromS.getWords3());
+				UDEBUG("fromS.getWords3()=%d  uniques=%d", (int)fromS.getWords3().size(), (int)words3.size());
+				for(std::map<int, cv::Point3f>::const_iterator jter=words3.begin(); jter!=words3.end(); ++jter)
+				{
+					if(util3d::isFinite(jter->second))
+					{
+						words3DMap.insert(*jter);
+						wordsMap.insert(*fromS.getWords().find(jter->first));
+						wordsDescriptorsMap.insert(*fromS.getWordsDescriptors().find(jter->first));
+					}
+				}
+			}
+			UDEBUG("words3DMap=%d", (int)words3DMap.size());
+
+			for(std::map<int, Link>::const_iterator iter=links.begin(); iter!=links.end(); ++iter)
+			{
+				int id = iter->first;
+				const Signature * s = this->getSignature(id);
+				const std::map<int, cv::Point3f> & words3 = uMultimapToMapUnique(s->getWords3());
+				for(std::map<int, cv::Point3f>::const_iterator jter=words3.begin(); jter!=words3.end(); ++jter)
+				{
+					if( jter->first > 0 &&
+						util3d::isFinite(jter->second) &&
+					    words3DMap.find(jter->first) == words3DMap.end())
+					{
+						words3DMap.insert(std::make_pair(jter->first, util3d::transformPoint(jter->second, iter->second.transform())));
+						wordsMap.insert(*s->getWords().find(jter->first));
+						wordsDescriptorsMap.insert(*s->getWordsDescriptors().find(jter->first));
+					}
+				}
+			}
+			UDEBUG("words3DMap=%d", (int)words3DMap.size());
+			Signature tmpFrom2(fromS.id());
+			tmpFrom2.setWords3(words3DMap);
+			tmpFrom2.setWords(wordsMap);
+			tmpFrom2.setWordsDescriptors(wordsDescriptorsMap);
+
+			transform = _registrationPipeline->computeTransformationMod(tmpFrom2, tmpTo, guess, info);
+
+			if(!transform.isNull() && info)
+			{
+				std::map<int, cv::Point3f> points3DMap = uMultimapToMapUnique(tmpFrom2.getWords3());
+				std::map<int, Transform> bundlePoses;
+				std::multimap<int, Link> bundleLinks;
+				std::map<int, CameraModel> bundleModels;
+				std::map<int, std::map<int, cv::Point3f> > wordReferences;
+
+				std::map<int, Link> links = fromS.getLinks();
+				links.insert(std::make_pair(toS.id(), Link(fromS.id(), toS.id(), Link::kGlobalClosure, transform, info->covariance.inv())));
+				links.insert(std::make_pair(fromS.id(), Link()));
+
+				for(std::map<int, Link>::iterator iter=links.begin(); iter!=links.end(); ++iter)
+				{
+					int id = iter->first;
+					const Signature * s;
+					if(id == tmpTo.id())
+					{
+						s = &tmpTo; // reuse matched words
+					}
+					else
+					{
+						s = this->getSignature(id);
+					}
+					CameraModel model;
+					if(s->sensorData().cameraModels().size() == 1 && s->sensorData().cameraModels().at(0).isValidForProjection())
+					{
+						model = s->sensorData().cameraModels()[0];
+					}
+					else if(s->sensorData().stereoCameraModel().isValidForProjection())
+					{
+						model = s->sensorData().stereoCameraModel().left();
+						// Set Tx for stereo BA
+						model = CameraModel(model.fx(),
+								model.fy(),
+								model.cx(),
+								model.cy(),
+								model.localTransform(),
+								-s->sensorData().stereoCameraModel().baseline()*model.fx());
+					}
+					else
+					{
+						UFATAL("no valid camera model to use local bundle adjustment on loop closure!");
+					}
+					bundleModels.insert(std::make_pair(id, model));
+					Transform invLocalTransform = model.localTransform().inverse();
+					if(iter->second.isValid())
+					{
+						bundleLinks.insert(std::make_pair(iter->second.from(), iter->second));
+						bundlePoses.insert(std::make_pair(id, iter->second.transform()));
+					}
+					else
+					{
+						bundlePoses.insert(std::make_pair(id, Transform::getIdentity()));
+					}
+					const std::map<int,cv::KeyPoint> & words = uMultimapToMapUnique(s->getWords());
+					for(std::map<int, cv::KeyPoint>::const_iterator jter=words.begin(); jter!=words.end(); ++jter)
+					{
+						if(points3DMap.find(jter->first)!=points3DMap.end() &&
+							(id == tmpTo.id() || jter->first > 0))
+						{
+							std::multimap<int, cv::Point3f>::const_iterator kter = s->getWords3().find(jter->first);
+							cv::Point3f pt3d = util3d::transformPoint(kter->second, invLocalTransform);
+							wordReferences.insert(std::make_pair(jter->first, std::map<int, cv::Point3f>()));
+							wordReferences.at(jter->first).insert(std::make_pair(id, cv::Point3f(jter->second.pt.x, jter->second.pt.y, pt3d.z)));
+						}
+					}
+				}
+
+				UDEBUG("sba...start");
+				// set root negative to fix all other poses
+				std::set<int> sbaOutliers;
+				UTimer bundleTimer;
+				OptimizerG2O sba;
+				UTimer bundleTime;
+				bundlePoses = sba.optimizeBA(-toS.id(), bundlePoses, bundleLinks, bundleModels, points3DMap, wordReferences, &sbaOutliers);
+				UDEBUG("sba...end");
+
+				UDEBUG("bundleTime=%fs (poses=%d wordRef=%d outliers=%d)", bundleTime.ticks(), (int)bundlePoses.size(), (int)wordReferences.size(), (int)sbaOutliers.size());
+
+				UDEBUG("Local Bundle Adjustment Before: %s", transform.prettyPrint().c_str());
+				if(!bundlePoses.rbegin()->second.isNull())
+				{
+					if(sbaOutliers.size())
+					{
+						std::vector<int> newInliers(info->inliersIDs.size());
+						int oi=0;
+						for(unsigned int i=0; i<info->inliersIDs.size(); ++i)
+						{
+							if(sbaOutliers.find(info->inliersIDs[i]) == sbaOutliers.end())
+							{
+								newInliers[oi++] = info->inliersIDs[i];
+							}
+						}
+						newInliers.resize(oi);
+						UDEBUG("BA outliers ratio %f", float(sbaOutliers.size())/float(info->inliersIDs.size()));
+						info->inliers = (int)newInliers.size();
+						info->inliersIDs = newInliers;
+					}
+					if(info->inliers < _registrationPipeline->getMinVisualCorrespondences())
+					{
+						info->rejectedMsg = uFormat("Too low inliers after bundle adjustment: %d<%d", info->inliers, _registrationPipeline->getMinVisualCorrespondences());
+						transform.setNull();
+					}
+					else
+					{
+						transform = bundlePoses.rbegin()->second;
+					}
+				}
+				UDEBUG("Local Bundle Adjustment After : %s", transform.prettyPrint().c_str());
 			}
 		}
 		else
@@ -3489,25 +3698,41 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 		}
 	}
 
-	if(!_imagesAlreadyRectified && !data.imageRaw().empty())
+	bool imagesRectified = _imagesAlreadyRectified;
+	// Stereo must be always rectified because of the stereo correspondence approach
+	if(!imagesRectified && !data.imageRaw().empty() && !(_rectifyOnlyFeatures && data.rightRaw().empty()))
 	{
-		if(!data.depthRaw().empty())
-		{
-			UERROR("RGB-D images should be already rectified! Make sure they are and set %s parameter back to true.",
-					Parameters::kRtabmapImagesAlreadyRectified().c_str());
-			return 0;
-		}
+		// we assume that once rtabmap is receiving data, the calibration won't change over time
 		if(data.cameraModels().size())
 		{
+			// Note that only RGB image is rectified, the depth image is assumed to be already registered to rectified RGB camera.
 			UASSERT(int((data.imageRaw().cols/data.cameraModels().size())*data.cameraModels().size()) == data.imageRaw().cols);
 			int subImageWidth = data.imageRaw().cols/data.cameraModels().size();
 			cv::Mat rectifiedImages(data.imageRaw().size(), data.imageRaw().type());
+			bool initRectMaps = _rectCameraModels.empty();
+			if(initRectMaps)
+			{
+				_rectCameraModels.resize(data.cameraModels().size());
+			}
 			for(unsigned int i=0; i<data.cameraModels().size(); ++i)
 			{
 				if(data.cameraModels()[i].isValidForRectification())
 				{
-					cv::Mat rectifiedImage = data.cameraModels()[i].rectifyImage(cv::Mat(data.imageRaw(), cv::Rect(subImageWidth*i, 0, subImageWidth, data.imageRaw().rows)));
+					if(initRectMaps)
+					{
+						_rectCameraModels[i] = data.cameraModels()[i];
+						if(!_rectCameraModels[i].isRectificationMapInitialized())
+						{
+							UWARN("Initializing rectification maps for camera %d (only done for the first image received)...", i);
+							_rectCameraModels[i].initRectificationMap();
+							UWARN("Initializing rectification maps for camera %d (only done for the first image received)... done!", i);
+						}
+					}
+					UASSERT(_rectCameraModels[i].imageWidth() == data.cameraModels()[i].imageWidth() &&
+							_rectCameraModels[i].imageHeight() == data.cameraModels()[i].imageHeight());
+					cv::Mat rectifiedImage = _rectCameraModels[i].rectifyImage(cv::Mat(data.imageRaw(), cv::Rect(subImageWidth*i, 0, subImageWidth, data.imageRaw().rows)));
 					rectifiedImage.copyTo(cv::Mat(rectifiedImages, cv::Rect(subImageWidth*i, 0, subImageWidth, data.imageRaw().rows)));
+					imagesRectified = true;
 				}
 				else
 				{
@@ -3522,8 +3747,21 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 		}
 		else if(data.stereoCameraModel().isValidForRectification())
 		{
-			data.setImageRaw(data.stereoCameraModel().left().rectifyImage(data.imageRaw()));
-			data.setDepthOrRightRaw(data.stereoCameraModel().right().rectifyImage(data.rightRaw()));
+			if(!_rectStereoCameraModel.isValidForRectification())
+			{
+				_rectStereoCameraModel = data.stereoCameraModel();
+				if(!_rectStereoCameraModel.isRectificationMapInitialized())
+				{
+					UWARN("Initializing rectification maps (only done for the first image received)...");
+					_rectStereoCameraModel.initRectificationMap();
+					UWARN("Initializing rectification maps (only done for the first image received)...done!");
+				}
+			}
+			UASSERT(_rectStereoCameraModel.left().imageWidth() == data.stereoCameraModel().left().imageWidth());
+			UASSERT(_rectStereoCameraModel.left().imageHeight() == data.stereoCameraModel().left().imageHeight());
+			data.setImageRaw(_rectStereoCameraModel.left().rectifyImage(data.imageRaw()));
+			data.setDepthOrRightRaw(_rectStereoCameraModel.right().rectifyImage(data.rightRaw()));
+			imagesRectified = true;
 		}
 		else
 		{
@@ -3538,10 +3776,10 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 	}
 
 	int treeSize= int(_workingMem.size() + _stMem.size());
-	int meanWordsPerLocation = 0;
-	if(treeSize > 0)
+	int meanWordsPerLocation = _feature2D->getMaxFeatures()>0?_feature2D->getMaxFeatures():0;
+	if(treeSize > 1)
 	{
-		meanWordsPerLocation = _vwd->getTotalActiveReferences() / treeSize;
+		meanWordsPerLocation = _vwd->getTotalActiveReferences() / (treeSize-1); // ignore virtual signature
 	}
 
 	if(_parallelized && !isIntermediateNode)
@@ -3552,11 +3790,12 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 
 	int preDecimation = 1;
 	std::vector<cv::Point3f> keypoints3D;
+	SensorData decimatedData;
 	if(!_useOdometryFeatures || data.keypoints().empty() || (int)data.keypoints().size() != data.descriptors().rows)
 	{
 		if(_feature2D->getMaxFeatures() >= 0 && !data.imageRaw().empty() && !isIntermediateNode)
 		{
-			SensorData decimatedData = data;
+			decimatedData = data;
 			if(_imagePreDecimation > 1)
 			{
 				preDecimation = _imagePreDecimation;
@@ -3592,7 +3831,7 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 			}
 
 			cv::Mat depthMask;
-			if(!decimatedData.depthRaw().empty() && _depthAsMask)
+			if(imagesRectified && !decimatedData.depthRaw().empty() && _depthAsMask)
 			{
 				if(imageMono.rows % decimatedData.depthRaw().rows == 0 &&
 					imageMono.cols % decimatedData.depthRaw().cols == 0 &&
@@ -3636,13 +3875,134 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 			{
 				descriptors = cv::Mat();
 			}
-			else if((!decimatedData.depthRaw().empty() && decimatedData.cameraModels().size() && decimatedData.cameraModels()[0].isValidForProjection()) ||
-					(!decimatedData.rightRaw().empty() && decimatedData.stereoCameraModel().isValidForProjection()))
+			else
 			{
-				keypoints3D = _feature2D->generateKeypoints3D(decimatedData, keypoints);
-				t = timer.ticks();
-				if(stats) stats->addStatistic(Statistics::kTimingMemKeypoints_3D(), t*1000.0f);
-				UDEBUG("time keypoints 3D (%d) = %fs", (int)keypoints3D.size(), t);
+				if(!imagesRectified && decimatedData.cameraModels().size())
+				{
+					std::vector<cv::KeyPoint> keypointsValid;
+					keypointsValid.reserve(keypoints.size());
+					cv::Mat descriptorsValid;
+					descriptorsValid.reserve(descriptors.rows);
+
+					//undistort keypoints before projection (RGB-D)
+					if(decimatedData.cameraModels().size() == 1)
+					{
+						std::vector<cv::Point2f> pointsIn, pointsOut;
+						cv::KeyPoint::convert(keypoints,pointsIn);
+						if(decimatedData.cameraModels()[0].D_raw().cols == 6)
+						{
+#if CV_MAJOR_VERSION > 2 or (CV_MAJOR_VERSION == 2 and (CV_MINOR_VERSION >4 or (CV_MINOR_VERSION == 4 and CV_SUBMINOR_VERSION >=10)))
+							// Equidistant / FishEye
+							// get only k parameters (k1,k2,p1,p2,k3,k4)
+							cv::Mat D(1, 4, CV_64FC1);
+							D.at<double>(0,0) = decimatedData.cameraModels()[0].D_raw().at<double>(0,1);
+							D.at<double>(0,1) = decimatedData.cameraModels()[0].D_raw().at<double>(0,1);
+							D.at<double>(0,2) = decimatedData.cameraModels()[0].D_raw().at<double>(0,4);
+							D.at<double>(0,3) = decimatedData.cameraModels()[0].D_raw().at<double>(0,5);
+							cv::fisheye::undistortPoints(pointsIn, pointsOut,
+									decimatedData.cameraModels()[0].K_raw(),
+									D,
+									decimatedData.cameraModels()[0].R(),
+									decimatedData.cameraModels()[0].P());
+						}
+						else
+#else
+							UWARN("Too old opencv version (%d,%d,%d) to support fisheye model (min 2.4.10 required)!",
+									CV_MAJOR_VERSION, CV_MINOR_VERSION, CV_SUBMINOR_VERSION);
+						}
+#endif
+						{
+							//RadialTangential
+							cv::undistortPoints(pointsIn, pointsOut,
+									decimatedData.cameraModels()[0].K_raw(),
+									decimatedData.cameraModels()[0].D_raw(),
+									decimatedData.cameraModels()[0].R(),
+									decimatedData.cameraModels()[0].P());
+						}
+						UASSERT(pointsOut.size() == keypoints.size());
+						for(unsigned int i=0; i<pointsOut.size(); ++i)
+						{
+							if(pointsOut.at(i).x>=0 && pointsOut.at(i).x<decimatedData.cameraModels()[0].imageWidth() &&
+							   pointsOut.at(i).y>=0 && pointsOut.at(i).y<decimatedData.cameraModels()[0].imageHeight())
+							{
+								keypointsValid.push_back(keypoints.at(i));
+								keypointsValid.back().pt.x = pointsOut.at(i).x;
+								keypointsValid.back().pt.y = pointsOut.at(i).y;
+								descriptorsValid.push_back(descriptors.row(i));
+							}
+						}
+					}
+					else
+					{
+						UASSERT(int((decimatedData.imageRaw().cols/decimatedData.cameraModels().size())*decimatedData.cameraModels().size()) == decimatedData.imageRaw().cols);
+						float subImageWidth = decimatedData.imageRaw().cols/decimatedData.cameraModels().size();
+						for(unsigned int i=0; i<keypoints.size(); ++i)
+						{
+							int cameraIndex = int(keypoints.at(i).pt.x / subImageWidth);
+							UASSERT_MSG(cameraIndex >= 0 && cameraIndex < (int)decimatedData.cameraModels().size(),
+									uFormat("cameraIndex=%d, models=%d, kpt.x=%f, subImageWidth=%f (Camera model image width=%d)",
+											cameraIndex, (int)decimatedData.cameraModels().size(), keypoints[i].pt.x, subImageWidth, decimatedData.cameraModels()[0].imageWidth()).c_str());
+
+							std::vector<cv::Point2f> pointsIn, pointsOut;
+							pointsIn.push_back(cv::Point2f(keypoints.at(i).pt.x-subImageWidth*cameraIndex, keypoints.at(i).pt.y));
+							if(decimatedData.cameraModels()[cameraIndex].D_raw().cols == 6)
+							{
+#if CV_MAJOR_VERSION > 2 or (CV_MAJOR_VERSION == 2 and (CV_MINOR_VERSION >4 or (CV_MINOR_VERSION == 4 and CV_SUBMINOR_VERSION >=10)))
+								// Equidistant / FishEye
+								// get only k parameters (k1,k2,p1,p2,k3,k4)
+								cv::Mat D(1, 4, CV_64FC1);
+								D.at<double>(0,0) = decimatedData.cameraModels()[cameraIndex].D_raw().at<double>(0,1);
+								D.at<double>(0,1) = decimatedData.cameraModels()[cameraIndex].D_raw().at<double>(0,1);
+								D.at<double>(0,2) = decimatedData.cameraModels()[cameraIndex].D_raw().at<double>(0,4);
+								D.at<double>(0,3) = decimatedData.cameraModels()[cameraIndex].D_raw().at<double>(0,5);
+								cv::fisheye::undistortPoints(pointsIn, pointsOut,
+										decimatedData.cameraModels()[cameraIndex].K_raw(),
+										D,
+										decimatedData.cameraModels()[cameraIndex].R(),
+										decimatedData.cameraModels()[cameraIndex].P());
+							}
+							else
+#else
+								UWARN("Too old opencv version (%d,%d,%d) to support fisheye model (min 2.4.10 required)!",
+										CV_MAJOR_VERSION, CV_MINOR_VERSION, CV_SUBMINOR_VERSION);
+							}
+#endif
+							{
+								//RadialTangential
+								cv::undistortPoints(pointsIn, pointsOut,
+										decimatedData.cameraModels()[cameraIndex].K_raw(),
+										decimatedData.cameraModels()[cameraIndex].D_raw(),
+										decimatedData.cameraModels()[cameraIndex].R(),
+										decimatedData.cameraModels()[cameraIndex].P());
+							}
+
+							if(pointsOut[0].x>=0 && pointsOut[0].x<decimatedData.cameraModels()[cameraIndex].imageWidth() &&
+							   pointsOut[0].y>=0 && pointsOut[0].y<decimatedData.cameraModels()[cameraIndex].imageHeight())
+							{
+								keypointsValid.push_back(keypoints.at(i));
+								keypointsValid.back().pt.x = pointsOut[0].x + subImageWidth*cameraIndex;
+								keypointsValid.back().pt.y = pointsOut[0].y;
+								descriptorsValid.push_back(descriptors.row(i));
+							}
+						}
+					}
+
+					keypoints = keypointsValid;
+					descriptors = descriptorsValid;
+
+					t = timer.ticks();
+					if(stats) stats->addStatistic(Statistics::kTimingMemRectification(), t*1000.0f);
+					UDEBUG("time rectification = %fs", t);
+				}
+
+				if((!decimatedData.depthRaw().empty() && decimatedData.cameraModels().size() && decimatedData.cameraModels()[0].isValidForProjection()) ||
+				   (!decimatedData.rightRaw().empty() && decimatedData.stereoCameraModel().isValidForProjection()))
+				{
+					keypoints3D = _feature2D->generateKeypoints3D(decimatedData, keypoints);
+					t = timer.ticks();
+					if(stats) stats->addStatistic(Statistics::kTimingMemKeypoints_3D(), t*1000.0f);
+					UDEBUG("time keypoints 3D (%d) = %fs", (int)keypoints3D.size(), t);
+				}
 			}
 		}
 		else if(data.imageRaw().empty())
@@ -3693,6 +4053,8 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 			{
 				imageMono = data.imageRaw();
 			}
+
+			UASSERT_MSG(imagesRectified, "Cannot extract descriptors on not rectified image from keypoints which assumed to be undistorted");
 
 			descriptors = _feature2D->generateDescriptors(imageMono, keypoints);
 		}
@@ -3814,6 +4176,14 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 				allWordIds[quantizedToRawIndices[i]] = *iter;
 				++i;
 			}
+			int negIndex = -1;
+			for(i=0; i<(int)allWordIds.size(); ++i)
+			{
+				if(allWordIds[i] < 0)
+				{
+					allWordIds[i] = negIndex--;
+				}
+			}
 			wordIds = uVectorToList(allWordIds);
 		}
 
@@ -3834,7 +4204,7 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 		UASSERT(wordIds.size() == keypoints.size());
 		UASSERT(keypoints3D.size() == 0 || keypoints3D.size() == wordIds.size());
 		unsigned int i=0;
-		float decimationRatio = preDecimation / _imagePostDecimation;
+		float decimationRatio = float(preDecimation) / float(_imagePostDecimation);
 		double log2value = log(double(preDecimation))/log(2.0);
 		for(std::list<int>::iterator iter=wordIds.begin(); iter!=wordIds.end() && i < keypoints.size(); ++iter, ++i)
 		{
@@ -3860,47 +4230,6 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 		}
 	}
 
-	if(!pose.isNull() &&
-		data.cameraModels().size() == 1 &&
-		words.size() &&
-		words3D.size() == 0 &&
-		_signatures.size() &&
-		_signatures.rbegin()->second->mapId() == _idMapCount) // same map
-	{
-		UDEBUG("Generate 3D words using odometry");
-		Signature * previousS = _signatures.rbegin()->second;
-		if(previousS->getWords().size() > 8 && words.size() > 8 && !previousS->getPose().isNull())
-		{
-			Transform cameraTransform = pose.inverse() * previousS->getPose();
-			// compute 3D words by epipolar geometry with the previous signature
-			std::map<int, cv::Point3f> inliers = util3d::generateWords3DMono(
-					uMultimapToMapUnique(words),
-					uMultimapToMapUnique(previousS->getWords()),
-					data.cameraModels()[0],
-					cameraTransform);
-
-			// words3D should have the same size than words
-			float bad_point = std::numeric_limits<float>::quiet_NaN ();
-			for(std::multimap<int, cv::KeyPoint>::const_iterator iter=words.begin(); iter!=words.end(); ++iter)
-			{
-				std::map<int, cv::Point3f>::iterator jter=inliers.find(iter->first);
-				if(jter != inliers.end())
-				{
-					words3D.insert(std::make_pair(iter->first, jter->second));
-				}
-				else
-				{
-					words3D.insert(std::make_pair(iter->first, cv::Point3f(bad_point,bad_point,bad_point)));
-				}
-			}
-
-			t = timer.ticks();
-			UASSERT(words3D.size() == words.size());
-			if(stats) stats->addStatistic(Statistics::kTimingMemKeypoints_3D(), t*1000.0f);
-			UDEBUG("time keypoints 3D (%d) = %fs", (int)words3D.size(), t);
-		}
-	}
-
 	cv::Mat image = data.imageRaw();
 	cv::Mat depthOrRightImage = data.depthOrRightRaw();
 	std::vector<CameraModel> cameraModels = data.cameraModels();
@@ -3909,24 +4238,119 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 	// apply decimation?
 	if(_imagePostDecimation > 1 && !isIntermediateNode)
 	{
-		if(!data.rightRaw().empty() ||
-			(data.depthRaw().rows == image.rows && data.depthRaw().cols == image.cols))
+		if(_imagePostDecimation == preDecimation && decimatedData.isValid())
 		{
-			depthOrRightImage = util2d::decimate(depthOrRightImage, _imagePostDecimation);
+			image = decimatedData.imageRaw();
+			depthOrRightImage = decimatedData.depthOrRightRaw();
+			cameraModels = decimatedData.cameraModels();
+			stereoCameraModel = decimatedData.stereoCameraModel();
 		}
-		image = util2d::decimate(image, _imagePostDecimation);
-		for(unsigned int i=0; i<cameraModels.size(); ++i)
+		else
 		{
-			cameraModels[i] = cameraModels[i].scaled(1.0/double(_imagePostDecimation));
-		}
-		if(stereoCameraModel.isValidForProjection())
-		{
-			stereoCameraModel.scale(1.0/double(_imagePostDecimation));
+			if(!data.rightRaw().empty() ||
+				(data.depthRaw().rows == image.rows && data.depthRaw().cols == image.cols))
+			{
+				depthOrRightImage = util2d::decimate(depthOrRightImage, _imagePostDecimation);
+			}
+			image = util2d::decimate(image, _imagePostDecimation);
+			for(unsigned int i=0; i<cameraModels.size(); ++i)
+			{
+				cameraModels[i] = cameraModels[i].scaled(1.0/double(_imagePostDecimation));
+			}
+			if(stereoCameraModel.isValidForProjection())
+			{
+				stereoCameraModel.scale(1.0/double(_imagePostDecimation));
+			}
 		}
 
 		t = timer.ticks();
 		if(stats) stats->addStatistic(Statistics::kTimingMemPost_decimation(), t*1000.0f);
 		UDEBUG("time post-decimation = %fs", t);
+	}
+
+	bool triangulateWordsWithoutDepth = !_depthAsMask;
+	if(!pose.isNull() &&
+		cameraModels.size() == 1 &&
+		words.size() &&
+		(words3D.size() == 0 || (triangulateWordsWithoutDepth && words.size() == words3D.size())) &&
+		_registrationPipeline->isImageRequired() &&
+		_signatures.size() &&
+		_signatures.rbegin()->second->mapId() == _idMapCount) // same map
+	{
+		UDEBUG("Generate 3D words using odometry");
+		Signature * previousS = _signatures.rbegin()->second;
+		if(previousS->getWords().size() > 8 && words.size() > 8 && !previousS->getPose().isNull())
+		{
+			UDEBUG("Previous pose(%d) = %s", previousS->id(), previousS->getPose().prettyPrint().c_str());
+			UDEBUG("Current pose(%d) = %s", id, pose.prettyPrint().c_str());
+			Transform cameraTransform = pose.inverse() * previousS->getPose();
+
+			Signature cpPrevious(2);
+			// IDs should be unique so that registration doesn't override them
+			std::map<int, cv::KeyPoint> uniqueWords = uMultimapToMapUnique(previousS->getWords());
+			std::map<int, cv::Mat> uniqueWordsDescriptors = uMultimapToMapUnique(previousS->getWordsDescriptors());
+			cpPrevious.sensorData().setCameraModels(previousS->sensorData().cameraModels());
+			cpPrevious.setWords(std::multimap<int, cv::KeyPoint>(uniqueWords.begin(), uniqueWords.end()));
+			cpPrevious.setWordsDescriptors(std::multimap<int, cv::Mat>(uniqueWordsDescriptors.begin(), uniqueWordsDescriptors.end()));
+			Signature cpCurrent(1);
+			uniqueWords = uMultimapToMapUnique(words);
+			uniqueWordsDescriptors = uMultimapToMapUnique(wordsDescriptors);
+			cpCurrent.sensorData().setCameraModels(cameraModels);
+			cpCurrent.setWords(std::multimap<int, cv::KeyPoint>(uniqueWords.begin(), uniqueWords.end()));
+			cpCurrent.setWordsDescriptors(std::multimap<int, cv::Mat>(uniqueWordsDescriptors.begin(), uniqueWordsDescriptors.end()));
+			// This will force comparing descriptors between both images directly
+			Transform tmpt = _registrationPipeline->computeTransformationMod(cpCurrent, cpPrevious, cameraTransform);
+			UDEBUG("t=%s", tmpt.prettyPrint().c_str());
+
+			// compute 3D words by epipolar geometry with the previous signature
+			std::map<int, cv::Point3f> inliers = util3d::generateWords3DMono(
+					uMultimapToMapUnique(cpCurrent.getWords()),
+					uMultimapToMapUnique(cpPrevious.getWords()),
+					cameraModels[0],
+					cameraTransform);
+
+			UDEBUG("inliers=%d", (int)inliers.size());
+
+			// words3D should have the same size than words if not empty
+			float bad_point = std::numeric_limits<float>::quiet_NaN ();
+			UASSERT(words3D.size() == 0 || words.size() == words3D.size());
+			bool words3DWasEmpty = words3D.empty();
+			int added3DPointsWithoutDepth = 0;
+			for(std::multimap<int, cv::KeyPoint>::const_iterator iter=words.begin(); iter!=words.end(); ++iter)
+			{
+				std::map<int, cv::Point3f>::iterator jter=inliers.find(iter->first);
+				std::multimap<int, cv::Point3f>::iterator iter3D = words3D.find(iter->first);
+				if(iter3D == words3D.end())
+				{
+					if(jter != inliers.end())
+					{
+						words3D.insert(std::make_pair(iter->first, jter->second));
+						++added3DPointsWithoutDepth;
+					}
+					else
+					{
+						words3D.insert(std::make_pair(iter->first, cv::Point3f(bad_point,bad_point,bad_point)));
+					}
+				}
+				else if(!util3d::isFinite(iter3D->second) && jter != inliers.end())
+				{
+					iter3D->second = jter->second;
+					++added3DPointsWithoutDepth;
+				}
+				else if(words3DWasEmpty && jter == inliers.end())
+				{
+					// duplicate
+					words3D.insert(std::make_pair(iter->first, cv::Point3f(bad_point,bad_point,bad_point)));
+				}
+			}
+			UDEBUG("added3DPointsWithoutDepth=%d", added3DPointsWithoutDepth);
+			if(stats) stats->addStatistic(Statistics::kMemoryTriangulated_points(), (float)added3DPointsWithoutDepth);
+
+			t = timer.ticks();
+			UASSERT(words3D.size() == words.size());
+			if(stats) stats->addStatistic(Statistics::kTimingMemKeypoints_3D_motion(), t*1000.0f);
+			UDEBUG("time keypoints 3D by motion (%d) = %fs", (int)words3D.size(), t);
+		}
 	}
 
 	// Filter the laser scan?
@@ -4217,25 +4641,22 @@ void Memory::disableWordsRef(int signatureId)
 
 void Memory::cleanUnusedWords()
 {
-	if(_vwd->isIncremental())
+	std::vector<VisualWord*> removedWords = _vwd->getUnusedWords();
+	UDEBUG("Removing %d words (dictionary size=%d)...", removedWords.size(), _vwd->getVisualWords().size());
+	if(removedWords.size())
 	{
-		std::vector<VisualWord*> removedWords = _vwd->getUnusedWords();
-		UDEBUG("Removing %d words (dictionary size=%d)...", removedWords.size(), _vwd->getVisualWords().size());
-		if(removedWords.size())
-		{
-			// remove them from the dictionary
-			_vwd->removeWords(removedWords);
+		// remove them from the dictionary
+		_vwd->removeWords(removedWords);
 
-			for(unsigned int i=0; i<removedWords.size(); ++i)
+		for(unsigned int i=0; i<removedWords.size(); ++i)
+		{
+			if(_dbDriver)
 			{
-				if(_dbDriver)
-				{
-					_dbDriver->asyncSave(removedWords[i]);
-				}
-				else
-				{
-					delete removedWords[i];
-				}
+				_dbDriver->asyncSave(removedWords[i]);
+			}
+			else
+			{
+				delete removedWords[i];
 			}
 		}
 	}
@@ -4268,6 +4689,11 @@ void Memory::enableWordsRef(const std::list<int> & signatureIds)
 				}
 			}
 		}
+	}
+
+	if(!_vwd->isIncremental() && oldWordIds.size())
+	{
+		UWARN("Dictionary is fixed, but some words retrieved have not been found!?");
 	}
 
 	UDEBUG("oldWordIds.size()=%d, getOldIds time=%fs", oldWordIds.size(), timer.ticks());
