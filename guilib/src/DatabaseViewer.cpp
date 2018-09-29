@@ -44,6 +44,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap/utilite/UDirectory.h>
 #include <rtabmap/utilite/UConversion.h>
 #include <opencv2/core/core_c.h>
+#include <opencv2/imgproc/types_c.h>
 #include <opencv2/highgui/highgui.hpp>
 #include <rtabmap/utilite/UTimer.h>
 #include <rtabmap/utilite/UFile.h>
@@ -348,6 +349,8 @@ DatabaseViewer::DatabaseViewer(const QString & ini, QWidget * parent) :
 	connect(ui_->doubleSpinBox_gainCompensationRadius, SIGNAL(valueChanged(double)), this, SLOT(updateConstraintView()));
 	connect(ui_->doubleSpinBox_voxelSize, SIGNAL(valueChanged(double)), this, SLOT(updateConstraintView()));
 	connect(ui_->doubleSpinBox_voxelSize, SIGNAL(valueChanged(double)), this, SLOT(update3dView()));
+	connect(ui_->spinBox_decimation, SIGNAL(valueChanged(int)), this, SLOT(updateConstraintView()));
+	connect(ui_->spinBox_decimation, SIGNAL(valueChanged(int)), this, SLOT(update3dView()));
 	connect(ui_->groupBox_posefiltering, SIGNAL(clicked(bool)), this, SLOT(updateGraphView()));
 	connect(ui_->doubleSpinBox_posefilteringRadius, SIGNAL(editingFinished()), this, SLOT(updateGraphView()));
 	connect(ui_->doubleSpinBox_posefilteringAngle, SIGNAL(editingFinished()), this, SLOT(updateGraphView()));
@@ -373,6 +376,7 @@ DatabaseViewer::DatabaseViewer(const QString & ini, QWidget * parent) :
 	// Graph view
 	connect(ui_->doubleSpinBox_gainCompensationRadius, SIGNAL(valueChanged(double)), this, SLOT(configModified()));
 	connect(ui_->doubleSpinBox_voxelSize, SIGNAL(valueChanged(double)), this, SLOT(configModified()));
+	connect(ui_->spinBox_decimation, SIGNAL(valueChanged(int)), this, SLOT(configModified()));
 	connect(ui_->groupBox_posefiltering, SIGNAL(clicked(bool)), this, SLOT(configModified()));
 	connect(ui_->doubleSpinBox_posefilteringRadius, SIGNAL(valueChanged(double)), this, SLOT(configModified()));
 	connect(ui_->doubleSpinBox_posefilteringAngle, SIGNAL(valueChanged(double)), this, SLOT(configModified()));
@@ -419,15 +423,9 @@ DatabaseViewer::DatabaseViewer(const QString & ini, QWidget * parent) :
 DatabaseViewer::~DatabaseViewer()
 {
 	delete ui_;
-	if(dbDriver_)
-	{
-		delete dbDriver_;
-	}
+	delete dbDriver_;
 #ifdef RTABMAP_OCTOMAP
-	if(octomap_)
-	{
-		delete octomap_;
-	}
+	delete octomap_;
 #endif
 }
 
@@ -502,7 +500,7 @@ void DatabaseViewer::readSettings()
 	settings.beginGroup("optimization");
 	ui_->doubleSpinBox_gainCompensationRadius->setValue(settings.value("gainCompensationRadius", ui_->doubleSpinBox_gainCompensationRadius->value()).toDouble());
 	ui_->doubleSpinBox_voxelSize->setValue(settings.value("voxelSize", ui_->doubleSpinBox_voxelSize->value()).toDouble());
-
+	ui_->spinBox_decimation->setValue(settings.value("decimation", ui_->spinBox_decimation->value()).toInt());
 	settings.endGroup();
 
 	settings.beginGroup("grid");
@@ -583,6 +581,7 @@ void DatabaseViewer::writeSettings()
 	settings.beginGroup("optimization");
 	settings.setValue("gainCompensationRadius", ui_->doubleSpinBox_gainCompensationRadius->value());
 	settings.setValue("voxelSize", ui_->doubleSpinBox_voxelSize->value());
+	settings.setValue("decimation", ui_->spinBox_decimation->value());
 	settings.endGroup();
 
 	// save Grid settings
@@ -666,6 +665,7 @@ void DatabaseViewer::restoreDefaultSettings()
 	ui_->doubleSpinBox_optimizationScale->setValue(1.0);
 	ui_->doubleSpinBox_gainCompensationRadius->setValue(0.0);
 	ui_->doubleSpinBox_voxelSize->setValue(0.0);
+	ui_->spinBox_decimation->setValue(1);
 
 	ui_->groupBox_posefiltering->setChecked(false);
 	ui_->doubleSpinBox_posefilteringRadius->setValue(0.1);
@@ -978,6 +978,7 @@ bool DatabaseViewer::closeDatabase()
 		ui_->label_constraint->clear();
 		ui_->label_constraint_opt->clear();
 		ui_->label_variance->clear();
+		ui_->lineEdit_covariance->clear();
 
 		ui_->horizontalSlider_A->setEnabled(false);
 		ui_->horizontalSlider_A->setMaximum(0);
@@ -3431,7 +3432,7 @@ void DatabaseViewer::update(int value,
 		{
 			//image
 			QImage img;
-			QImage imgDepth;
+			cv::Mat imgDepth;
 			if(dbDriver_)
 			{
 				SensorData data;
@@ -3451,7 +3452,7 @@ void DatabaseViewer::update(int value,
 							depth = util2d::fillDepthHoles(depth, ui_->spinBox_mesh_fillDepthHoles->value(), float(ui_->spinBox_mesh_depthError->value())/100.0f);
 						}
 					}
-					imgDepth = uCvMat2QImage(depth);
+					imgDepth = depth;
 				}
 
 				std::list<int> ids;
@@ -3593,7 +3594,7 @@ void DatabaseViewer::update(int value,
 											data.imageRaw(),
 											depth,
 											data.cameraModels()[0],
-											1,0,0,indices.get());
+											ui_->spinBox_decimation->value(),0,0,indices.get());
 									if(indices->size())
 									{
 										cloud = util3d::transformPointCloud(cloud, data.cameraModels()[0].localTransform());
@@ -3602,7 +3603,7 @@ void DatabaseViewer::update(int value,
 								}
 								else
 								{
-									cloud = util3d::cloudRGBFromSensorData(data, 1, 0, 0, indices.get(), ui_->parameters_toolbox->getParameters());
+									cloud = util3d::cloudRGBFromSensorData(data, ui_->spinBox_decimation->value(), 0, 0, indices.get(), ui_->parameters_toolbox->getParameters());
 								}
 								if(indices->size())
 								{
@@ -3670,7 +3671,7 @@ void DatabaseViewer::update(int value,
 							{
 								pcl::PointCloud<pcl::PointXYZ>::Ptr cloud;
 								pcl::IndicesPtr indices(new std::vector<int>);
-								cloud = util3d::cloudFromSensorData(data, 1, 0, 0, indices.get(), ui_->parameters_toolbox->getParameters());
+								cloud = util3d::cloudFromSensorData(data, ui_->spinBox_decimation->value(), 0, 0, indices.get(), ui_->parameters_toolbox->getParameters());
 								if(indices->size())
 								{
 									if(ui_->doubleSpinBox_voxelSize->value() > 0.0)
@@ -3931,12 +3932,13 @@ void DatabaseViewer::update(int value,
 				ULOGGER_DEBUG("Image is empty");
 			}
 
-			if(!imgDepth.isNull())
+			if(!imgDepth.empty())
 			{
 				view->setImageDepth(imgDepth);
 				if(img.isNull())
 				{
-					rect = imgDepth.rect();
+					rect.setWidth(imgDepth.cols);
+					rect.setHeight(imgDepth.rows);
 				}
 			}
 			else
@@ -4223,7 +4225,7 @@ void DatabaseViewer::updateStereo(const SensorData * data)
 		ui_->graphicsView_stereo->setImageDepthShown(true);
 
 		ui_->graphicsView_stereo->setImage(uCvMat2QImage(data->imageRaw()));
-		ui_->graphicsView_stereo->setImageDepth(uCvMat2QImage(data->depthOrRightRaw()));
+		ui_->graphicsView_stereo->setImageDepth(data->depthOrRightRaw());
 
 		// Draw lines between corresponding features...
 		for(unsigned int i=0; i<kpts.size(); ++i)
@@ -4283,7 +4285,7 @@ void DatabaseViewer::updateWordsMatching()
 			QList<int> ids =  wordsA.uniqueKeys();
 			for(int i=0; i<ids.size(); ++i)
 			{
-				if(wordsA.count(ids[i]) == 1 && wordsB.count(ids[i]) == 1)
+				if(ids[i] > 0 && wordsA.count(ids[i]) == 1 && wordsB.count(ids[i]) == 1)
 				{
 					// PINK features
 					ui_->graphicsView_A->setFeatureColor(ids[i], Qt::magenta);
@@ -4447,8 +4449,11 @@ void DatabaseViewer::updateConstraintView(
 				 link.type()==Link::kUserClosure?"User link":
 				 link.type()==Link::kVirtualClosure?"Virtual link":"Undefined"));
 	ui_->label_variance->setText(QString("%1, %2")
-			.arg(sqrt(link.rotVariance()))
-			.arg(sqrt(link.transVariance())));
+			.arg(sqrt(link.transVariance()))
+			.arg(sqrt(link.rotVariance())));
+	std::stringstream out;
+	out << link.infMatrix().inv();
+	ui_->lineEdit_covariance->setText(out.str().c_str());
 	ui_->label_constraint->setText(QString("%1").arg(t.prettyPrint().c_str()).replace(" ", "\n"));
 	if(graphes_.size() &&
 	   (int)graphes_.size()-1 == ui_->horizontalSlider_iterations->maximum())
@@ -4574,11 +4579,11 @@ void DatabaseViewer::updateConstraintView(
 			pcl::IndicesPtr indicesTo(new std::vector<int>);
 			if(!dataFrom.imageRaw().empty() && !dataFrom.depthOrRightRaw().empty())
 			{
-				cloudFrom=util3d::cloudRGBFromSensorData(dataFrom, 1, 0, 0, indicesFrom.get(), ui_->parameters_toolbox->getParameters());
+				cloudFrom=util3d::cloudRGBFromSensorData(dataFrom, ui_->spinBox_decimation->value(), 0, 0, indicesFrom.get(), ui_->parameters_toolbox->getParameters());
 			}
 			if(!dataTo.imageRaw().empty() && !dataTo.depthOrRightRaw().empty())
 			{
-				cloudTo=util3d::cloudRGBFromSensorData(dataTo, 1, 0, 0, indicesTo.get(), ui_->parameters_toolbox->getParameters());
+				cloudTo=util3d::cloudRGBFromSensorData(dataTo, ui_->spinBox_decimation->value(), 0, 0, indicesTo.get(), ui_->parameters_toolbox->getParameters());
 			}
 
 			if(cloudTo.get() && indicesTo->size())
@@ -6272,7 +6277,9 @@ bool DatabaseViewer::addConstraint(int from, int to, bool silent)
 		std::multimap<int, Link> linksIn = updateLinksWithModifications(links_);
 		linksIn.insert(std::make_pair(newLink.from(), newLink));
 		const Link * maxLinearLink = 0;
+		const Link * maxAngularLink = 0;
 		float maxLinearErrorRatio = 0.0f;
+		float maxAngularErrorRatio = 0.0f;
 		Optimizer * optimizer = Optimizer::create(ui_->parameters_toolbox->getParameters());
 		std::map<int, Transform> poses;
 		std::multimap<int, Link> links;
@@ -6288,38 +6295,52 @@ bool DatabaseViewer::addConstraint(int from, int to, bool silent)
 		std::string msg;
 		if(poses.size())
 		{
+			float maxLinearError = 0.0f;
+			float maxAngularError = 0.0f;
 			for(std::multimap<int, Link>::iterator iter=links.begin(); iter!=links.end(); ++iter)
 			{
 				// ignore links with high variance
 				if(iter->second.transVariance() <= 1.0 && iter->second.from() != iter->second.to())
 				{
-					UASSERT(poses.find(iter->second.from())!=poses.end());
-					UASSERT(poses.find(iter->second.to())!=poses.end());
-					Transform t1 = poses.at(iter->second.from());
-					Transform t2 = poses.at(iter->second.to());
-					UASSERT(!t1.isNull() && !t2.isNull());
+					Transform t1 = uValue(poses, iter->second.from(), Transform());
+					Transform t2 = uValue(poses, iter->second.to(), Transform());
 					Transform t = t1.inverse()*t2;
 					float linearError = uMax3(
 							fabs(iter->second.transform().x() - t.x()),
 							fabs(iter->second.transform().y() - t.y()),
 							fabs(iter->second.transform().z() - t.z()));
-					float stddev = sqrt(iter->second.transVariance());
-					float linearErrorRatio = linearError/stddev;
+					float opt_roll,opt__pitch,opt__yaw;
+					float link_roll,link_pitch,link_yaw;
+					t.getEulerAngles(opt_roll, opt__pitch, opt__yaw);
+					iter->second.transform().getEulerAngles(link_roll, link_pitch, link_yaw);
+					float angularError = uMax3(
+							fabs(opt_roll - link_roll),
+							fabs(opt__pitch - link_pitch),
+							fabs(opt__yaw - link_yaw));
+					float stddevLinear = sqrt(iter->second.transVariance());
+					float linearErrorRatio = linearError/stddevLinear;
 					if(linearErrorRatio > maxLinearErrorRatio)
 					{
+						maxLinearError = linearError;
 						maxLinearErrorRatio = linearErrorRatio;
 						maxLinearLink = &iter->second;
+					}
+					float stddevAngular = sqrt(iter->second.rotVariance());
+					float angularErrorRatio = angularError/stddevAngular;
+					if(angularErrorRatio > maxAngularErrorRatio)
+					{
+						maxAngularError = angularError;
+						maxAngularErrorRatio = angularErrorRatio;
+						maxAngularLink = &iter->second;
 					}
 				}
 			}
 			if(maxLinearLink)
 			{
-				UINFO("Max optimization linear error ratio = %f (link %d->%d)", maxLinearErrorRatio, maxLinearLink->from(), maxLinearLink->to());
-			}
-
-			if(maxLinearErrorRatio > maxOptimizationError)
-			{
-				msg = uFormat("Rejecting edge %d->%d because "
+				UINFO("Max optimization linear error = %f m (link %d->%d, var=%f, ratio error/std=%f)", maxLinearError, maxLinearLink->from(), maxLinearLink->to(), maxLinearLink->transVariance(), maxLinearError/sqrt(maxLinearLink->transVariance()));
+				if(maxLinearErrorRatio > maxOptimizationError)
+				{
+					msg = uFormat("Rejecting edge %d->%d because "
 						  "graph error is too large after optimization (ratio %f for edge %d->%d, stddev=%f). "
 						  "\"%s\" is %f.",
 						  newLink.from(),
@@ -6330,6 +6351,25 @@ bool DatabaseViewer::addConstraint(int from, int to, bool silent)
 						  sqrt(maxLinearLink->transVariance()),
 						  Parameters::kRGBDOptimizeMaxError().c_str(),
 						  maxOptimizationError);
+				}
+			}
+			if(maxAngularLink)
+			{
+				UINFO("Max optimization angular error = %f deg (link %d->%d, var=%f, ratio error/std=%f)", maxAngularError*180.0f/CV_PI, maxAngularLink->from(), maxAngularLink->to(), maxAngularLink->rotVariance(), maxAngularError/sqrt(maxAngularLink->rotVariance()));
+				if(maxAngularErrorRatio > maxOptimizationError)
+				{
+					msg = uFormat("Rejecting edge %d->%d because "
+						  "graph error is too large after optimization (ratio %f for edge %d->%d, stddev=%f). "
+						  "\"%s\" is %f.",
+						  newLink.from(),
+						  newLink.to(),
+						  maxAngularErrorRatio,
+						  maxAngularLink->from(),
+						  maxAngularLink->to(),
+						  sqrt(maxAngularLink->rotVariance()),
+						  Parameters::kRGBDOptimizeMaxError().c_str(),
+						  maxOptimizationError);
+				}
 			}
 		}
 		else

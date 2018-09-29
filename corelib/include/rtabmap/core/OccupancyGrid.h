@@ -40,6 +40,17 @@ namespace rtabmap {
 class RTABMAP_EXP OccupancyGrid
 {
 public:
+	inline static float logodds(double probability)
+	{
+		return (float) log(probability/(1-probability));
+	}
+
+	inline static double probability(double logodds)
+	{
+		return 1. - ( 1. / (1. + exp(logodds)));
+	}
+
+public:
 	OccupancyGrid(const ParametersMap & parameters = ParametersMap());
 	void parseParameters(const ParametersMap & parameters);
 	void setMap(const cv::Mat & map, float xMin, float yMin, float cellSize, const std::map<int, Transform> & poses);
@@ -53,6 +64,7 @@ public:
 	bool isMapFrameProjection() const {return projMapFrame_;}
 	const std::map<int, Transform> & addedNodes() const {return addedNodes_;}
 	int cacheSize() const {return (int)cache_.size();}
+	const std::map<int, std::pair<std::pair<cv::Mat, cv::Mat>, cv::Mat> > & getCache() const {return cache_;}
 
 	template<typename PointT>
 	typename pcl::PointCloud<PointT>::Ptr segmentCloud(
@@ -87,6 +99,7 @@ public:
 			const cv::Mat & empty);
 	void update(const std::map<int, Transform> & poses);
 	cv::Mat getMap(float & xMin, float & yMin) const;
+	cv::Mat getProbMap(float & xMin, float & yMin) const;
 	const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & getMapGround() const {return assembledGround_;}
 	const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & getMapObstacles() const {return assembledObstacles_;}
 	const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & getMapEmptyCells() const {return assembledEmptyCells_;}
@@ -125,6 +138,11 @@ private:
 	bool erode_;
 	float footprintRadius_;
 	float updateError_;
+	float occupancyThr_;
+	float probHit_;
+	float probMiss_;
+	float probClampingMin_;
+	float probClampingMax_;
 
 	std::map<int, std::pair<std::pair<cv::Mat, cv::Mat>, cv::Mat> > cache_; //<node id, < <ground, obstacles>, empty> >
 	cv::Mat map_;
