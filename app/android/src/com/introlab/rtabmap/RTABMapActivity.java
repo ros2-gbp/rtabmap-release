@@ -1,11 +1,8 @@
 package com.introlab.rtabmap;
 
-import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
-import java.io.FilenameFilter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -16,16 +13,13 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
 import java.util.HashMap;
-import java.util.List;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipOutputStream;
+import java.util.Timer;
+import java.util.TimerTask;
 
-import android.app.ActionBar;
 import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.ActivityManager.MemoryInfo;
 import android.app.AlertDialog;
-import android.app.Dialog;
 import android.app.Notification;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
@@ -41,46 +35,30 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageManager.NameNotFoundException;
-import android.content.res.Configuration;
-import android.database.Cursor;
-import android.database.sqlite.SQLiteDatabase;
-import android.graphics.Bitmap;
-import android.graphics.Canvas;
-import android.graphics.Color;
-import android.graphics.Paint;
-import android.graphics.Rect;
-import android.graphics.Typeface;
 import android.hardware.Camera;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
+import android.graphics.Matrix;
 import android.graphics.Point;
 import android.hardware.display.DisplayManager;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
-import android.net.ConnectivityManager;
-import android.net.NetworkInfo;
 import android.net.Uri;
+import android.net.wifi.WifiInfo;
+import android.net.wifi.WifiManager;
 import android.opengl.GLSurfaceView;
-import android.os.AsyncTask;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
-import android.os.Debug;
 import android.os.IBinder;
 import android.os.Message;
-import android.preference.ListPreference;
 import android.preference.PreferenceManager;
-import android.text.Editable;
 import android.text.Html;
 import android.text.InputType;
-import android.text.SpannableString;
-import android.text.TextPaint;
-import android.text.method.HideReturnsTransformationMethod;
 import android.text.method.LinkMovementMethod;
-import android.text.util.Linkify;
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.ContextMenu;
@@ -91,30 +69,23 @@ import android.view.MenuItem;
 import android.view.MenuItem.OnMenuItemClickListener;
 import android.view.MenuInflater;
 import android.view.MotionEvent;
-import android.view.Surface;
 import android.view.View;
 import android.view.ContextMenu.ContextMenuInfo;
 import android.view.View.OnClickListener;
 import android.view.View.OnCreateContextMenuListener;
 import android.view.View.OnTouchListener;
-import android.view.Window;
 import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
-import android.webkit.WebView;
-import android.webkit.WebViewClient;
 import android.widget.AdapterView;
-import android.widget.AdapterView.OnItemLongClickListener;
 import android.widget.AdapterView.OnItemSelectedListener;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
-import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.NumberPicker;
 import android.widget.RelativeLayout;
 import android.widget.SeekBar;
 import android.widget.SeekBar.OnSeekBarChangeListener;
-import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.widget.ToggleButton;
@@ -155,6 +126,7 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 	private boolean mHudVisible = true;
 	private int mSavedRenderingType = 0;
 	private boolean mMenuOpened = false;
+	private long mSavedStamp = 0;
 
 	// UI states
 	private static enum State {
@@ -224,12 +196,34 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 	private String mMinInliers;
 	private String mMaxOptimizationError;
 	private boolean mGPSSaved = false;
+	private boolean mEnvSensorsSaved = false;
 	
 	private LocationManager mLocationManager;
 	private LocationListener mLocationListener;
 	private Location mLastKnownLocation;
 	private SensorManager mSensorManager;
+	private WifiManager mWifiManager;
+	private Timer mEnvSensorsTimer = new Timer();
+	Sensor mAccelerometer;
+	Sensor mMagnetometer;
+	Sensor mAmbientTemperature;
+	Sensor mAmbientLight;
+	Sensor mAmbientAirPressure;
+	Sensor mAmbientRelativeHumidity;
 	private float mCompassDeg = 0.0f;
+	private float[] mLastEnvSensors = new float[5];
+	private boolean[] mLastEnvSensorsSet = new boolean[5];
+	
+	private float[] mLastAccelerometer = new float[3];
+    private float[] mLastMagnetometer = new float[3];
+    private boolean mLastAccelerometerSet = false;
+    private boolean mLastMagnetometerSet = false;
+
+    private Matrix mDeviceToCamera = new Matrix();
+    private Matrix mRMat = new Matrix();
+    private Matrix mNewR = new Matrix();
+    private float[] mR = new float[9];
+    private float[] mOrientation = new float[3];
 
 	private int mTotalLoopClosures = 0;
 	private boolean mMapIsEmpty = false;
@@ -239,8 +233,8 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 	
 	private AlertDialog mMemoryWarningDialog = null;
 	
-	private final int STATUS_TEXTS_SIZE = 19;
-	private final int STATUS_TEXTS_POSE_INDEX = 5;
+	private final int STATUS_TEXTS_SIZE = 20;
+	private final int STATUS_TEXTS_POSE_INDEX = 6;
 	private String[] mStatusTexts = new String[STATUS_TEXTS_SIZE];
 	
 	GestureDetector mGesDetect = null;
@@ -534,14 +528,69 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 		};
 
 		mSensorManager = (SensorManager) getSystemService(SENSOR_SERVICE);
+		mAccelerometer = mSensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
+	    mMagnetometer = mSensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD);
+	    mAmbientTemperature = mSensorManager.getDefaultSensor(Sensor.TYPE_AMBIENT_TEMPERATURE);
+	    mAmbientLight = mSensorManager.getDefaultSensor(Sensor.TYPE_LIGHT);
+	    mAmbientAirPressure = mSensorManager.getDefaultSensor(Sensor.TYPE_PRESSURE);
+	    mAmbientRelativeHumidity = mSensorManager.getDefaultSensor(Sensor.TYPE_RELATIVE_HUMIDITY);
+	    float [] values = {1,0,0,0,0,1,0,-1,0};
+	    mDeviceToCamera.setValues(values);
+	    mWifiManager = (WifiManager) getSystemService(Context.WIFI_SERVICE);
+		
+		setCamera(1);
 
 		DISABLE_LOG =  !( 0 != ( getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE ) );
 	}
 
 	@Override
 	public void onSensorChanged(SensorEvent event) {
-		// get the angle around the z-axis rotated
-		mCompassDeg = event.values[0];
+		if(event.sensor == mAccelerometer || event.sensor == mMagnetometer)
+		{
+			if (event.sensor == mAccelerometer) {
+	            System.arraycopy(event.values, 0, mLastAccelerometer, 0, event.values.length);
+	            mLastAccelerometerSet = true;
+	        } else if (event.sensor == mMagnetometer) {
+	            System.arraycopy(event.values, 0, mLastMagnetometer, 0, event.values.length);
+	            mLastMagnetometerSet = true;
+	        }
+	        if (mLastAccelerometerSet && mLastMagnetometerSet) {
+	            SensorManager.getRotationMatrix(mR, null, mLastAccelerometer, mLastMagnetometer);
+	            mRMat.setValues(mR);
+	            mNewR.setConcat(mRMat, mDeviceToCamera) ;
+	            mNewR.getValues(mR);
+	            SensorManager.getOrientation(mR, mOrientation);                 
+	            mCompassDeg = mOrientation[0] * 180.0f/(float)Math.PI;
+	            if(mCompassDeg<0.0f)
+	            {
+	            	mCompassDeg += 360.0f;
+	            }
+	        }
+		}
+		else if(event.sensor == mAmbientTemperature)
+		{
+			mLastEnvSensors[1] = event.values[0];
+			mLastEnvSensorsSet[1] = true;
+			RTABMapLib.addEnvSensor(2, event.values[0]);
+		}
+		else if(event.sensor == mAmbientAirPressure)
+		{
+			mLastEnvSensors[2] = event.values[0];
+			mLastEnvSensorsSet[2] = true;
+			RTABMapLib.addEnvSensor(3, event.values[0]);
+		}
+		else if(event.sensor == mAmbientLight)
+		{
+			mLastEnvSensors[3] = event.values[0];
+			mLastEnvSensorsSet[3] = true;
+			RTABMapLib.addEnvSensor(4, event.values[0]);
+		}
+		else if(event.sensor == mAmbientRelativeHumidity)
+		{
+			mLastEnvSensors[4] = event.values[0];
+			mLastEnvSensorsSet[4] = true;
+			RTABMapLib.addEnvSensor(5, event.values[0]);
+		}
 	}
 
 	@Override
@@ -660,6 +709,9 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 		
 		mLocationManager.removeUpdates(mLocationListener);
 		mSensorManager.unregisterListener(this);
+		mLastAccelerometerSet = false;
+		mLastMagnetometerSet= false;
+		mLastEnvSensorsSet[0] = mLastEnvSensorsSet[1]= mLastEnvSensorsSet[2]= mLastEnvSensorsSet[3]= mLastEnvSensorsSet[4]=false;
 
 		RTABMapLib.onPause();
 		
@@ -724,11 +776,37 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 			boolean keepAllDb = sharedPref.getBoolean(getString(R.string.pref_key_keep_all_db), Boolean.parseBoolean(getString(R.string.pref_default_keep_all_db)));
 			boolean optimizeFromGraphEnd = sharedPref.getBoolean(getString(R.string.pref_key_optimize_end), Boolean.parseBoolean(getString(R.string.pref_default_optimize_end)));
 			String optimizer = sharedPref.getString(getString(R.string.pref_key_optimizer), getString(R.string.pref_default_optimizer));
+			String markerDetection = sharedPref.getString(getString(R.string.pref_key_marker_detection), getString(R.string.pref_default_marker_detection));
+			String markerDetectionDepthError = sharedPref.getString(getString(R.string.pref_key_marker_detection_depth_error), getString(R.string.pref_default_marker_detection_depth_error));
 			mGPSSaved = sharedPref.getBoolean(getString(R.string.pref_key_gps_saved), Boolean.parseBoolean(getString(R.string.pref_default_gps_saved)));
 			if(mGPSSaved)
 			{
 				mLocationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 0, 0, mLocationListener);
-				mSensorManager.registerListener(this, mSensorManager.getDefaultSensor(Sensor.TYPE_ORIENTATION), SensorManager.SENSOR_DELAY_GAME);
+				mSensorManager.registerListener(this, mAccelerometer, SensorManager.SENSOR_DELAY_UI);
+			    mSensorManager.registerListener(this, mMagnetometer, SensorManager.SENSOR_DELAY_UI);
+			}
+			mEnvSensorsSaved = sharedPref.getBoolean(getString(R.string.pref_key_env_sensors_saved), Boolean.parseBoolean(getString(R.string.pref_default_env_sensors_saved)));
+			if(mEnvSensorsSaved)
+			{
+				mSensorManager.registerListener(this, mAmbientTemperature, SensorManager.SENSOR_DELAY_NORMAL);
+				mSensorManager.registerListener(this, mAmbientAirPressure, SensorManager.SENSOR_DELAY_NORMAL);
+				mSensorManager.registerListener(this, mAmbientLight, SensorManager.SENSOR_DELAY_NORMAL);
+				mSensorManager.registerListener(this, mAmbientRelativeHumidity, SensorManager.SENSOR_DELAY_NORMAL);
+				mEnvSensorsTimer.schedule(new TimerTask() {
+
+			        @Override
+			        public void run() {
+			        	WifiInfo wifiInfo = mWifiManager.getConnectionInfo();
+			        	int dbm = 0;
+			        	if(wifiInfo != null && (dbm = wifiInfo.getRssi()) > -127)
+			        	{
+			        		mLastEnvSensors[0] = (float)dbm;
+			        		mLastEnvSensorsSet[0] = true;
+			        		RTABMapLib.addEnvSensor(1, mLastEnvSensors[0]);
+			        	}
+			        }
+
+			    },0,200);
 			}
 			
 			if(!DISABLE_LOG) Log.d(TAG, "set mapping parameters");
@@ -755,6 +833,17 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 			RTABMapLib.setMappingParameter("Mem/NotLinkedNodesKept", String.valueOf(keepAllDb));
 			RTABMapLib.setMappingParameter("RGBD/OptimizeFromGraphEnd", String.valueOf(optimizeFromGraphEnd));
 			RTABMapLib.setMappingParameter("Optimizer/Strategy", optimizer);
+			if(Integer.parseInt(markerDetection) == -1)
+			{
+				RTABMapLib.setMappingParameter("RGBD/MarkerDetection", "false");
+			}
+			else
+			{
+				RTABMapLib.setMappingParameter("RGBD/MarkerDetection", "true");
+				RTABMapLib.setMappingParameter("Marker/Dictionary", markerDetection);
+                                RTABMapLib.setMappingParameter("Marker/CornerRefinementMethod", Integer.parseInt(markerDetection) > 16?"3":"0");
+			}
+			RTABMapLib.setMappingParameter("Marker/MaxDepthError", markerDetectionDepthError);
 	
 			if(!DISABLE_LOG) Log.d(TAG, "set exporting parameters...");
 			RTABMapLib.setCloudDensityLevel(Integer.parseInt(sharedPref.getString(getString(R.string.pref_key_density), getString(R.string.pref_default_density))));
@@ -1035,6 +1124,7 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 			float optimizationMaxError,
 			float optimizationMaxErrorRatio,
 			boolean fastMovement,
+			int landmarkDetected,
 			String[] statusTexts)
 	{
 		mStatusTexts = statusTexts;
@@ -1078,6 +1168,7 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 						}
 					})
 					.create();
+					mMemoryWarningDialog.setCanceledOnTouchOutside(false);
 					mMemoryWarningDialog.show();
 				}
 				else if(mMemoryWarningDialog == null && memoryUsed*3 > memoryFree && (mItemDataRecorderMode == null || !mItemDataRecorderMode.isChecked()))
@@ -1101,6 +1192,7 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 						}
 					})
 					.create();
+					mMemoryWarningDialog.setCanceledOnTouchOutside(false);
 					mMemoryWarningDialog.show();
 				}
 			}
@@ -1113,6 +1205,11 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 			if(loopClosureId > 0)
 			{
 				mToast.setText(String.format("Loop closure detected! (%d/%d inliers)", inliers, matches));
+				mToast.show();
+			}
+			else if(landmarkDetected != 0)
+			{
+				mToast.setText(String.format("Marker %d detected!", landmarkDetected));
 				mToast.show();
 			}
 			else if(rejected > 0)
@@ -1130,7 +1227,7 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 				}
 				else
 				{
-					mToast.setText(String.format("Loop closure rejected, not enough inliers (%d/%d < %s).", inliers, matches, mMinInliers));
+					mToast.setText(String.format("Loop closure rejected, not enough inliers (%d/%d < %s).", inliers, matches, mMinInliers));
 				}
 				mToast.show();
 			}
@@ -1172,6 +1269,7 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 			final float optimizationMaxErrorRatio,
 			final float distanceTravelled,
 			final int fastMovement,
+			final int landmarkDetected,
 			final float x,
 			final float y,
 			final float z,
@@ -1225,12 +1323,42 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 			}
 			else
 			{
-				statusTexts[3] = getString(R.string.gps)+"[not yet available]";
+				statusTexts[3] = getString(R.string.gps)+String.format("[not yet available, %.0fdeg]", mCompassDeg);
+			}
+		}
+		if(mEnvSensorsSaved)
+		{
+			statusTexts[4] = getString(R.string.env_sensors);
+			
+			if(mLastEnvSensorsSet[0])
+			{
+				statusTexts[4] += String.format(" %.0f dbm", mLastEnvSensors[0]);
+				mLastEnvSensorsSet[0] = false;
+			}
+			if(mLastEnvSensorsSet[1])
+			{
+				statusTexts[4] += String.format(" %.1f %cC", mLastEnvSensors[1], '\u00B0');
+				mLastEnvSensorsSet[1] = false;
+			}
+			if(mLastEnvSensorsSet[2])
+			{
+				statusTexts[4] += String.format(" %.1f hPa", mLastEnvSensors[2]);
+				mLastEnvSensorsSet[2] = false;
+			}
+			if(mLastEnvSensorsSet[3])
+			{
+				statusTexts[4] += String.format(" %.0f lx", mLastEnvSensors[3]);
+				mLastEnvSensorsSet[3] = false;
+			}
+			if(mLastEnvSensorsSet[4])
+			{
+				statusTexts[4] += String.format(" %.0f %%", mLastEnvSensors[4]);
+				mLastEnvSensorsSet[4] = false;
 			}
 		}
 		
 		String formattedDate = new SimpleDateFormat("HH:mm:ss.SSS").format(new Date());
-		statusTexts[4] = getString(R.string.time)+formattedDate;
+		statusTexts[5] = getString(R.string.time)+formattedDate;
 		
 		int index = STATUS_TEXTS_POSE_INDEX;
 		statusTexts[index++] = getString(R.string.nodes)+nodes+" (" + nodesDrawn + " shown)";
@@ -1250,7 +1378,7 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 			
 		runOnUiThread(new Runnable() {
 				public void run() {
-					updateStatsUI(loopClosureId, inliers, matches, rejected, optimizationMaxError, optimizationMaxErrorRatio, fastMovement!=0, statusTexts);
+					updateStatsUI(loopClosureId, inliers, matches, rejected, optimizationMaxError, optimizationMaxErrorRatio, fastMovement!=0, landmarkDetected, statusTexts);
 				} 
 		});
 	}
@@ -1525,6 +1653,8 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 
     public void stopDisconnectTimer(){
         notouchHandler.removeCallbacks(notouchCallback);
+        Timer timer = new Timer();
+        timer.cancel();
     }
 		
 	private void updateState(State state)
@@ -1637,7 +1767,8 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 			if(!mOnPause && !mItemLocalizationMode.isChecked() && !mItemDataRecorderMode.isChecked() && memoryFree >= 100 && mMapNodes>2)
 			{
 				// Do standard post processing?
-				new AlertDialog.Builder(getActivity())
+				AlertDialog d2 = new AlertDialog.Builder(getActivity())
+				.setCancelable(false)
 				.setTitle("Mapping Paused! Optimize Now?")
 				.setMessage("Do you want to do standard map optimization now? This can be also done later using \"Optimize\" menu.")
 				.setPositiveButton("Yes", new DialogInterface.OnClickListener() {
@@ -1650,7 +1781,9 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 						// do nothing...
 					}
 				})
-				.show();
+				.create();
+				d2.setCanceledOnTouchOutside(false);
+				d2.show();
 			} 
 		}
 		else
@@ -1879,6 +2012,7 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 		else if (itemId == R.id.save)
 		{
 			AlertDialog.Builder builder = new AlertDialog.Builder(this);
+			builder.setCancelable(false);
 			builder.setTitle("RTAB-Map Database Name (*.db):");
 			final EditText input = new EditText(this);
 			input.setInputType(InputType.TYPE_CLASS_TEXT); 
@@ -1908,7 +2042,8 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 						File newFile = new File(mWorkingDirectory + fileName + ".db");
 						if(newFile.exists())
 						{
-							new AlertDialog.Builder(getActivity())
+							AlertDialog d2 = new AlertDialog.Builder(getActivity())
+							.setCancelable(false)
 							.setTitle("File Already Exists")
 							.setMessage("Do you want to overwrite the existing file?")
 							.setPositiveButton("Yes", new DialogInterface.OnClickListener() {
@@ -1922,7 +2057,9 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 									resetNoTouchTimer(true);
 								}
 							})
-							.show();
+							.create();
+							d2.setCanceledOnTouchOutside(false);
+							d2.show();
 						}
 						else
 						{
@@ -1932,6 +2069,7 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 				}
 			});
 			AlertDialog alertToShow = builder.create();
+			alertToShow.setCanceledOnTouchOutside(false);
 			alertToShow.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE);
 			alertToShow.show();
 		}
@@ -1972,7 +2110,8 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 		else if(itemId == R.id.data_recorder)
 		{
 			final boolean dataRecorderOldState = item.isChecked();
-			new AlertDialog.Builder(getActivity())
+			AlertDialog d2 = new AlertDialog.Builder(getActivity())
+			.setCancelable(false)
 			.setTitle("Data Recorder Mode")
 			.setMessage("Changing from/to data recorder mode will close the current session. Do you want to continue?")
 			.setPositiveButton("Yes", new DialogInterface.OnClickListener() {
@@ -2027,7 +2166,9 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 					dialog.dismiss();
 				}
 			})
-			.show();
+			.create();
+			d2.setCanceledOnTouchOutside(false);
+			d2.show();
 		}
 		else if(itemId == R.id.export_point_cloud ||
 				itemId == R.id.export_point_cloud_highrez)
@@ -2082,27 +2223,26 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 	        linearLayout.setLayoutParams(params);
 	        linearLayout.addView(aNumberPicker,numPicerParams);
 
-	        AlertDialog.Builder alertDialogBuilder = new AlertDialog.Builder(this);
-	        alertDialogBuilder.setTitle("Maximum polygons");
-	        alertDialogBuilder.setView(linearLayout);
-	        alertDialogBuilder
-	                .setCancelable(false)
-	                .setPositiveButton("Ok",
-	                        new DialogInterface.OnClickListener() {
-	                            public void onClick(DialogInterface dialog,
-	                                                int id) {
-	                                export(isOBJ, true, false, true, aNumberPicker.getValue()*100000);
-	                            }
-	                        })
-	                .setNegativeButton("Cancel",
-	                        new DialogInterface.OnClickListener() {
-	                            public void onClick(DialogInterface dialog,
-	                                                int id) {
-	                                dialog.cancel();
-	                            }
-	                        });
-	        AlertDialog alertDialog = alertDialogBuilder.create();
-	        alertDialog.show();
+	        AlertDialog ad = new AlertDialog.Builder(this)
+	        		.setTitle("Maximum polygons")
+	        		.setView(linearLayout)
+	        		.setCancelable(false)
+	        		.setPositiveButton("Ok",
+	        				new DialogInterface.OnClickListener() {
+	        			public void onClick(DialogInterface dialog,
+	        					int id) {
+	        				export(isOBJ, true, false, true, aNumberPicker.getValue()*100000);
+	        			}
+	        		})
+	        		.setNegativeButton("Cancel",
+	        				new DialogInterface.OnClickListener() {
+	        			public void onClick(DialogInterface dialog,
+	        					int id) {
+	        				dialog.cancel();
+	        			}
+	        		}).create();
+	        ad.setCanceledOnTouchOutside(false);
+	        ad.show();
 		}
 		else if(itemId == R.id.open)
 		{
@@ -2149,13 +2289,15 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 	        DatabaseListArrayAdapter simpleAdapter = new DatabaseListArrayAdapter(this, arrayList, R.layout.database_list, from, to);//Create object and set the parameters for simpleAdapter
 
 			AlertDialog.Builder builder = new AlertDialog.Builder(this);
+			builder.setCancelable(false);
 			builder.setTitle("Choose Your File (*.db)");
 			builder.setAdapter(simpleAdapter, new DialogInterface.OnClickListener() {
 			//builder.setItems(filesWithSize, new DialogInterface.OnClickListener() {
 				public void onClick(DialogInterface dialog, final int which) {
 											
 					// Adjust color now?
-					new AlertDialog.Builder(getActivity())
+					AlertDialog d2 = new AlertDialog.Builder(getActivity())
+					.setCancelable(false)
 					.setTitle("Opening database...")
 					.setMessage("Do you want to adjust colors now?\nThis can be done later under Optimize menu.")
 					.setPositiveButton("Yes", new DialogInterface.OnClickListener() {
@@ -2168,12 +2310,15 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 							openDatabase(files[which], false);
 						}
 					})
-					.show();
+					.create();
+					d2.setCanceledOnTouchOutside(false);
+					d2.show();
 					return;
 				}
 			});
 
 			final AlertDialog ad = builder.create(); //don't show dialog yet
+			ad.setCanceledOnTouchOutside(false);
 			ad.setOnShowListener(new OnShowListener() 
 			{   			
 				@Override
@@ -2194,6 +2339,7 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 									@Override
 									public boolean onMenuItemClick(MenuItem item) {
 										AlertDialog.Builder builderRename = new AlertDialog.Builder(getActivity());
+										builderRename.setCancelable(false);
 										builderRename.setTitle("RTAB-Map Database Name (*.db):");
 										final EditText input = new EditText(getActivity());
 										input.setInputType(InputType.TYPE_CLASS_TEXT); 
@@ -2213,16 +2359,32 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 													File newFile = new File(mWorkingDirectory + fileName + ".db");
 													if(newFile.exists())
 													{
-														new AlertDialog.Builder(getActivity())
+														AlertDialog d2 = new AlertDialog.Builder(getActivity())
+														.setCancelable(false)
 														.setTitle("File Already Exists")
 														.setMessage(String.format("Name %s already used, choose another name.", fileName))
-														.show();
+														.create();
+														d2.setCanceledOnTouchOutside(false);
+														d2.show();
 													}
 													else
 													{
 														File from = new File(mWorkingDirectory, files[position]);
 												        File to   = new File(mWorkingDirectory, fileName + ".db");
 												        from.renameTo(to);
+												        
+												        long stamp = System.currentTimeMillis();
+												        if(stamp-mSavedStamp < 10000)
+												        {
+												        	try {
+																Thread.sleep(10000 - (stamp-mSavedStamp));
+															}
+															catch(InterruptedException e){}
+												        }
+												        
+												        refreshSystemMediaScanDataBase(getActivity(), files[position]);
+												        refreshSystemMediaScanDataBase(getActivity(), to.getAbsolutePath());
+												        
 												        ad.dismiss();
 												        resetNoTouchTimer(true);
 													}
@@ -2230,6 +2392,7 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 											}
 										});
 										AlertDialog alertToShow = builderRename.create();
+										alertToShow.setCanceledOnTouchOutside(false);
 										alertToShow.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE);
 										alertToShow.show();
 										return true;
@@ -2245,6 +2408,7 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 										        case DialogInterface.BUTTON_POSITIVE:
 										        	Log.e(TAG, String.format("Yes delete %s!", files[position]));
 										        	(new File(mWorkingDirectory+files[position])).delete();
+										        	refreshSystemMediaScanDataBase(getActivity(), mWorkingDirectory+files[position]);
 										        	ad.dismiss();
 										        	resetNoTouchTimer(true);
 										            break;
@@ -2255,11 +2419,14 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 										        }
 										    }
 										};
-										AlertDialog.Builder builder = new AlertDialog.Builder(getActivity());
-										builder.setTitle(String.format("Delete %s", files[position]))
+										AlertDialog dialog = new AlertDialog.Builder(getActivity())
+										.setCancelable(false)
+										.setTitle(String.format("Delete %s", files[position]))
 										    .setMessage("Are you sure?")
 										    .setPositiveButton("Yes", dialogClickListener)
-										    .setNegativeButton("No", dialogClickListener).show();
+										    .setNegativeButton("No", dialogClickListener).create();
+										dialog.setCanceledOnTouchOutside(false);
+										dialog.show();
 										return true;
 									}
 								});
@@ -2429,14 +2596,15 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 											public void onClick(DialogInterface dialog, int which) {
 												resetNoTouchTimer(true);
 											}
-										})
-										.create();
+										}).create();
+										d2.setCanceledOnTouchOutside(false);
 										d2.show();
 										// Make the textview clickable. Must be called after show()
 									    ((TextView)d2.findViewById(android.R.id.message)).setMovementMethod(LinkMovementMethod.getInstance());
 									}
 								})
 								.create();
+								d.setCanceledOnTouchOutside(false);
 								d.show();
 								// Make the textview clickable. Must be called after show()
 							    ((TextView)d.findViewById(android.R.id.message)).setMovementMethod(LinkMovementMethod.getInstance());
@@ -2459,6 +2627,18 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 			} 
 		});
 		exportThread.start();
+	}
+	
+	/** 
+	@param context : it is the reference where this method get called
+	@param docPath : absolute path of file for which broadcast will be send to refresh media database
+	@see https://stackoverflow.com/a/36051318/6163336
+	**/
+	public static void refreshSystemMediaScanDataBase(Context context, String docPath){
+	   Intent mediaScanIntent = new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE);
+	   Uri contentUri = Uri.fromFile(new File(docPath));
+	   mediaScanIntent.setData(contentUri);
+	   context.sendBroadcast(mediaScanIntent);
 	}
 	
 	private void saveDatabase(String fileName)
@@ -2489,6 +2669,8 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 						}
 						else
 						{
+							refreshSystemMediaScanDataBase(getActivity(), newDatabasePath);
+							mSavedStamp = System.currentTimeMillis();
 							msg = String.format("Database saved to \"%s\".", newDatabasePathHuman);	
 						}
 						
@@ -2514,7 +2696,8 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 						final File f = new File(newDatabasePath);
 						final int fileSizeMB = (int)f.length()/(1024 * 1024);
 						
-						new AlertDialog.Builder(getActivity())
+						AlertDialog d2 = new AlertDialog.Builder(getActivity())
+						.setCancelable(false)
 						.setTitle("Database saved!")
 						.setMessage(String.format("Database \"%s\" (%d MB) successfully saved on the SD-CARD! Share it?", newDatabasePathHuman, fileSizeMB))
 						.setPositiveButton("Yes", new DialogInterface.OnClickListener() {
@@ -2546,7 +2729,9 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 								updateState(previousState);
 							}
 						})
-						.show();
+						.create();
+						d2.setCanceledOnTouchOutside(false);
+						d2.show();
 					}
 				});
 			} 
@@ -2595,7 +2780,8 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 					File newFile = new File(mWorkingDirectory + RTABMAP_EXPORT_DIR + fileName + ".zip");
 					if(newFile.exists())
 					{
-						new AlertDialog.Builder(getActivity())
+						AlertDialog ad = new AlertDialog.Builder(getActivity())
+						.setCancelable(false)
 						.setTitle("File Already Exists")
 						.setMessage("Do you want to overwrite the existing file?")
 						.setPositiveButton("Yes", new DialogInterface.OnClickListener() {
@@ -2607,8 +2793,9 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 							public void onClick(DialogInterface dialog, int which) {
 								saveOnDevice();
 							}
-						})
-						.show();
+						}).create();
+						ad.setCanceledOnTouchOutside(false);
+						ad.show();
 					}
 					else
 					{
@@ -2618,6 +2805,7 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 			}
 		});
 		AlertDialog alertToShow = builder.create();
+		alertToShow.setCanceledOnTouchOutside(false);
 		alertToShow.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE);
 		alertToShow.show();
 	}
@@ -2695,7 +2883,8 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 							final File f = new File(zipOutput);
 							final int fileSizeMB = (int)f.length()/(1024 * 1024);
 							
-							new AlertDialog.Builder(getActivity())
+							AlertDialog d = new AlertDialog.Builder(getActivity())
+							.setCancelable(false)
 							.setTitle("Database saved!")
 							.setMessage(String.format("Mesh \"%s\" (%d MB) successfully exported on the SD-CARD! Share it?", pathHuman, fileSizeMB))
 							.setPositiveButton("Yes", new DialogInterface.OnClickListener() {
@@ -2714,8 +2903,9 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 								public void onClick(DialogInterface dialog, int which) {
 									resetNoTouchTimer(true);
 								}
-							})
-							.show();
+							}).create();
+							d.setCanceledOnTouchOutside(false);
+							d.show();
 						}
 					});
 				}
@@ -2761,7 +2951,7 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 						{
 							updateState(State.STATE_IDLE);
 							mProgressDialog.dismiss();
-							new AlertDialog.Builder(getActivity())
+							AlertDialog d = new AlertDialog.Builder(getActivity())
 							.setCancelable(false)
 							.setTitle("Error")
 							.setMessage("The map is loaded but optimization of the map's graph has "
@@ -2778,14 +2968,15 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 							.setNegativeButton("Close", new DialogInterface.OnClickListener() {
 								public void onClick(DialogInterface dialog, int which) {
 								}
-							})
-							.show();
+							}).create();
+							d.setCanceledOnTouchOutside(false);
+							d.show();
 						}
 						else if(status == -2)
 						{
 							updateState(State.STATE_IDLE);
 							mProgressDialog.dismiss();
-							new AlertDialog.Builder(getActivity())
+							AlertDialog d = new AlertDialog.Builder(getActivity())
 							.setCancelable(false)
 							.setTitle("Error")
 							.setMessage("Failed to open database: Out of memory! Try "
@@ -2800,8 +2991,9 @@ public class RTABMapActivity extends Activity implements OnClickListener, OnItem
 							.setNegativeButton("Close", new DialogInterface.OnClickListener() {
 								public void onClick(DialogInterface dialog, int which) {
 								}
-							})
-							.show();
+							}).create();
+							d.setCanceledOnTouchOutside(false);
+							d.show();
 						}
 						else
 						{

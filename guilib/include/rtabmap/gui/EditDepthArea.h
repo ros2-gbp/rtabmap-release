@@ -35,6 +35,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <QPoint>
 #include <QWidget>
 #include <opencv2/opencv.hpp>
+#include "rtabmap/utilite/UCv2Qt.h"
 
 class QMenu;
 class QAction;
@@ -54,6 +55,9 @@ public:
 
     void setPenWidth(int newWidth);
     int penWidth() const { return myPenWidth_; }
+    void setClusterError(double error) { clusterError_ = error; }
+    double clusterError() const { return clusterError_; }
+    void setColorMap(uCvQtDepthColorMap type);
 
 public Q_SLOTS:
     void resetChanges();
@@ -73,6 +77,7 @@ private:
     bool modified_;
     bool scribbling_;
     int myPenWidth_;
+    double clusterError_;
     QImage imageRGB_;
     QImage image_;
     cv::Mat originalImage_;
@@ -81,8 +86,13 @@ private:
     QMenu * menu_;
     QAction * showRGB_;
     QAction * removeCluster_;
+    QAction * clusterErrorCluster_;
     QAction * resetChanges_;
     QAction * setPenWidth_;
+    QAction * colorMapWhiteToBlack_;
+	QAction * colorMapBlackToWhite_;
+	QAction * colorMapRedToBlue_;
+	QAction * colorMapBlueToRed_;
 };
 
 }

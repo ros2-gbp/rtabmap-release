@@ -147,7 +147,7 @@ public:
 		//============================
 		const std::map<int, Transform> & poses = stats.poses();
 		QMap<std::string, Transform> clouds = cloudViewer_->getAddedClouds();
-		for(std::map<int, Transform>::const_iterator iter = poses.begin(); iter!=poses.end(); ++iter)
+		for(std::map<int, Transform>::const_iterator iter = poses.lower_bound(1); iter!=poses.end(); ++iter)
 		{
 			if(!iter->second.isNull())
 			{
@@ -168,9 +168,9 @@ public:
 					}
 					cloudViewer_->setCloudVisibility(cloudName, true);
 				}
-				else if(uContains(stats.getSignatures(), iter->first))
+				else if(iter->first == stats.getLastSignatureData().id())
 				{
-					Signature s = stats.getSignatures().at(iter->first);
+					Signature s = stats.getLastSignatureData();
 					s.sensorData().uncompressData(); // make sure data is uncompressed
 					// Add the new cloud
 					pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud = util3d::cloudRGBFromSensorData(
@@ -206,7 +206,7 @@ public:
 			// Set graph
 			pcl::PointCloud<pcl::PointXYZ>::Ptr graph(new pcl::PointCloud<pcl::PointXYZ>);
 			pcl::PointCloud<pcl::PointXYZ>::Ptr graphNodes(new pcl::PointCloud<pcl::PointXYZ>);
-			for(std::map<int, Transform>::const_iterator iter=poses.begin(); iter!=poses.end(); ++iter)
+			for(std::map<int, Transform>::const_iterator iter=poses.lower_bound(1); iter!=poses.end(); ++iter)
 			{
 				graph->push_back(pcl::PointXYZ(iter->second.x(), iter->second.y(), iter->second.z()));
 			}
