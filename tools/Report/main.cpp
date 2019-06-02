@@ -46,6 +46,7 @@ void showUsage()
 			"  path               Directory containing rtabmap databases or path of a database.\n"
 			"  --latex            Print table formatted in LaTeX with results.\n"
 			"  --kitti            Compute error based on KITTI benchmark.\n"
+			"  --relative         Compute relative motion error between poses.\n"
 			"  --scale            Find the best scale for the map against the ground truth\n"
 			"                       and compute error based on the scaled path.\n"
 			"  --poses            Export poses to [path]_poses.txt, ground truth to [path]_gt.txt\n"
@@ -69,6 +70,7 @@ int main(int argc, char * argv[])
 	bool outputScaled = false;
 	bool outputPoses = false;
 	bool outputKittiError = false;
+	bool outputRelativeError = false;
 	std::map<std::string, UPlot*> figures;
 	for(int i=1; i<argc-1; ++i)
 	{
@@ -79,6 +81,10 @@ int main(int argc, char * argv[])
 		else if(strcmp(argv[i], "--kitti") == 0)
 		{
 			outputKittiError = true;
+		}
+		else if(strcmp(argv[i], "--relative") == 0)
+		{
+			outputRelativeError = true;
 		}
 		else if(strcmp(argv[i], "--scale") == 0)
 		{
@@ -202,7 +208,8 @@ int main(int argc, char * argv[])
 						std::string l;
 						double s;
 						std::vector<float> v;
-						if(driver->getNodeInfo(*iter, p, m, w, l, s, gt, v, gps))
+						EnvSensors sensors;
+						if(driver->getNodeInfo(*iter, p, m, w, l, s, gt, v, gps, sensors))
 						{
 							odomPoses.insert(std::make_pair(*iter, p));
 							if(!gt.isNull())
@@ -279,10 +286,15 @@ int main(int argc, char * argv[])
 					}
 
 					std::multimap<int, Link> links;
-					driver->getAllLinks(links, true);
+					std::multimap<int, Link> allLinks;
+					driver->getAllLinks(allLinks, true, true);
 					std::multimap<int, Link> loopClosureLinks;
-					for(std::multimap<int, Link>::iterator jter=links.begin(); jter!=links.end(); ++jter)
+					for(std::multimap<int, Link>::iterator jter=allLinks.begin(); jter!=allLinks.end(); ++jter)
 					{
+						if(jter->second.from() == jter->second.to() || graph::findLink(links, jter->second.from(), jter->second.to(), true) == links.end())
+						{
+							links.insert(*jter);
+						}
 						if(jter->second.type() == Link::kGlobalClosure &&
 							graph::findLink(loopClosureLinks, jter->second.from(), jter->second.to()) == loopClosureLinks.end())
 						{
@@ -297,13 +309,24 @@ int main(int argc, char * argv[])
 					Transform bestGtToMap = Transform::getIdentity();
 					float kitti_t_err = 0.0f;
 					float kitti_r_err = 0.0f;
+					float relative_t_err = 0.0f;
+					float relative_r_err = 0.0f;
 					if(ids.size())
 					{
 						std::map<int, Transform> posesOut;
 						std::multimap<int, Link> linksOut;
 						int firstId = *ids.begin();
 						rtabmap::Optimizer * optimizer = rtabmap::Optimizer::create(params);
-						optimizer->getConnectedGraph(firstId, odomPoses, graph::filterDuplicateLinks(links), posesOut, linksOut);
+						bool useOdomGravity = Parameters::defaultMemUseOdomGravity();
+						Parameters::parse(params, Parameters::kMemUseOdomGravity(), useOdomGravity);
+						if(useOdomGravity)
+						{
+							for(std::map<int, Transform>::iterator iter=odomPoses.begin(); iter!=odomPoses.end(); ++iter)
+							{
+								links.insert(std::make_pair(iter->first, Link(iter->first, iter->first, Link::kGravity, iter->second)));
+							}
+						}
+						optimizer->getConnectedGraph(firstId, odomPoses, links, posesOut, linksOut);
 
 						std::map<int, Transform> poses = optimizer->optimize(firstId, posesOut, linksOut);
 						if(poses.empty())
@@ -425,6 +448,32 @@ int main(int argc, char * argv[])
 								iter->second = bestGtToMap * iter->second;
 							}
 
+							if(outputRelativeError)
+							{
+								if(groundTruth.size() == poses.size())
+								{
+									// compute Motion statistics
+									graph::calcRelativeErrors(uValues(groundTruth), uValues(poses), relative_t_err, relative_r_err);
+								}
+								else
+								{
+									std::vector<Transform> gtPoses;
+									std::vector<Transform> rPoses;
+									for(std::map<int, Transform>::iterator iter=poses.begin(); iter!=poses.end(); ++iter)
+									{
+										if(groundTruth.find(iter->first) != groundTruth.end())
+										{
+											gtPoses.push_back(groundTruth.at(iter->first));
+											rPoses.push_back(poses.at(iter->first));
+										}
+									}
+									if(!gtPoses.empty())
+									{
+										graph::calcRelativeErrors(gtPoses, rPoses, relative_t_err, relative_r_err);
+									}
+								}
+							}
+
 							if(outputKittiError)
 							{
 								if(groundTruth.size() == poses.size())
@@ -491,7 +540,7 @@ int main(int argc, char * argv[])
 							}
 						}
 					}
-					printf("   %s (%d, s=%.3f):\terror lin=%.3fm (max=%.3fm, odom=%.3fm) ang=%.1fdeg%s, slam: avg=%dms (max=%dms) loops=%d, odom: avg=%dms (max=%dms), camera: avg=%dms, %smap=%dMB\n",
+					printf("   %s (%d, s=%.3f):\terror lin=%.3fm (max=%.3fm, odom=%.3fm) ang=%.1fdeg%s%s, slam: avg=%dms (max=%dms) loops=%d, odom: avg=%dms (max=%dms), camera: avg=%dms, %smap=%dMB\n",
 							fileName.c_str(),
 							(int)ids.size(),
 							bestScale,
@@ -500,6 +549,7 @@ int main(int argc, char * argv[])
 							bestVoRMSE,
 							bestRMSEAng,
 							!outputKittiError?"":uFormat(", KITTI: t_err=%.2f%% r_err=%.2f deg/100m", kitti_t_err, kitti_r_err*100).c_str(),
+							!outputRelativeError?"":uFormat(", Relative: t_err=%.3fm r_err=%.2f deg", relative_t_err, relative_r_err).c_str(),
 							(int)uMean(slamTime), (int)uMax(slamTime),
 							(int)loopClosureLinks.size(),
 							(int)uMean(odomTime), (int)uMax(odomTime),

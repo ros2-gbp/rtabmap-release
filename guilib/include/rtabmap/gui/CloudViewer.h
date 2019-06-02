@@ -197,7 +197,7 @@ public:
 			const std::string & id,
 			const Transform & transform);
 	void removeCoordinate(const std::string & id);
-	void removeAllCoordinates();
+	void removeAllCoordinates(const std::string & prefix = "");
 	const std::set<std::string> & getAddedCoordinates() const {return _coordinates;}
 
 	void addOrUpdateLine(
@@ -319,6 +319,13 @@ public:
 	void setShading(bool on);
 	void setEdgeVisibility(bool visible);
 	void setInteractorLayer(int layer);
+
+	bool isBackfaceCulling() const;
+	bool isFrontfaceCulling() const;
+	bool isPolygonPicking() const;
+	bool isLightingOn() const;
+	bool isShadingOn() const;
+	bool isEdgeVisible() const;
 	double getRenderingRate() const;
 
 	void getCameraPosition(

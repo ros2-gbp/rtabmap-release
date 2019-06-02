@@ -45,6 +45,7 @@ class Camera;
 class CameraInfo;
 class SensorData;
 class StereoDense;
+class IMUFilter;
 
 /**
  * Class CameraThread
@@ -68,21 +69,27 @@ public:
 	void setDistortionModel(const std::string & path);
 	void enableBilateralFiltering(float sigmaS, float sigmaR);
 	void disableBilateralFiltering() {_bilateralFiltering = false;}
+	void enableIMUFiltering(int filteringStrategy=1, const ParametersMap & parameters = ParametersMap());
+	void disableIMUFiltering();
 
-	void setScanFromDepth(
-			bool enabled,
-			int decimation=4,
-			float maxDepth=4.0f,
+	void setScanParameters(
+			bool fromDepth,
+			int downsampleStep=1, // decimation of the depth image in case the scan is from depth image
+			float rangeMin=0.0f,
+			float rangeMax=0.0f,
 			float voxelSize = 0.0f,
 			int normalsK = 0,
-			int normalsRadius = 0.0f)
+			int normalsRadius = 0.0f,
+			bool forceGroundNormalsUp = false)
 	{
-		_scanFromDepth = enabled;
-		_scanDecimation=decimation;
-		_scanMaxDepth = maxDepth;
+		_scanFromDepth = fromDepth;
+		_scanDownsampleStep=downsampleStep;
+		_scanRangeMin = rangeMin;
+		_scanRangeMax = rangeMax;
 		_scanVoxelSize = voxelSize;
 		_scanNormalsK = normalsK;
 		_scanNormalsRadius = normalsRadius;
+		_scanForceGroundNormalsUp = forceGroundNormalsUp;
 	}
 
 	void postUpdate(SensorData * data, CameraInfo * info = 0) const;
@@ -106,17 +113,19 @@ private:
 	int _imageDecimation;
 	bool _stereoToDepth;
 	bool _scanFromDepth;
-	int _scanDecimation;
-	float _scanMaxDepth;
-	float _scanMinDepth;
+	int _scanDownsampleStep;
+	float _scanRangeMin;
+	float _scanRangeMax;
 	float _scanVoxelSize;
 	int _scanNormalsK;
 	float _scanNormalsRadius;
+	bool _scanForceGroundNormalsUp;
 	StereoDense * _stereoDense;
 	clams::DiscreteDepthDistortionModel * _distortionModel;
 	bool _bilateralFiltering;
 	float _bilateralSigmaS;
 	float _bilateralSigmaR;
+	IMUFilter * _imuFilter;
 };
 
 } // namespace rtabmap

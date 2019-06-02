@@ -25,7 +25,7 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#include <rtabmap/core/OdometryF2M.h>
+#include <rtabmap/core/Odometry.h>
 #include "rtabmap/core/Rtabmap.h"
 #include "rtabmap/core/CameraStereo.h"
 #include "rtabmap/core/CameraThread.h"
@@ -379,12 +379,15 @@ int main(int argc, char * argv[])
 		((CameraStereoImages*)cameraThread.camera())->setScanPath(
 						pathScan,
 						130000,
-						scanStep,
-						scanVoxel,
-						scanNormalK,
-						scanNormalRadius,
-						Transform(-0.27f, 0.0f, 0.08+(height?1.67f:0.0f), 0.0f, 0.0f, 0.0f),
-						true);
+						Transform(-0.27f, 0.0f, 0.08+(height?1.67f:0.0f), 0.0f, 0.0f, 0.0f));
+		cameraThread.setScanParameters(
+								false,
+								scanStep,
+								0,
+								scanVoxel,
+								scanNormalK,
+								scanNormalRadius,
+								true);
 	}
 
 	float detectionRate = Parameters::defaultRtabmapDetectionRate();
@@ -589,7 +592,8 @@ int main(int argc, char * argv[])
 				double s;
 				std::vector<float> v;
 				GPS gps;
-				rtabmap.getMemory()->getNodeInfo(iter->first, o, m, w, l, s, gtPose, v, gps, true);
+				EnvSensors sensors;
+				rtabmap.getMemory()->getNodeInfo(iter->first, o, m, w, l, s, gtPose, v, gps, sensors, true);
 				if(!gtPose.isNull())
 				{
 					groundTruth.insert(std::make_pair(iter->first, gtPose));
