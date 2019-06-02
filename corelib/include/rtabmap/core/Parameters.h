@@ -193,6 +193,7 @@ class RTABMAP_EXP Parameters
     // Hypotheses selection
     RTABMAP_PARAM(Rtabmap, LoopThr,           float, 0.11,      "Loop closing threshold.");
     RTABMAP_PARAM(Rtabmap, LoopRatio,         float, 0,         "The loop closure hypothesis must be over LoopRatio x lastHypothesisValue.");
+    RTABMAP_PARAM(Rtabmap, LoopGPS,           bool,  true,      uFormat("Use GPS to filter likelihood (if GPS is recorded). Only locations inside the local radius \"%s\" of the current GPS location are considered for loop closure detection.", kRGBDLocalRadius().c_str()));
 
     // Memory
     RTABMAP_PARAM(Mem, RehearsalSimilarity,         float, 0.6,     "Rehearsal similarity.");
@@ -203,6 +204,7 @@ class RTABMAP_EXP Parameters
     RTABMAP_PARAM(Mem, SaveDepth16Format,           bool, false,    "Save depth image into 16 bits format to reduce memory used. Warning: values over ~65 meters are ignored (maximum 65535 millimeters).");
     RTABMAP_PARAM(Mem, NotLinkedNodesKept,          bool, true,     "Keep not linked nodes in db (rehearsed nodes and deleted nodes).");
     RTABMAP_PARAM(Mem, IntermediateNodeDataKept,    bool, false,    "Keep intermediate node data in db.");
+    RTABMAP_PARAM_STR(Mem, ImageCompressionFormat,   ".jpg",        "RGB image compression format. It should be \".jpg\" or \".png\".");
     RTABMAP_PARAM(Mem, STMSize,                   unsigned int, 10, "Short-term memory size.");
     RTABMAP_PARAM(Mem, IncrementalMemory,           bool, true,     "SLAM mode, otherwise it is Localization mode.");
     RTABMAP_PARAM(Mem, ReduceGraph,                 bool, false,    "Reduce graph. Merge nodes when loop closures are added (ignoring those with user data set).");
@@ -218,10 +220,11 @@ class RTABMAP_EXP Parameters
     RTABMAP_PARAM(Mem, ImagePostDecimation,         int, 1,         "Image decimation (>=1) of saved data in created signatures (after features extraction). Decimation is done from the original image. Negative decimation is done from RGB size instead of depth size (if depth is smaller than RGB, it may be interpolated depending of the decimation value).");
     RTABMAP_PARAM(Mem, CompressionParallelized,     bool, true,     "Compression of sensor data is multi-threaded.");
     RTABMAP_PARAM(Mem, LaserScanDownsampleStepSize, int, 1,         "If > 1, downsample the laser scans when creating a signature.");
-    RTABMAP_PARAM(Mem, LaserScanVoxelSize,          float, 0.0,     uFormat("If > 0 m, voxel filtering is done on laser scans when creating a signature. If the laser scan had normals, they will be removed. To recompute the normals, make sure to use \"%s\" or \"%s\" parameters.", kMemLaserScanNormalK().c_str(), kMemLaserScanNormalRadius().c_str()).c_str());
+    RTABMAP_PARAM(Mem, LaserScanVoxelSize,          float, 0.0,     uFormat("If > 0 m, voxel filtering is done on laser scans when creating a signature. If the laser scan had normals, they will be removed. To recompute the normals, make sure to use \"%s\" or \"%s\" parameters.", kMemLaserScanNormalK().c_str(), kMemLaserScanNormalRadius().c_str()));
     RTABMAP_PARAM(Mem, LaserScanNormalK,            int, 0,         "If > 0 and laser scans don't have normals, normals will be computed with K search neighbors when creating a signature.");
     RTABMAP_PARAM(Mem, LaserScanNormalRadius,       float, 0.0,     "If > 0 m and laser scans don't have normals, normals will be computed with radius search neighbors when creating a signature.");
-    RTABMAP_PARAM(Mem, UseOdomFeatures,             bool, true,     "Use odometry features.");
+    RTABMAP_PARAM(Mem, UseOdomFeatures,             bool, true,     "Use odometry features instead of regenerating them.");
+    RTABMAP_PARAM(Mem, UseOdomGravity,              bool, false,    uFormat("Use odometry instead of IMU orientation to add gravity links to new nodes created. We assume that odometry is already aligned with gravity (e.g., we are using a VIO approach). Gravity constraints are used by graph optimization only if \"%s\" is not zero.", kOptimizerGravitySigma().c_str()));
     RTABMAP_PARAM(Mem, CovOffDiagIgnored,           bool, true,     "Ignore off diagonal values of the covariance matrix.");
 
     // KeypointMemory (Keypoint-based)
@@ -237,12 +240,12 @@ class RTABMAP_EXP Parameters
 #ifndef RTABMAP_NONFREE
 #ifdef RTABMAP_OPENCV3
     // OpenCV 3 without xFeatures2D module doesn't have BRIEF
-    RTABMAP_PARAM(Kp, DetectorStrategy,         int, 8,       "0=SURF 1=SIFT 2=ORB 3=FAST/FREAK 4=FAST/BRIEF 5=GFTT/FREAK 6=GFTT/BRIEF 7=BRISK 8=GFTT/ORB 9=KAZE.");
+    RTABMAP_PARAM(Kp, DetectorStrategy,         int, 8,       "0=SURF 1=SIFT 2=ORB 3=FAST/FREAK 4=FAST/BRIEF 5=GFTT/FREAK 6=GFTT/BRIEF 7=BRISK 8=GFTT/ORB 9=KAZE 10=ORB-OCTREE.");
 #else
-    RTABMAP_PARAM(Kp, DetectorStrategy,         int, 6,       "0=SURF 1=SIFT 2=ORB 3=FAST/FREAK 4=FAST/BRIEF 5=GFTT/FREAK 6=GFTT/BRIEF 7=BRISK 8=GFTT/ORB 9=KAZE.");
+    RTABMAP_PARAM(Kp, DetectorStrategy,         int, 6,       "0=SURF 1=SIFT 2=ORB 3=FAST/FREAK 4=FAST/BRIEF 5=GFTT/FREAK 6=GFTT/BRIEF 7=BRISK 8=GFTT/ORB 9=KAZE 10=ORB-OCTREE.");
 #endif
 #else
-    RTABMAP_PARAM(Kp, DetectorStrategy,         int, 6,       "0=SURF 1=SIFT 2=ORB 3=FAST/FREAK 4=FAST/BRIEF 5=GFTT/FREAK 6=GFTT/BRIEF 7=BRISK 8=GFTT/ORB 9=KAZE.");
+    RTABMAP_PARAM(Kp, DetectorStrategy,         int, 6,       "0=SURF 1=SIFT 2=ORB 3=FAST/FREAK 4=FAST/BRIEF 5=GFTT/FREAK 6=GFTT/BRIEF 7=BRISK 8=GFTT/ORB 9=KAZE 10=ORB-OCTREE.");
 #endif
     RTABMAP_PARAM(Kp, TfIdfLikelihoodUsed,      bool, true,   "Use of the td-idf strategy to compute the likelihood.");
     RTABMAP_PARAM(Kp, Parallelized,             bool, true,   "If the dictionary update and signature creation were parallelized.");
@@ -338,7 +341,7 @@ class RTABMAP_EXP Parameters
     RTABMAP_PARAM(RGBD, AngularSpeedUpdate,       float, 0.0,  "Maximum angular speed (rad/s) to update the map (0 means not limit).");
     RTABMAP_PARAM(RGBD, NewMapOdomChangeDistance, float, 0,    "A new map is created if a change of odometry translation greater than X m is detected (0 m = disabled).");
     RTABMAP_PARAM(RGBD, OptimizeFromGraphEnd,     bool, false, "Optimize graph from the newest node. If false, the graph is optimized from the oldest node of the current graph (this adds an overhead computation to detect to oldest node of the current graph, but it can be useful to preserve the map referential from the oldest node). Warning when set to false: when some nodes are transferred, the first referential of the local map may change, resulting in momentary changes in robot/map position (which are annoying in teleoperation).");
-    RTABMAP_PARAM(RGBD, OptimizeMaxError,         float, 1.0,   uFormat("Reject loop closures if optimization error ratio is greater than this value (0=disabled). Ratio is computed as absolute error over standard deviation of each link. This will help to detect when a wrong loop closure is added to the graph. Not compatible with \"%s\" if enabled.", kOptimizerRobust().c_str()));
+    RTABMAP_PARAM(RGBD, OptimizeMaxError,         float, 3.0,   uFormat("Reject loop closures if optimization error ratio is greater than this value (0=disabled). Ratio is computed as absolute error over standard deviation of each link. This will help to detect when a wrong loop closure is added to the graph. Not compatible with \"%s\" if enabled.", kOptimizerRobust().c_str()));
     RTABMAP_PARAM(RGBD, SavedLocalizationIgnored, bool, false, "Ignore last saved localization pose from previous session. If true, RTAB-Map won't assume it is restarting from the same place than where it shut down previously.");
     RTABMAP_PARAM(RGBD, GoalReachedRadius,        float, 0.5,  "Goal reached radius (m).");
     RTABMAP_PARAM(RGBD, PlanStuckIterations,      int, 0,      "Mark the current goal node on the path as unreachable if it is not updated after X iterations (0=disabled). If all upcoming nodes on the path are unreachabled, the plan fails.");
@@ -353,6 +356,9 @@ class RTABMAP_EXP Parameters
     RTABMAP_PARAM(RGBD, LoopClosureReextractFeatures, bool, false,  "Extract features even if there are some already in the nodes.");
     RTABMAP_PARAM(RGBD, LocalBundleOnLoopClosure,     bool, false,  "Do local bundle adjustment with neighborhood of the loop closure.");
     RTABMAP_PARAM(RGBD, CreateOccupancyGrid,          bool, false,  "Create local occupancy grid maps. See \"Grid\" group for parameters.");
+    RTABMAP_PARAM(RGBD, MarkerDetection,              bool, false,  "Detect static markers to be added as landmarks for graph optimization. If input data have already landmarks, this will be ignored. See \"Marker\" group for parameters.");
+    RTABMAP_PARAM(RGBD, LoopCovLimited,               bool, false,  "Limit covariance of non-neighbor links to minimum covariance of neighbor links. In other words, if covariance of a loop closure link is smaller than the minimum covariance of odometry links, its covariance is set to minimum covariance of odometry links.");
+    RTABMAP_PARAM(RGBD, MaxOdomCacheSize,             int,  0,      uFormat("Maximum odometry cache size. Used only in localization mode (when %s=false) and when %s!=0. This is used to verify localization transforms to make sure we don't teleport to a location very similar to one we previously localized on. When the cache is full, the whole cache is cleared and the next localization is automatically accepted without verification. Set 0 to disable caching.", kMemIncrementalMemory().c_str(), kRGBDOptimizeMaxError().c_str()));
 
     // Local/Proximity loop closure detection
     RTABMAP_PARAM(RGBD, ProximityByTime,              bool, false, "Detection over all locations in STM.");
@@ -383,6 +389,8 @@ class RTABMAP_EXP Parameters
     RTABMAP_PARAM(Optimizer, VarianceIgnored, bool, false,     "Ignore constraints' variance. If checked, identity information matrix is used for each constraint. Otherwise, an information matrix is generated from the variance saved in the links.");
     RTABMAP_PARAM(Optimizer, Robust,          bool, false,     uFormat("Robust graph optimization using Vertigo (only work for g2o and GTSAM optimization strategies). Not compatible with \"%s\" if enabled.", kRGBDOptimizeMaxError().c_str()));
     RTABMAP_PARAM(Optimizer, PriorsIgnored,   bool, true,      "Ignore prior constraints (global pose or GPS) while optimizing. Currently only g2o and gtsam optimization supports this.");
+    RTABMAP_PARAM(Optimizer, LandmarksIgnored,   bool, false,  "Ignore landmark constraints while optimizing. Currently only g2o and gtsam optimization supports this.");
+    RTABMAP_PARAM(Optimizer, GravitySigma,    float, 0.0,      uFormat("Gravity sigma value (>=0, typically between 0.1 and 0.3). Optimization is done while preserving gravity orientation of the poses. This should be used only with visual/lidar inertial odometry approaches, for which we assume that all odometry poses are aligned with gravity. Set to 0 to disable gravity constraints. Currently supported only with GTSAM optimization strategy (see %s).", kOptimizerStrategy().c_str()));
 
 #ifdef RTABMAP_ORB_SLAM2
     RTABMAP_PARAM(g2o, Solver,            int, 3,          "0=csparse 1=pcg 2=cholmod 3=Eigen");
@@ -402,7 +410,7 @@ class RTABMAP_EXP Parameters
     RTABMAP_PARAM(Odom, Holonomic,              bool, true,   "If the robot is holonomic (strafing commands can be issued). If not, y value will be estimated from x and yaw values (y=x*tan(yaw)).");
     RTABMAP_PARAM(Odom, FillInfoData,           bool, true,   "Fill info with data (inliers/outliers features).");
     RTABMAP_PARAM(Odom, ImageBufferSize,     unsigned int, 1, "Data buffer size (0 min inf).");
-    RTABMAP_PARAM(Odom, FilteringStrategy,      int, 0,       "0=No filtering 1=Kalman filtering 2=Particle filtering");
+    RTABMAP_PARAM(Odom, FilteringStrategy,      int, 0,       "0=No filtering 1=Kalman filtering 2=Particle filtering. This filter is used to smooth the odometry output.");
     RTABMAP_PARAM(Odom, ParticleSize,      unsigned int, 400, "Number of particles of the filter.");
     RTABMAP_PARAM(Odom, ParticleNoiseT,         float, 0.002, "Noise (m) of translation components (x,y,z).");
     RTABMAP_PARAM(Odom, ParticleLambdaT,        float, 100,   "Lambda of translation components (x,y,z).");
@@ -411,6 +419,7 @@ class RTABMAP_EXP Parameters
     RTABMAP_PARAM(Odom, KalmanProcessNoise,     float, 0.001, "Process noise covariance value.");
     RTABMAP_PARAM(Odom, KalmanMeasurementNoise, float, 0.01,  "Process measurement covariance value.");
     RTABMAP_PARAM(Odom, GuessMotion,            bool, true,   "Guess next transformation from the last motion computed.");
+    RTABMAP_PARAM(Odom, GuessSmoothingDelay,    float, 0,     uFormat("Guess smoothing delay (s). Estimated velocity is averaged based on last transforms up to this maximum delay. This can help to get smoother velocity prediction. Last velocity computed is used directly if \"%s\" is set or the delay is below the odometry rate.", kOdomFilteringStrategy().c_str()));
     RTABMAP_PARAM(Odom, KeyFrameThr,            float, 0.3,   "[Visual] Create a new keyframe when the number of inliers drops under this ratio of features in last frame. Setting the value to 0 means that a keyframe is created for each processed frame.");
     RTABMAP_PARAM(Odom, VisKeyFrameThr,         int, 150,     "[Visual] Create a new keyframe when the number of inliers drops under this threshold. Setting the value to 0 means that a keyframe is created for each processed frame.");
     RTABMAP_PARAM(Odom, ScanKeyFrameThr,        float, 0.9,   "[Geometry] Create a new keyframe when the number of ICP inliers drops under this ratio of points in last frame's scan. Setting the value to 0 means that a keyframe is created for each processed frame.");
@@ -423,6 +432,7 @@ class RTABMAP_EXP Parameters
     RTABMAP_PARAM(OdomF2M, ScanMaxSize,         int, 2000,    "[Geometry] Maximum local scan map size.");
     RTABMAP_PARAM(OdomF2M, ScanSubtractRadius,  float, 0.05,  "[Geometry] Radius used to filter points of a new added scan to local map. This could match the voxel size of the scans.");
     RTABMAP_PARAM(OdomF2M, ScanSubtractAngle,   float, 45,    uFormat("[Geometry] Max angle (degrees) used to filter points of a new added scan to local map (when \"%s\">0). 0 means any angle.", kOdomF2MScanSubtractRadius().c_str()).c_str());
+    RTABMAP_PARAM(OdomF2M, ValidDepthRatio,     float, 0.75,  "If a new frame has points without valid depth, they are added to local feature map only if points with valid depth on total points is over this ratio. Setting to 1 means no points without valid depth are added to local feature map.");
 #if defined(RTABMAP_G2O) || defined(RTABMAP_ORB_SLAM2)
     RTABMAP_PARAM(OdomF2M, BundleAdjustment,          int, 1, "Local bundle adjustment: 0=disabled, 1=g2o, 2=cvsba.");
 #else
@@ -530,6 +540,9 @@ class RTABMAP_EXP Parameters
     RTABMAP_PARAM(OdomMSCKF, InitCovExTrans,  double,  0.000025,  "");
     RTABMAP_PARAM(OdomMSCKF, MaxCamStateSize,  int,  20,  "");
 
+    // Odometry VINS
+    RTABMAP_PARAM_STR(OdomVINS, ConfigPath,     "",  "Path of VINS config file.");
+
     // Common registration parameters
     RTABMAP_PARAM(Reg, RepeatOnce,               bool, true,    "Do a second registration with the output of the first registration as guess. Only done if no guess was provided for the first registration (like on loop closure). It can be useful if the registration approach used can use a guess to get better matches.");
     RTABMAP_PARAM(Reg, Strategy,                 int, 0,        "0=Vis, 1=Icp, 2=VisIcp");
@@ -554,12 +567,12 @@ class RTABMAP_EXP Parameters
 #ifndef RTABMAP_NONFREE
 #ifdef RTABMAP_OPENCV3
     // OpenCV 3 without xFeatures2D module doesn't have BRIEF
-    RTABMAP_PARAM(Vis, FeatureType, int, 8, "0=SURF 1=SIFT 2=ORB 3=FAST/FREAK 4=FAST/BRIEF 5=GFTT/FREAK 6=GFTT/BRIEF 7=BRISK 8=GFTT/ORB 9=KAZE.");
+    RTABMAP_PARAM(Vis, FeatureType, int, 8, "0=SURF 1=SIFT 2=ORB 3=FAST/FREAK 4=FAST/BRIEF 5=GFTT/FREAK 6=GFTT/BRIEF 7=BRISK 8=GFTT/ORB 9=KAZE 10=ORB-OCTREE.");
 #else
-    RTABMAP_PARAM(Vis, FeatureType, int, 6, "0=SURF 1=SIFT 2=ORB 3=FAST/FREAK 4=FAST/BRIEF 5=GFTT/FREAK 6=GFTT/BRIEF 7=BRISK 8=GFTT/ORB 9=KAZE.");
+    RTABMAP_PARAM(Vis, FeatureType, int, 6, "0=SURF 1=SIFT 2=ORB 3=FAST/FREAK 4=FAST/BRIEF 5=GFTT/FREAK 6=GFTT/BRIEF 7=BRISK 8=GFTT/ORB 9=KAZE 10=ORB-OCTREE.");
 #endif
 #else
-    RTABMAP_PARAM(Vis, FeatureType, int, 6, "0=SURF 1=SIFT 2=ORB 3=FAST/FREAK 4=FAST/BRIEF 5=GFTT/FREAK 6=GFTT/BRIEF 7=BRISK 8=GFTT/ORB 9=KAZE.");
+    RTABMAP_PARAM(Vis, FeatureType, int, 6, "0=SURF 1=SIFT 2=ORB 3=FAST/FREAK 4=FAST/BRIEF 5=GFTT/FREAK 6=GFTT/BRIEF 7=BRISK 8=GFTT/ORB 9=KAZE 10=ORB-OCTREE.");
 #endif
     RTABMAP_PARAM(Vis, MaxFeatures,              int, 1000,   "0 no limits.");
     RTABMAP_PARAM(Vis, MaxDepth,                  float, 0,   "Max depth of the features (0 means no limit).");
@@ -630,6 +643,8 @@ class RTABMAP_EXP Parameters
     RTABMAP_PARAM(Stereo, SSD,                   bool, true,    uFormat("[%s=false] Use Sum of Squared Differences (SSD) window, otherwise Sum of Absolute Differences (SAD) window is used.", kStereoOpticalFlow().c_str()));
     RTABMAP_PARAM(Stereo, Eps,                   double, 0.01,  uFormat("[%s=true] Epsilon stop criterion.", kStereoOpticalFlow().c_str()));
 
+    RTABMAP_PARAM(Stereo, DenseStrategy,         int, 0,  "0=cv::StereoBM, 1=cv::StereoSGBM");
+
     RTABMAP_PARAM(StereoBM, BlockSize,           int, 15,       "See cv::StereoBM");
     RTABMAP_PARAM(StereoBM, MinDisparity,        int, 0,        "See cv::StereoBM");
     RTABMAP_PARAM(StereoBM, NumDisparities,      int, 128,      "See cv::StereoBM");
@@ -639,6 +654,23 @@ class RTABMAP_EXP Parameters
     RTABMAP_PARAM(StereoBM, TextureThreshold,    int, 10,       "See cv::StereoBM");
     RTABMAP_PARAM(StereoBM, SpeckleWindowSize,   int, 100,      "See cv::StereoBM");
     RTABMAP_PARAM(StereoBM, SpeckleRange,        int, 4,        "See cv::StereoBM");
+    RTABMAP_PARAM(StereoBM, Disp12MaxDiff,       int, -1,       "See cv::StereoBM");
+
+    RTABMAP_PARAM(StereoSGBM, BlockSize,         int, 15,       "See cv::StereoSGBM");
+	RTABMAP_PARAM(StereoSGBM, MinDisparity,      int, 0,        "See cv::StereoSGBM");
+	RTABMAP_PARAM(StereoSGBM, NumDisparities,    int, 128,      "See cv::StereoSGBM");
+	RTABMAP_PARAM(StereoSGBM, PreFilterCap,      int, 31,       "See cv::StereoSGBM");
+	RTABMAP_PARAM(StereoSGBM, UniquenessRatio,   int, 20,       "See cv::StereoSGBM");
+	RTABMAP_PARAM(StereoSGBM, SpeckleWindowSize, int, 100,      "See cv::StereoSGBM");
+	RTABMAP_PARAM(StereoSGBM, SpeckleRange,      int, 4,        "See cv::StereoSGBM");
+	RTABMAP_PARAM(StereoSGBM, Disp12MaxDiff,     int, 1,        "See cv::StereoSGBM");
+	RTABMAP_PARAM(StereoSGBM, P1,                int, 2,        "See cv::StereoSGBM");
+	RTABMAP_PARAM(StereoSGBM, P2,                int, 5,        "See cv::StereoSGBM");
+#if CV_MAJOR_VERSION < 3
+	RTABMAP_PARAM(StereoSGBM, Mode,              int, 0,        "See cv::StereoSGBM");
+#else
+	RTABMAP_PARAM(StereoSGBM, Mode,              int, 2,        "See cv::StereoSGBM");
+#endif
 
     // Occupancy Grid
     RTABMAP_PARAM(Grid, FromDepth,               bool,   true,    "Create occupancy grid from depth image(s), otherwise it is created from laser scan.");
@@ -684,6 +716,21 @@ class RTABMAP_EXP Parameters
     RTABMAP_PARAM(GridGlobal, ProbMiss,             float,  0.4,     "Probability of a miss (value between 0 and 0.5).");
     RTABMAP_PARAM(GridGlobal, ProbClampingMin,      float,  0.1192,  "Probability clamping minimum (value between 0 and 1).");
     RTABMAP_PARAM(GridGlobal, ProbClampingMax,      float,  0.971,   "Probability clamping maximum (value between 0 and 1).");
+
+    RTABMAP_PARAM(Marker, Dictionary,             int,   0,     "Dictionary to use: DICT_ARUCO_4X4_50=0, DICT_ARUCO_4X4_100=1, DICT_ARUCO_4X4_250=2, DICT_ARUCO_4X4_1000=3, DICT_ARUCO_5X5_50=4, DICT_ARUCO_5X5_100=5, DICT_ARUCO_5X5_250=6, DICT_ARUCO_5X5_1000=7, DICT_ARUCO_6X6_50=8, DICT_ARUCO_6X6_100=9, DICT_ARUCO_6X6_250=10, DICT_ARUCO_6X6_1000=11, DICT_ARUCO_7X7_50=12, DICT_ARUCO_7X7_100=13, DICT_ARUCO_7X7_250=14, DICT_ARUCO_7X7_1000=15, DICT_ARUCO_ORIGINAL = 16, DICT_APRILTAG_16h5=17, DICT_APRILTAG_25h9=18, DICT_APRILTAG_36h10=19, DICT_APRILTAG_36h11=20");
+    RTABMAP_PARAM(Marker, Length,                 float, 0,     "The length (m) of the markers' side. 0 means automatic marker length estimation using the depth image (the camera should look at the marker perpendicularly for initialization).");
+    RTABMAP_PARAM(Marker, MaxDepthError,          float, 0.01,  uFormat("Maximum depth error between all corners of a marker when estimating the marker length (when %s is 0). The smaller it is, the more perpendicular the camera should be toward the marker to initialize the length.", kMarkerLength().c_str()));
+    RTABMAP_PARAM(Marker, VarianceLinear,         float, 0.001, "Linear variance to set on marker detections.");
+    RTABMAP_PARAM(Marker, VarianceAngular,        float, 0.01,  "Angular variance to set on marker detections. Set to >=9999 to use only position (xyz) constraint in graph optimization.");
+    RTABMAP_PARAM(Marker, CornerRefinementMethod, int,   0,     "Corner refinement method (0: None, 1: Subpixel, 2:contour, 3: AprilTag2). For OpenCV <3.3.0, this is \"doCornerRefinement\" parameter: set 0 for false and 1 for true.");
+
+    RTABMAP_PARAM(ImuFilter, MadgwickGain,                  double, 0.1,  "Gain of the filter. Higher values lead to faster convergence but more noise. Lower values lead to slower convergence but smoother signal, belongs in [0, 1].");
+    RTABMAP_PARAM(ImuFilter, MadgwickZeta,                  double, 0.0,  "Gyro drift gain (approx. rad/s), belongs in [-1, 1].");
+
+    RTABMAP_PARAM(ImuFilter, ComplementaryGainAcc,          double, 0.01, "Gain parameter for the complementary filter, belongs in [0, 1].");
+    RTABMAP_PARAM(ImuFilter, ComplementaryBiasAlpha,        double, 0.01, "Bias estimation gain parameter, belongs in [0, 1].");
+    RTABMAP_PARAM(ImuFilter, ComplementaryDoBiasEstimation, bool,   true, "Parameter whether to do bias estimation or not.");
+    RTABMAP_PARAM(ImuFilter, ComplementaryDoAdpativeGain,   bool,   true, "Parameter whether to do adaptive gain or not.");
 
 public:
     virtual ~Parameters();

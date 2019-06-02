@@ -76,25 +76,30 @@ protected Q_SLOTS:
 		//============================
 		// Add WIFI symbols
 		//============================
-		std::map<double, int> nodeStamps; // <stamp, id>
+		// Sort stamps by stamps->id
+		nodeStamps_.insert(std::make_pair(stats.getLastSignatureData().getStamp(), stats.getLastSignatureData().id()));
 
-		for(std::map<int, Signature>::const_iterator iter=stats.getSignatures().begin();
-			iter!=stats.getSignatures().end();
-			++iter)
+		if(!stats.getLastSignatureData().sensorData().userDataRaw().empty())
 		{
-			// Sort stamps by stamps->id
-			nodeStamps.insert(std::make_pair(iter->second.getStamp(), iter->first));
+			UASSERT(stats.getLastSignatureData().sensorData().userDataRaw().type() == CV_64FC1 &&
+					stats.getLastSignatureData().sensorData().userDataRaw().cols == 2 &&
+					stats.getLastSignatureData().sensorData().userDataRaw().rows == 1);
 
-			if(!iter->second.sensorData().userDataRaw().empty())
+			// format [int level, double stamp]
+			int level = stats.getLastSignatureData().sensorData().userDataRaw().at<double>(0);
+			double stamp = stats.getLastSignatureData().sensorData().userDataRaw().at<double>(1);
+			wifiLevels_.insert(std::make_pair(stamp, level));
+		}
+
+		// for the logic below, we should keep only stamps for
+		// nodes still in the graph (in case nodes are ignored when not moving)
+		std::map<double, int> nodeStamps;
+		for(std::map<double, int>::iterator iter=nodeStamps_.begin(); iter!=nodeStamps_.end(); ++iter)
+		{
+			std::map<int, Transform>::const_iterator jter = poses.find(iter->second);
+			if(jter != poses.end())
 			{
-				UASSERT(iter->second.sensorData().userDataRaw().type() == CV_64FC1 &&
-						iter->second.sensorData().userDataRaw().cols == 2 &&
-						iter->second.sensorData().userDataRaw().rows == 1);
-
-				// format [int level, double stamp]
-				int level = iter->second.sensorData().userDataRaw().at<double>(0);
-				double stamp = iter->second.sensorData().userDataRaw().at<double>(1);
-				wifiLevels_.insert(std::make_pair(stamp, level));
+				nodeStamps.insert(*iter);
 			}
 		}
 
@@ -185,6 +190,7 @@ protected Q_SLOTS:
 
 private:
 	std::map<double, int> wifiLevels_;
+	std::map<double, int> nodeStamps_; // <stamp, id>
 };
 
 

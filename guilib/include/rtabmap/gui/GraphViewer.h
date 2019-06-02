@@ -34,7 +34,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <QtCore/QMap>
 #include <QtCore/QSettings>
 #include <rtabmap/core/Link.h>
-#include <rtabmap/core/GeodeticCoords.h>
+#include <rtabmap/core/GPS.h>
 #include <opencv2/opencv.hpp>
 #include <map>
 #include <vector>
@@ -56,16 +56,20 @@ public:
 	GraphViewer(QWidget * parent = 0);
 	virtual ~GraphViewer();
 
+	void setWorldMapRotation(const float & theta);
+	float getWorldMapRotation() const {return _worldMapRotation;}
+
 	void updateGraph(const std::map<int, Transform> & poses,
 					 const std::multimap<int, Link> & constraints,
-					 const std::map<int, int> & mapIds);
+					 const std::map<int, int> & mapIds,
+					 const std::map<int, int> & weights = std::map<int, int>());
 	void updateGTGraph(const std::map<int, Transform> & poses);
 	void updateGPSGraph(
 			const std::map<int, Transform> & gpsMapPoses,
 			const std::map<int, GPS> & gpsValues);
 	void updateReferentialPosition(const Transform & t);
 	void updateMap(const cv::Mat & map8U, float resolution, float xMin, float yMin);
-	void updatePosterior(const std::map<int, float> & posterior, float fixedMax = 0.0f);
+	void updatePosterior(const std::map<int, float> & posterior, float fixedMax = 0.0f, int zValueOffset = 0);
 	void updateLocalPath(const std::vector<int> & localPath);
 	void setGlobalPath(const std::vector<std::pair<int, Transform> > & globalPath);
 	void setCurrentGoalID(int id, const Transform & pose = Transform());
@@ -124,6 +128,7 @@ public:
 	void setUserLoopClosureColor(const QColor & color);
 	void setVirtualLoopClosureColor(const QColor & color);
 	void setNeighborMergedColor(const QColor & color);
+	void setLandmarkColor(const QColor & color);
 	void setRejectedLoopClosureColor(const QColor & color);
 	void setLocalPathColor(const QColor & color);
 	void setGlobalPathColor(const QColor & color);
@@ -166,6 +171,7 @@ private:
 	QColor _loopClosureUserColor;
 	QColor _loopClosureVirtualColor;
 	QColor _neighborMergedColor;
+	QColor _landmarkColor;
 	QColor _loopClosureRejectedColor;
 	QColor _localPathColor;
 	QColor _globalPathColor;
@@ -174,6 +180,8 @@ private:
 	QColor _loopIntraSessionColor;
 	QColor _loopInterSessionColor;
 	bool _intraInterSessionColors;
+	float _worldMapRotation;
+	QGraphicsItem * _world;
 	QGraphicsItem * _root;
 	QGraphicsItem * _graphRoot;
 	QGraphicsItem * _globalPathRoot;
