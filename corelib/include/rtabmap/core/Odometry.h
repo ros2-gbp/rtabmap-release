@@ -52,11 +52,12 @@ public:
 		kTypeORBSLAM2 = 5,
 		kTypeOkvis = 6,
 		kTypeLOAM = 7,
-		kTypeMSCKF = 8
+		kTypeMSCKF = 8,
+		kTypeVINS = 9
 	};
 
 public:
-	static Odometry * create(const ParametersMap & parameters);
+	static Odometry * create(const ParametersMap & parameters = ParametersMap());
 	static Odometry * create(Type & type, const ParametersMap & parameters = ParametersMap());
 
 public:
@@ -66,11 +67,13 @@ public:
 	virtual void reset(const Transform & initialPose = Transform::getIdentity());
 	virtual Odometry::Type getType() = 0;
 	virtual bool canProcessRawImages() const {return false;}
+	virtual bool canProcessIMU() const {return false;}
 
 	//getters
 	const Transform & getPose() const {return _pose;}
 	bool isInfoDataFilled() const {return _fillInfoData;}
-	const Transform & previousVelocityTransform() const {return previousVelocityTransform_;}
+	RTABMAP_DEPRECATED(const Transform & previousVelocityTransform() const, "Use getVelocityGuess() instead.");
+	const Transform & getVelocityGuess() const {return velocityGuess_;}
 	double previousStamp() const {return previousStamp_;}
 	unsigned int framesProcessed() const {return framesProcessed_;}
 	bool imagesAlreadyRectified() const {return _imagesAlreadyRectified;}
@@ -87,6 +90,7 @@ private:
 	bool _force3DoF;
 	bool _holonomic;
 	bool guessFromMotion_;
+	bool guessSmoothingDelay_;
 	int _filteringStrategy;
 	int _particleSize;
 	float _particleNoiseT;
@@ -103,7 +107,8 @@ private:
 	Transform _pose;
 	int _resetCurrentCount;
 	double previousStamp_;
-	Transform previousVelocityTransform_;
+	std::list<std::pair<std::vector<float>, double> > previousVelocities_;
+	Transform velocityGuess_;
 	Transform previousGroundTruthPose_;
 	float distanceTravelled_;
 	unsigned int framesProcessed_;

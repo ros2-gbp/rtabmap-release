@@ -32,8 +32,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <map>
 #include <list>
+#include <rtabmap/core/Parameters.h>
 #include <rtabmap/core/Link.h>
-#include <rtabmap/core/GeodeticCoords.h>
+#include <rtabmap/core/GPS.h>
 
 namespace rtabmap {
 class Memory;
@@ -44,17 +45,17 @@ namespace graph {
 // Graph utilities
 ////////////////////////////////////////////
 
-bool RTABMAP_EXP exportPoses(
+	bool RTABMAP_EXP exportPoses(
 		const std::string & filePath,
-		int format, // 0=Raw (*.txt), 1=RGBD-SLAM (*.txt), 2=KITTI (*.txt), 3=TORO (*.graph), 4=g2o (*.g2o)
+		int format, // 0=Raw (*.txt), 1=RGBD-SLAM motion capture (*.txt) (10=without change of coordinate frame), 2=KITTI (*.txt), 3=TORO (*.graph), 4=g2o (*.g2o)
 		const std::map<int, Transform> & poses,
 		const std::multimap<int, Link> & constraints = std::multimap<int, Link>(), // required for formats 3 and 4
 		const std::map<int, double> & stamps = std::map<int, double>(),  // required for format 1
-		bool g2oRobust = false); // optional for format 4
+		const ParametersMap & parameters = ParametersMap()); // optional for formats 3 and 4
 
 bool RTABMAP_EXP importPoses(
 		const std::string & filePath,
-		int format, // 0=Raw, 1=RGBD-SLAM, 2=KITTI, 3=TORO, 4=g2o, 5=NewCollege(t,x,y), 6=Malaga Urban GPS, 7=St Lucia INS, 8=Karlsruhe
+		int format, // 0=Raw, 1=RGBD-SLAM motion capture (10=without change of coordinate frame), 2=KITTI, 3=TORO, 4=g2o, 5=NewCollege(t,x,y), 6=Malaga Urban GPS, 7=St Lucia INS, 8=Karlsruhe
 		std::map<int, Transform> & poses,
 		std::multimap<int, Link> * constraints = 0, // optional for formats 3 and 4
 		std::map<int, double> * stamps = 0); // optional for format 1
@@ -73,6 +74,19 @@ bool RTABMAP_EXP exportGPS(
  * @param r_err, Output rotation error (deg/m)
  */
 void RTABMAP_EXP calcKittiSequenceErrors(
+		const std::vector<Transform> &poses_gt,
+		const std::vector<Transform> &poses_result,
+		float & t_err,
+		float & r_err);
+
+/**
+ * Compute average of translation and rotation errors between each poses.
+ * @param poses_gt, Ground Truth poses
+ * @param poses_result, Estimated poses
+ * @param t_err, Output translation error (m)
+ * @param r_err, Output rotation error (deg)
+ */
+void RTABMAP_EXP calcRelativeErrors (
 		const std::vector<Transform> &poses_gt,
 		const std::vector<Transform> &poses_result,
 		float & t_err,
@@ -102,6 +116,18 @@ Transform RTABMAP_EXP calcRMSE(
 		float & rotational_min,
 		float & rotational_max);
 
+void RTABMAP_EXP computeMaxGraphErrors(
+		const std::map<int, Transform> & poses,
+		const std::multimap<int, Link> & links,
+		float & maxLinearErrorRatio,
+		float & maxAngularErrorRatio,
+		float & maxLinearError,
+		float & maxAngularError,
+		const Link ** maxLinearErrorLink = 0,
+		const Link ** maxAngularErrorLink = 0);
+
+std::vector<double> RTABMAP_EXP getMaxOdomInf(const std::multimap<int, Link> & links);
+
 std::multimap<int, Link>::iterator RTABMAP_EXP findLink(
 		std::multimap<int, Link> & links,
 		int from,
@@ -116,12 +142,16 @@ std::multimap<int, Link>::const_iterator RTABMAP_EXP findLink(
 		const std::multimap<int, Link> & links,
 		int from,
 		int to,
-		bool checkBothWays = true);
+		bool checkBothWays = true,
+		Link::Type type = Link::kUndef);
 std::multimap<int, int>::const_iterator RTABMAP_EXP findLink(
 		const std::multimap<int, int> & links,
 		int from,
 		int to,
 		bool checkBothWays = true);
+std::list<Link> RTABMAP_EXP findLinks(
+		const std::multimap<int, Link> & links,
+		int from);
 
 std::multimap<int, Link> RTABMAP_EXP filterDuplicateLinks(
 		const std::multimap<int, Link> & links);

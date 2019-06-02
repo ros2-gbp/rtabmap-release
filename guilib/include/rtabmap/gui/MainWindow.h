@@ -154,6 +154,7 @@ protected Q_SLOTS:
 	void generateGraphDOT();
 	void exportPosesRaw();
 	void exportPosesRGBDSLAM();
+	void exportPosesRGBDSLAMMotionCapture();
 	void exportPosesKITTI();
 	void exportPosesTORO();
 	void exportPosesG2O();
@@ -173,9 +174,11 @@ protected Q_SLOTS:
 	void selectK4W2();
 	void selectRealSense();
 	void selectRealSense2();
+	void selectRealSense2Stereo();
 	void selectStereoDC1394();
 	void selectStereoFlyCapture2();
 	void selectStereoZed();
+	void selectStereoTara();
 	void selectStereoUsb();
 	void dumpTheMemory();
 	void dumpThePrediction();
@@ -259,6 +262,7 @@ private:
 	void createAndAddFeaturesToMap(int nodeId, const Transform & pose, int mapId);
 	Transform alignPosesToGroundTruth(const std::map<int, Transform> & poses, const std::map<int, Transform> & groundTruth);
 	void drawKeypoints(const std::multimap<int, cv::KeyPoint> & refWords, const std::multimap<int, cv::KeyPoint> & loopWords);
+	void drawLandmarks(cv::Mat & image, const Signature & signature);
 	void setupMainLayout(bool vertical);
 	void updateSelectSourceMenu();
 	void applyPrefSettings(const rtabmap::ParametersMap & parameters, bool postParamEvent);

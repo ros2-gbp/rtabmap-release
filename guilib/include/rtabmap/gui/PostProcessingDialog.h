@@ -57,35 +57,44 @@ public:
 	double clusterRadius() const;
 	double clusterAngle() const;
 	int iterations() const;
+	bool intraSession() const;
+	bool interSession() const;
 	bool isRefineNeighborLinks() const;
 	bool isRefineLoopClosureLinks() const;
 	bool isSBA() const;
 	int sbaIterations() const;
 	double sbaVariance() const;
 	Optimizer::Type sbaType() const;
+	bool sbaRematchFeatures() const;
 
 	//setters
 	void setDetectMoreLoopClosures(bool on);
 	void setClusterRadius(double radius);
 	void setClusterAngle(double angle);
 	void setIterations(int iterations);
+	void setIntraSession(bool enabled);
+	void setInterSession(bool enabled);
 	void setRefineNeighborLinks(bool on);
 	void setRefineLoopClosureLinks(bool on);
 	void setSBA(bool on);
 	void setSBAIterations(int iterations);
 	void setSBAVariance(double variance);
 	void setSBAType(Optimizer::Type type);
+	void setSBARematchFeatures(bool value);
 
 Q_SIGNALS:
 	void configChanged();
 
 public Q_SLOTS:
+	void closeDialog ( QAbstractButton * button );
 	void restoreDefaults();
 
 private Q_SLOTS:
 	void updateVisibility();
 	void updateButtonBox();
 
+private:
+	bool validateForm();
 
 private:
 	Ui_PostProcessingDialog * _ui;
