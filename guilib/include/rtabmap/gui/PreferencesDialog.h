@@ -101,6 +101,8 @@ public:
 		kSrcStereoVideo    = 103,
 		kSrcStereoZed      = 104,
 		kSrcStereoUsb      = 105,
+		kSrcStereoTara 	   = 106,
+		kSrcStereoRealSense2 = 107,
 
 		kSrcRGB            = 200,
 		kSrcUsbDevice      = 200,
@@ -162,6 +164,10 @@ public:
 
 	bool isGraphsShown() const;
 	bool isLabelsShown() const;
+	bool isLandmarksShown() const;
+	double landmarkVisSize() const;
+	bool isMarkerDetection() const;
+	double getMarkerLength() const;
 	double getVoxel() const;
 	double getNoiseRadius() const;
 	int getNoiseMinNeighbors() const;
@@ -237,6 +243,7 @@ public:
 
 	bool isSourceDatabaseStampsUsed() const;
 	bool isSourceRGBDColorOnly() const;
+	int getIMUFilteringStrategy() const;
 	bool isDepthFilteringAvailable() const;
 	QString getSourceDistortionModel() const;
 	bool isBilateralFiltering() const;
@@ -246,11 +253,13 @@ public:
 	bool isSourceStereoDepthGenerated() const;
 	bool isSourceStereoExposureCompensation() const;
 	bool isSourceScanFromDepth() const;
-	int getSourceScanFromDepthDecimation() const;
-	double getSourceScanFromDepthMaxDepth() const;
+	int getSourceScanDownsampleStep() const;
+	double getSourceScanRangeMin() const;
+	double getSourceScanRangeMax() const;
 	double getSourceScanVoxelSize() const;
 	int getSourceScanNormalsK() const;
 	double getSourceScanNormalsRadius() const;
+	bool isSourceScanForceGroundNormalsUp() const;
 	Transform getSourceLocalTransform() const;    //Openni group
 	Transform getLaserLocalTransform() const; // directory images
 	Transform getIMULocalTransform() const; // directory images
@@ -268,6 +277,7 @@ public:
 	bool isSLAMMode() const;
 	bool isRGBDMode() const;
 	int getKpMaxFeatures() const;
+	bool isPriorIgnored() const;
 
 	//specific
 	bool isStatisticsPublished() const;
@@ -318,6 +328,7 @@ private Q_SLOTS:
 	void changeDictionaryPath();
 	void changeOdometryORBSLAM2Vocabulary();
 	void changeOdometryOKVISConfigPath();
+	void changeOdometryVINSConfigPath();
 	void changeIcpPMConfigPath();
 	void readSettingsEnd();
 	void setupTreeView();

@@ -43,8 +43,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <queue>
 #include <fstream>
 
-#include <rtabmap/core/OptimizerTORO.h>
-#include <rtabmap/core/OptimizerG2O.h>
+#include <rtabmap/core/optimizer/OptimizerTORO.h>
+#include <rtabmap/core/optimizer/OptimizerG2O.h>
 
 namespace rtabmap {
 
@@ -52,11 +52,11 @@ namespace graph {
 
 bool exportPoses(
 		const std::string & filePath,
-		int format, // 0=Raw, 1=RGBD-SLAM, 2=KITTI, 3=TORO, 4=g2o
+		int format, // 0=Raw, 1=RGBD-SLAM motion capture (10=without change of coordinate frame), 2=KITTI, 3=TORO, 4=g2o
 		const std::map<int, Transform> & poses,
 		const std::multimap<int, Link> & constraints, // required for formats 3 and 4
 		const std::map<int, double> & stamps, // required for format 1
-		bool g2oRobust) // optional for format 4
+		const ParametersMap & parameters) // optional for formats 3 and 4
 {
 	UDEBUG("%s", filePath.c_str());
 	std::string tmpPath = filePath;
@@ -66,7 +66,8 @@ bool exportPoses(
 		{
 			tmpPath+=".graph";
 		}
-		return OptimizerTORO::saveGraph(tmpPath, poses, constraints);
+		OptimizerTORO toro(parameters);
+		return toro.saveGraph(tmpPath, poses, constraints);
 	}
 	else if(format == 4) // g2o
 	{
@@ -74,7 +75,8 @@ bool exportPoses(
 		{
 			tmpPath+=".g2o";
 		}
-		return OptimizerG2O::saveGraph(tmpPath, poses, constraints, g2oRobust);
+		OptimizerG2O g2o(parameters);
+		return g2o.saveGraph(tmpPath, poses, constraints);
 	}
 	else
 	{
@@ -102,17 +104,21 @@ bool exportPoses(
 		{
 			for(std::map<int, Transform>::const_iterator iter=poses.begin(); iter!=poses.end(); ++iter)
 			{
-				if(format == 1) // rgbd-slam format
+				if(format == 1 || format == 10) // rgbd-slam format
 				{
-					// put the pose in rgbd-slam world reference
-					Transform t( 0, 0, 1, 0,
-								 0, -1, 0, 0,
-								 1, 0, 0, 0);
-					Transform pose = t.inverse() * iter->second;
-					t = Transform( 0, 0, 1, 0,
-								  -1, 0, 0, 0,
-								   0,-1, 0, 0);
-					pose = t.inverse() * pose * t;
+					Transform pose = iter->second;
+					if(format == 1)
+					{
+						// put the pose in rgbd-slam world reference
+						Transform t( 0, 0, 1, 0,
+									 0, -1, 0, 0,
+									 1, 0, 0, 0);
+						pose = t.inverse() * pose;
+						t = Transform( 0, 0, 1, 0,
+									  -1, 0, 0, 0,
+									   0,-1, 0, 0);
+						pose = t.inverse() * pose * t;
+					}
 
 					// Format: stamp x y z qx qy qz qw
 					Eigen::Quaternionf q = pose.getQuaternionf();
@@ -161,7 +167,7 @@ bool exportPoses(
 
 bool importPoses(
 		const std::string & filePath,
-		int format, // 0=Raw, 1=RGBD-SLAM, 2=KITTI, 3=TORO, 4=g2o, 5=NewCollege(t,x,y), 6=Malaga Urban GPS, 7=St Lucia INS, 8=Karlsruhe, 9=EuRoC MAC
+		int format, // 0=Raw, 1=RGBD-SLAM motion capture (10=without change of coordinate frame), 2=KITTI, 3=TORO, 4=g2o, 5=NewCollege(t,x,y), 6=Malaga Urban GPS, 7=St Lucia INS, 8=Karlsruhe, 9=EuRoC MAC
 		std::map<int, Transform> & poses,
 		std::multimap<int, Link> * constraints, // optional for formats 3 and 4
 		std::map<int, double> * stamps) // optional for format 1 and 9
@@ -366,8 +372,8 @@ bool importPoses(
 				std::vector<std::string> strList = uListToVector(uSplit(str));
 				if(strList.size() ==  3)
 				{
-					if( uIsNumber(uReplaceChar(strList[0], ' ', "")) && 
-						uIsNumber(uReplaceChar(strList[1], ' ', "")) && 
+					if( uIsNumber(uReplaceChar(strList[0], ' ', "")) &&
+						uIsNumber(uReplaceChar(strList[1], ' ', "")) &&
 						uIsNumber(uReplaceChar(strList[2], ' ', "")) &&
 						(strList.size()==3 || uIsNumber(uReplaceChar(strList[3], ' ', ""))))
 					{
@@ -379,7 +385,7 @@ bool importPoses(
 						{
 							stamps->insert(std::make_pair(id, stamp));
 						}
-						float yaw = 0.0f; 
+						float yaw = 0.0f;
 						if(uContains(poses, id-1))
 						{
 							// set yaw depending on successive poses
@@ -405,7 +411,7 @@ bool importPoses(
 					UERROR("Error parsing \"%s\" with NewCollege format (should have 3 values: stamp x y, found %d)", str.c_str(), (int)strList.size());
 				}
 			}
-			else if(format == 1) // rgbd-slam format
+			else if(format == 1 || format==10) // rgbd-slam format
 			{
 				std::list<std::string> strList = uSplit(str);
 				if(strList.size() ==  8)
@@ -424,16 +430,19 @@ bool importPoses(
 						{
 							stamps->insert(std::make_pair(id, stamp));
 						}
-						// we need to remove optical rotation
-						// z pointing front, x left, y down
-						Transform t( 0, 0, 1, 0,
-									-1, 0, 0, 0,
-									 0,-1, 0, 0);
-						pose = t * pose * t.inverse();
-						t = Transform( 0, 0, 1, 0,
-									   0, -1, 0, 0,
-									   1, 0, 0, 0);
-						pose = t*pose;
+						if(format == 1)
+						{
+							// we need to remove optical rotation
+							// z pointing front, x left, y down
+							Transform t( 0, 0, 1, 0,
+										-1, 0, 0, 0,
+										 0,-1, 0, 0);
+							pose = t * pose * t.inverse();
+							t = Transform( 0, 0, 1, 0,
+										   0, -1, 0, 0,
+										   1, 0, 0, 0);
+							pose = t*pose;
+						}
 						poses.insert(std::make_pair(id, pose));
 					}
 				}
@@ -681,6 +690,48 @@ void calcKittiSequenceErrors (
 }
 // KITTI evaluation end
 
+void calcRelativeErrors (
+		const std::vector<Transform> &poses_gt,
+		const std::vector<Transform> &poses_result,
+		float & t_err,
+		float & r_err) {
+
+	UASSERT(poses_gt.size() == poses_result.size());
+
+	// error vector
+	std::vector<errors> err;
+
+	// for all start positions do
+	for (unsigned int i=0; i<poses_gt.size()-1; ++i)
+	{
+		// compute rotational and translational errors
+		Transform pose_delta_gt     = poses_gt[i].inverse()*poses_gt[i+1];
+		Transform pose_delta_result = poses_result[i].inverse()*poses_result[i+1];
+		Transform pose_error        = pose_delta_result.inverse()*pose_delta_gt;
+		float r_err = pose_error.getAngle();
+		float t_err = pose_error.getNorm();
+
+		// write to file
+		err.push_back(errors(i,r_err,t_err,0,0));
+	}
+
+	t_err = 0;
+	r_err = 0;
+
+	// for all errors do => compute sum of t_err, r_err
+	for (std::vector<errors>::iterator it=err.begin(); it!=err.end(); it++)
+	{
+		t_err += it->t_err;
+		r_err += it->r_err;
+	}
+
+	// save errors
+	float num = err.size();
+	t_err /= num;
+	r_err /= num;
+	r_err *= 180/CV_PI; // Rotation error (deg)
+}
+
 Transform calcRMSE (
 		const std::map<int, Transform> & groundTruth,
 		const std::map<int, Transform> & poses,
@@ -818,6 +869,97 @@ Transform calcRMSE (
 	return t;
 }
 
+void computeMaxGraphErrors(
+		const std::map<int, Transform> & poses,
+		const std::multimap<int, Link> & links,
+		float & maxLinearErrorRatio,
+		float & maxAngularErrorRatio,
+		float & maxLinearError,
+		float & maxAngularError,
+		const Link ** maxLinearErrorLink,
+		const Link ** maxAngularErrorLink)
+{
+	maxLinearErrorRatio = -1;
+	maxAngularErrorRatio = -1;
+	maxLinearError = -1;
+	maxAngularError = -1;
+
+	UDEBUG("poses=%d links=%d", (int)poses.size(), (int)links.size());
+	for(std::multimap<int, Link>::const_iterator iter=links.begin(); iter!=links.end(); ++iter)
+	{
+		// ignore links with high variance, priors and landmarks
+		if(iter->second.transVariance() <= 1.0 && iter->second.from() != iter->second.to() && iter->second.type() != Link::kLandmark)
+		{
+			Transform t1 = uValue(poses, iter->second.from(), Transform());
+			Transform t2 = uValue(poses, iter->second.to(), Transform());
+			Transform t = t1.inverse()*t2;
+
+			float linearError = uMax3(
+					fabs(iter->second.transform().x() - t.x()),
+					fabs(iter->second.transform().y() - t.y()),
+					fabs(iter->second.transform().z() - t.z()));
+			UASSERT(iter->second.transVariance()>0.0);
+			float stddevLinear = sqrt(iter->second.transVariance());
+			float linearErrorRatio = linearError/stddevLinear;
+			if(linearErrorRatio > maxLinearErrorRatio)
+			{
+				maxLinearError = linearError;
+				maxLinearErrorRatio = linearErrorRatio;
+				if(maxLinearErrorLink)
+				{
+					*maxLinearErrorLink = &iter->second;
+				}
+			}
+
+			float opt_roll,opt_pitch,opt_yaw;
+			float link_roll,link_pitch,link_yaw;
+			t.getEulerAngles(opt_roll, opt_pitch, opt_yaw);
+			iter->second.transform().getEulerAngles(link_roll, link_pitch, link_yaw);
+			float angularError = uMax3(
+					fabs(opt_roll - link_roll),
+					fabs(opt_pitch - link_pitch),
+					fabs(opt_yaw - link_yaw));
+			angularError = angularError>M_PI?2*M_PI-angularError:angularError;
+			UASSERT(iter->second.rotVariance()>0.0);
+			float stddevAngular = sqrt(iter->second.rotVariance());
+			float angularErrorRatio = angularError/stddevAngular;
+			if(angularErrorRatio > maxAngularErrorRatio)
+			{
+				maxAngularError = angularError;
+				maxAngularErrorRatio = angularErrorRatio;
+				if(maxAngularErrorLink)
+				{
+					*maxAngularErrorLink = &iter->second;
+				}
+			}
+		}
+	}
+}
+
+std::vector<double> getMaxOdomInf(const std::multimap<int, Link> & links)
+{
+	std::vector<double> maxOdomInf(6,0.0);
+	maxOdomInf.resize(6,0.0);
+	for(std::multimap<int, Link>::const_iterator iter=links.begin(); iter!=links.end(); ++iter)
+	{
+		if(iter->second.type() == Link::kNeighbor || iter->second.type() == Link::kNeighborMerged)
+		{
+			for(int i=0; i<6; ++i)
+			{
+				const double & v = iter->second.infMatrix().at<double>(i,i);
+				if(maxOdomInf[i] < v)
+				{
+					maxOdomInf[i] = v;
+				}
+			}
+		}
+	}
+	if(maxOdomInf[0] == 0.0)
+	{
+		maxOdomInf.clear();
+	}
+	return maxOdomInf;
+}
 
 ////////////////////////////////////////////
 // Graph utilities
@@ -889,12 +1031,13 @@ std::multimap<int, Link>::const_iterator findLink(
 		const std::multimap<int, Link> & links,
 		int from,
 		int to,
-		bool checkBothWays)
+		bool checkBothWays,
+		Link::Type type)
 {
 	std::multimap<int, Link>::const_iterator iter = links.find(from);
 	while(iter != links.end() && iter->first == from)
 	{
-		if(iter->second.to() == to)
+		if(iter->second.to() == to && (type==Link::kUndef || type == iter->second.type()))
 		{
 			return iter;
 		}
@@ -907,7 +1050,7 @@ std::multimap<int, Link>::const_iterator findLink(
 		iter = links.find(to);
 		while(iter != links.end() && iter->first == to)
 		{
-			if(iter->second.to() == from)
+			if(iter->second.to() == from && (type==Link::kUndef || type == iter->second.type()))
 			{
 				return iter;
 			}
@@ -949,13 +1092,32 @@ std::multimap<int, int>::const_iterator findLink(
 	return links.end();
 }
 
+std::list<Link> findLinks(
+		const std::multimap<int, Link> & links,
+		int from)
+{
+	std::list<Link> output;
+	for(std::multimap<int, Link>::const_iterator iter=links.begin(); iter != links.end(); ++iter)
+	{
+		if(iter->second.from() == from)
+		{
+			output.push_back(iter->second);
+		}
+		else if(iter->second.to() == from)
+		{
+			output.push_back(iter->second.inverse());
+		}
+	}
+	return output;
+}
+
 std::multimap<int, Link> filterDuplicateLinks(
 		const std::multimap<int, Link> & links)
 {
 	std::multimap<int, Link> output;
 	for(std::multimap<int, Link>::const_iterator iter=links.begin(); iter!=links.end(); ++iter)
 	{
-		if(graph::findLink(output, iter->second.from(), iter->second.to(), true) == output.end())
+		if(graph::findLink(output, iter->second.from(), iter->second.to(), true, iter->second.type()) == output.end())
 		{
 			output.insert(*iter);
 		}
@@ -970,7 +1132,14 @@ std::multimap<int, Link> filterLinks(
 	std::multimap<int, Link> output;
 	for(std::multimap<int, Link>::const_iterator iter=links.begin(); iter!=links.end(); ++iter)
 	{
-		if(iter->second.type() != filteredType)
+		if(filteredType == Link::kSelfRefLink)
+		{
+			if(iter->second.from() != iter->second.to())
+			{
+				output.insert(*iter);
+			}
+		}
+		else if(iter->second.type() != filteredType)
 		{
 			output.insert(*iter);
 		}
@@ -985,7 +1154,14 @@ std::map<int, Link> filterLinks(
 	std::map<int, Link> output;
 	for(std::map<int, Link>::const_iterator iter=links.begin(); iter!=links.end(); ++iter)
 	{
-		if(iter->second.type() != filteredType)
+		if(filteredType == Link::kSelfRefLink)
+		{
+			if(iter->second.from() != iter->second.to())
+			{
+				output.insert(*iter);
+			}
+		}
+		else if(iter->second.type() != filteredType)
 		{
 			output.insert(*iter);
 		}
@@ -1666,7 +1842,7 @@ std::list<std::pair<int, Transform> > computePath(
 {
 	UASSERT(memory!=0);
 	UASSERT(fromId>=0);
-	UASSERT(toId>=0);
+	UASSERT(toId!=0);
 	std::list<std::pair<int, Transform> > path;
 	UDEBUG("fromId=%d, toId=%d, lookInDatabase=%d, updateNewCosts=%d, linearVelocity=%f, angularVelocity=%f",
 			fromId,
@@ -1681,7 +1857,14 @@ std::list<std::pair<int, Transform> > computePath(
 	{
 		// Faster to load all links in one query
 		UTimer t;
-		allLinks = memory->getAllLinks(lookInDatabase);
+		allLinks = memory->getAllLinks(lookInDatabase, true, true);
+		for(std::multimap<int, Link>::iterator iter=allLinks.begin(); iter!=allLinks.end(); ++iter)
+		{
+			if(iter->second.to() < 0)
+			{
+				allLinks.insert(std::make_pair(iter->second.to(), iter->second.inverse()));
+			}
+		}
 		UINFO("getting all %d links time = %f s", (int)allLinks.size(), t.ticks());
 	}
 
@@ -1729,10 +1912,10 @@ std::list<std::pair<int, Transform> > computePath(
 		}
 
 		// lookup neighbors
-		std::map<int, Link> links;
+		std::multimap<int, Link> links;
 		if(allLinks.size() == 0)
 		{
-			links = memory->getLinks(currentNode->id(), lookInDatabase);
+			links = memory->getLinks(currentNode->id(), lookInDatabase, true);
 		}
 		else
 		{
@@ -1743,7 +1926,7 @@ std::list<std::pair<int, Transform> > computePath(
 				links.insert(std::make_pair(iter->second.to(), iter->second));
 			}
 		}
-		for(std::map<int, Link>::const_iterator iter = links.begin(); iter!=links.end(); ++iter)
+		for(std::multimap<int, Link>::const_iterator iter = links.begin(); iter!=links.end(); ++iter)
 		{
 			if(iter->second.from() != iter->second.to())
 			{
@@ -1814,7 +1997,7 @@ std::list<std::pair<int, Transform> > computePath(
 	if(ULogger::level() == ULogger::kDebug)
 	{
 		std::stringstream stream;
-		std::vector<int> linkTypes(Link::kUndef, 0);
+		std::vector<int> linkTypes(Link::kEnd, 0);
 		std::list<std::pair<int, Transform> >::const_iterator previousIter = path.end();
 		float length = 0.0f;
 		for(std::list<std::pair<int, Transform> >::const_iterator iter=path.begin(); iter!=path.end();++iter)
@@ -1839,7 +2022,7 @@ std::list<std::pair<int, Transform> > computePath(
 						//float cost = angle ;
 						//UDEBUG("v1=%f,%f,%f v2=%f,%f,%f a=%f", v1[0], v1[1], v1[2], v2[0], v2[1], v2[2], cost);
 
-						UASSERT(jter->second.type() >= Link::kNeighbor && jter->second.type()<Link::kUndef);
+						UASSERT(jter->second.type() >= Link::kNeighbor && jter->second.type()<Link::kEnd);
 						++linkTypes[jter->second.type()];
 						stream << "[" << jter->second.type() << "]";
 						length += jter->second.transform().getNorm();

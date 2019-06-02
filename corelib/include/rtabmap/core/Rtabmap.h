@@ -166,8 +166,15 @@ public:
 			bool optimized,
 			bool global,
 			std::map<int, Signature> * signatures = 0);
-	int detectMoreLoopClosures(float clusterRadius = 0.5f, float clusterAngle = M_PI/6.0f, int iterations = 1, const ProgressState * state = 0);
+	int detectMoreLoopClosures(
+			float clusterRadius = 0.5f,
+			float clusterAngle = M_PI/6.0f,
+			int iterations = 1,
+			bool intraSession = true,
+			bool interSession = true,
+			const ProgressState * state = 0);
 	int refineLinks();
+	cv::Mat getInformation(const cv::Mat & covariance) const;
 
 	int getPathStatus() const {return _pathStatus;} // -1=failed 0=idle/executing 1=success
 	void clearPath(int status); // -1=failed 0=idle/executing 1=success
@@ -182,7 +189,7 @@ public:
 	const Transform & getPathTransformToGoal() const {return _pathTransformToGoal;}
 
 	std::map<int, Transform> getForwardWMPoses(int fromId, int maxNearestNeighbors, float radius, int maxDiffID) const;
-	std::map<int, std::map<int, Transform> > getPaths(std::map<int, Transform> poses, const Transform & target, int maxGraphDepth = 0) const;
+	std::map<int, std::map<int, Transform> > getPaths(const std::map<int, Transform> & poses, const Transform & target, int maxGraphDepth = 0) const;
 	void adjustLikelihood(std::map<int, float> & likelihood) const;
 	std::pair<int, float> selectHypothesis(const std::map<int, float> & posterior,
 											const std::map<int, float> & likelihood) const;
@@ -259,6 +266,9 @@ private:
 	float _pathLinearVelocity;
 	float _pathAngularVelocity;
 	bool _savedLocalizationIgnored;
+	bool _loopCovLimited;
+	bool _loopGPS;
+	int _maxOdomCacheSize;
 
 	std::pair<int, float> _loopClosureHypothesis;
 	std::pair<int, float> _highestHypothesis;
@@ -290,6 +300,10 @@ private:
 	Transform _mapCorrectionBackup; // used in localization mode when odom is lost
 	Transform _lastLocalizationPose; // Corrected odometry pose. In mapping mode, this corresponds to last pose return by getLocalOptimizedPoses().
 	int _lastLocalizationNodeId; // for localization mode
+	std::map<int, std::pair<cv::Point3d, Transform> > _gpsGeocentricCache;
+	bool _currentSessionHasGPS;
+	std::map<int, Transform> _odomCachePoses;       // used in localization mode to reject loop closures
+	std::multimap<int, Link> _odomCacheConstraints; // used in localization mode to reject loop closures
 
 	// Planning stuff
 	int _pathStatus;

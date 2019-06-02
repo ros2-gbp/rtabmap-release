@@ -31,6 +31,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap/core/RtabmapExp.h>
 #include <vector>
 #include <string>
+#include <map>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <opencv2/core/core.hpp>
@@ -149,11 +150,31 @@ public:
 	static Transform fromString(const std::string & string);
 	static bool canParseString(const std::string & string);
 
+	static Transform getClosestTransform(
+				const std::map<double, Transform> & tfBuffer,
+				const double & stamp,
+				double * stampDiff = 0);
+
 private:
 	cv::Mat data_;
 };
 
 RTABMAP_EXP std::ostream& operator<<(std::ostream& os, const Transform& s);
+
+class TransformStamped
+{
+public:
+	TransformStamped(const Transform & transform, const double & stamp) :
+		transform_(transform),
+		stamp_(stamp)
+	{}
+	const Transform & transform() const {return transform_;}
+	const double & stamp() const {return stamp_;}
+
+private:
+	Transform transform_;
+	double stamp_;
+};
 
 }
 
