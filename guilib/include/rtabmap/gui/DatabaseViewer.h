@@ -60,6 +60,7 @@ class CloudViewer;
 class OctoMap;
 class ExportCloudsDialog;
 class EditDepthArea;
+class EditMapArea;
 
 class RTABMAPGUI_EXP DatabaseViewer : public QMainWindow
 {
@@ -87,20 +88,24 @@ private Q_SLOTS:
 	void openDatabase();
 	bool closeDatabase();
 	void recoverDatabase();
+	void updateInfo();
 	void updateStatistics();
 	void selectObstacleColor();
 	void selectGroundColor();
 	void selectEmptyColor();
 	void editDepthImage();
 	void generateGraph();
+	void editSaved2DMap();
 	void exportSaved2DMap();
 	void import2DMap();
+	void regenerateSavedMap();
 	void viewOptimizedMesh();
 	void exportOptimizedMesh();
 	void updateOptimizedMesh();
 	void exportDatabase();
 	void extractImages();
 	void exportPosesRaw();
+	void exportPosesRGBDSLAMMotionCapture();
 	void exportPosesRGBDSLAM();
 	void exportPosesKITTI();
 	void exportPosesTORO();
@@ -114,6 +119,8 @@ private Q_SLOTS:
 	void view3DMap();
 	void generate3DMap();
 	void detectMoreLoopClosures();
+	void updateAllNeighborCovariances();
+	void updateAllLoopClosureCovariances();
 	void refineAllNeighborLinks();
 	void refineAllLoopClosureLinks();
 	void resetAllChanges();
@@ -155,8 +162,10 @@ private:
 				QLabel * labelMapId,
 				QLabel * labelPose,
 				QLabel * labelVelocity,
-				QLabel * labeCalib,
+				QLabel * labelCalib,
+				QLabel * labelScan,
 				QLabel * labelGps,
+				QLabel * labelSensors,
 				bool updateConstraintView);
 	void updateStereo(const SensorData * data);
 	void updateWordsMatching();
@@ -174,6 +183,8 @@ private:
 	std::multimap<int, rtabmap::Link> updateLinksWithModifications(
 			const std::multimap<int, rtabmap::Link> & edgeConstraints);
 	void updateLoopClosuresSlider(int from = 0, int to = 0);
+	void updateAllCovariances(const QList<Link> & links);
+	void refineAllLinks(const QList<Link> & links);
 	void refineConstraint(int from, int to,  bool silent);
 	bool addConstraint(int from, int to, bool silent);
 	void exportPoses(int format);
@@ -186,18 +197,21 @@ private:
 	CloudViewer * stereoViewer_;
 	CloudViewer * occupancyGridViewer_;
 	QList<int> ids_;
+	std::set<int> lastWmIds_;
 	std::map<int, int> mapIds_;
 	std::map<int, int> weights_;
 	std::map<int, std::vector<int> > wmStates_;
 	QMap<int, int> idToIndex_;
 	QList<rtabmap::Link> neighborLinks_;
 	QList<rtabmap::Link> loopLinks_;
+	int lastSliderIndexBrowsed_;
 	rtabmap::DBDriver * dbDriver_;
 	QString pathDatabase_;
 	std::string databaseFileName_;
 	std::list<std::map<int, rtabmap::Transform> > graphes_;
 	std::multimap<int, rtabmap::Link> graphLinks_;
 	std::map<int, rtabmap::Transform> odomPoses_;
+	std::map<int, rtabmap::Transform> dbOptimizedPoses_;
 	std::map<int, rtabmap::Transform> groundTruthPoses_;
 	std::map<int, rtabmap::Transform> gpsPoses_;
 	std::map<int, GPS> gpsValues_;
@@ -210,14 +224,22 @@ private:
 	std::map<int, std::pair<std::pair<cv::Mat, cv::Mat>, cv::Mat> > generatedLocalMaps_; // < <ground, obstacles>, empty>
 	std::map<int, std::pair<float, cv::Point3f> > generatedLocalMapsInfo_; // <cell size, viewpoint>
 	std::map<int, cv::Mat> modifiedDepthImages_;
+	std::vector<double> odomMaxInf_;
 	OctoMap * octomap_;
 	ExportCloudsDialog * exportDialog_;
 	QDialog * editDepthDialog_;
 	EditDepthArea * editDepthArea_;
+	QDialog * editMapDialog_;
+	EditMapArea * editMapArea_;
 
 	bool savedMaximized_;
 	bool firstCall_;
 	QString iniFilePath_;
+
+	bool infoReducedGraph_;
+	double infoTotalOdom_;
+	double infoTotalTime_;
+	int infoSessions_;
 
 	bool useLastOptimizedGraphAsGuess_;
 	std::map<int, Transform> lastOptimizedGraph_;

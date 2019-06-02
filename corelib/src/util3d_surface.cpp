@@ -2148,7 +2148,7 @@ LaserScan computeNormals(
 		{
 			UASSERT(!laserScan.is2d());
 			pcl::PointCloud<pcl::Normal>::Ptr normals = util3d::computeNormals(cloud, searchK, searchRadius);
-			return LaserScan(laserScanFromPointCloud(*cloud, *normals), laserScan.maxPoints(), laserScan.maxRange(), LaserScan::kXYZRGBNormal, laserScan.localTransform());
+			return LaserScan(laserScanFromPointCloud(*cloud, *normals), laserScan.maxPoints(), laserScan.rangeMax(), LaserScan::kXYZRGBNormal, laserScan.localTransform());
 		}
 	}
 	else if(laserScan.hasIntensity())
@@ -2159,12 +2159,20 @@ LaserScan computeNormals(
 			if(laserScan.is2d())
 			{
 				pcl::PointCloud<pcl::Normal>::Ptr normals = util3d::computeNormals2D(cloud, searchK, searchRadius);
-				return LaserScan(laserScan2dFromPointCloud(*cloud, *normals), laserScan.maxPoints(), laserScan.maxRange(), LaserScan::kXYZRGBNormal, laserScan.localTransform());
+				if(laserScan.angleIncrement() > 0.0f)
+				{
+					return LaserScan(laserScan2dFromPointCloud(*cloud, *normals), LaserScan::kXYINormal, laserScan.rangeMin(), laserScan.rangeMax(), laserScan.angleMin(), laserScan.angleMax(), laserScan.angleIncrement(), laserScan.localTransform());
+				}
+				else
+				{
+					return LaserScan(laserScan2dFromPointCloud(*cloud, *normals), laserScan.maxPoints(), laserScan.rangeMax(), LaserScan::kXYINormal, laserScan.localTransform());
+				}
+
 			}
 			else
 			{
 				pcl::PointCloud<pcl::Normal>::Ptr normals = util3d::computeNormals(cloud, searchK, searchRadius);
-				return LaserScan(laserScanFromPointCloud(*cloud, *normals), laserScan.maxPoints(), laserScan.maxRange(), LaserScan::kXYZRGBNormal, laserScan.localTransform());
+				return LaserScan(laserScanFromPointCloud(*cloud, *normals), laserScan.maxPoints(), laserScan.rangeMax(), LaserScan::kXYZINormal, laserScan.localTransform());
 			}
 		}
 	}
@@ -2176,12 +2184,19 @@ LaserScan computeNormals(
 			if(laserScan.is2d())
 			{
 				pcl::PointCloud<pcl::Normal>::Ptr normals = util3d::computeNormals2D(cloud, searchK, searchRadius);
-				return LaserScan(laserScan2dFromPointCloud(*cloud, *normals), laserScan.maxPoints(), laserScan.maxRange(), LaserScan::kXYZRGBNormal, laserScan.localTransform());
+				if(laserScan.angleIncrement() > 0.0f)
+				{
+					return LaserScan(laserScan2dFromPointCloud(*cloud, *normals), LaserScan::kXYNormal, laserScan.rangeMin(), laserScan.rangeMax(), laserScan.angleMin(), laserScan.angleMax(), laserScan.angleIncrement(), laserScan.localTransform());
+				}
+				else
+				{
+					return LaserScan(laserScan2dFromPointCloud(*cloud, *normals), laserScan.maxPoints(), laserScan.rangeMax(), LaserScan::kXYNormal, laserScan.localTransform());
+				}
 			}
 			else
 			{
 				pcl::PointCloud<pcl::Normal>::Ptr normals = util3d::computeNormals(cloud, searchK, searchRadius);
-				return LaserScan(laserScanFromPointCloud(*cloud, *normals), laserScan.maxPoints(), laserScan.maxRange(), LaserScan::kXYZRGBNormal, laserScan.localTransform());
+				return LaserScan(laserScanFromPointCloud(*cloud, *normals), laserScan.maxPoints(), laserScan.rangeMax(), LaserScan::kXYZNormal, laserScan.localTransform());
 			}
 		}
 	}
@@ -2545,36 +2560,28 @@ float computeNormalsComplexity(
 		bool is2d = scan.is2d();
 		cv::Mat data_normals = cv::Mat::zeros(sz, is2d?2:3, CV_32FC1);
 		int oi = 0;
-		int nOffset = 0;
-		if(!scan.is2d())
-		{
-			nOffset+=1;
-		}
-		if(scan.hasIntensity() || scan.hasRGB())
-		{
-			nOffset+=1;
-		}
+		int nOffset = scan.getNormalsOffset();
 		for (int i = 0; i < scan.size(); ++i)
 		{
 			const float * ptrScan = scan.data().ptr<float>(0, i);
 
 			if(is2d)
 			{
-				if(uIsFinite(ptrScan[nOffset+2]) && uIsFinite(ptrScan[nOffset+3]))
+				if(uIsFinite(ptrScan[nOffset]) && uIsFinite(ptrScan[nOffset+1]))
 				{
 					float * ptr = data_normals.ptr<float>(oi++, 0);
-					ptr[0] = ptrScan[2];
-					ptr[1] = ptrScan[3];
+					ptr[0] = ptrScan[nOffset];
+					ptr[1] = ptrScan[nOffset+1];
 				}
 			}
 			else
 			{
-				if(uIsFinite(ptrScan[nOffset+2]) && uIsFinite(ptrScan[nOffset+3]) && uIsFinite(ptrScan[nOffset+4]))
+				if(uIsFinite(ptrScan[nOffset]) && uIsFinite(ptrScan[nOffset+1]) && uIsFinite(ptrScan[nOffset+2]))
 				{
 					float * ptr = data_normals.ptr<float>(oi++, 0);
-					ptr[0] = ptrScan[3];
-					ptr[1] = ptrScan[4];
-					ptr[2] = ptrScan[5];
+					ptr[0] = ptrScan[nOffset];
+					ptr[1] = ptrScan[nOffset+1];
+					ptr[2] = ptrScan[nOffset+2];
 				}
 			}
 		}
@@ -2854,7 +2861,14 @@ LaserScan adjustNormalsToViewPoint(
 				}
 			}
 		}
-		return LaserScan(output, scan.maxPoints(), scan.maxRange(), scan.format(), scan.localTransform());
+		if(scan.angleIncrement() > 0.0f)
+		{
+			return LaserScan(output, scan.format(), scan.rangeMin(), scan.rangeMax(), scan.angleMin(), scan.angleMax(), scan.angleIncrement(), scan.localTransform());
+		}
+		else
+		{
+			return LaserScan(output, scan.maxPoints(), scan.rangeMax(), scan.format(), scan.localTransform());
+		}
 	}
 	return scan;
 }

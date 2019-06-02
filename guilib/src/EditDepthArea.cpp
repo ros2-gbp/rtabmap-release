@@ -34,7 +34,6 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "rtabmap/gui/EditDepthArea.h"
 #include <rtabmap/utilite/ULogger.h>
-#include <rtabmap/utilite/UCv2Qt.h>
 
 namespace rtabmap {
 
@@ -45,13 +44,33 @@ EditDepthArea::EditDepthArea(QWidget *parent)
     modified_ = false;
     scribbling_ = false;
     myPenWidth_ = 10;
+    clusterError_ = 0.02;
 
     menu_ = new QMenu(tr(""), this);
     showRGB_ = menu_->addAction(tr("Show RGB Image"));
     showRGB_->setCheckable(true);
     showRGB_->setChecked(true);
     removeCluster_ = menu_->addAction(tr("Remove Cluster"));
+    clusterErrorCluster_ = menu_->addAction(tr("Set Cluster Error"));
 	setPenWidth_ = menu_->addAction(tr("Set Pen Width..."));
+	QMenu * colorMap = menu_->addMenu("Depth color map");
+	colorMapWhiteToBlack_ = colorMap->addAction(tr("White to black"));
+	colorMapWhiteToBlack_->setCheckable(true);
+	colorMapWhiteToBlack_->setChecked(false);
+	colorMapBlackToWhite_ = colorMap->addAction(tr("Black to white"));
+	colorMapBlackToWhite_->setCheckable(true);
+	colorMapBlackToWhite_->setChecked(false);
+	colorMapRedToBlue_ = colorMap->addAction(tr("Red to blue"));
+	colorMapRedToBlue_->setCheckable(true);
+	colorMapRedToBlue_->setChecked(true);
+	colorMapBlueToRed_ = colorMap->addAction(tr("Blue to red"));
+	colorMapBlueToRed_->setCheckable(true);
+	colorMapBlueToRed_->setChecked(false);
+	QActionGroup * group = new QActionGroup(this);
+	group->addAction(colorMapWhiteToBlack_);
+	group->addAction(colorMapBlackToWhite_);
+	group->addAction(colorMapRedToBlue_);
+	group->addAction(colorMapBlueToRed_);
 	resetChanges_ = menu_->addAction(tr("Reset Changes"));
 }
 
@@ -61,7 +80,22 @@ void EditDepthArea::setImage(const cv::Mat &depth, const cv::Mat & rgb)
 	UASSERT(depth.type() == CV_32FC1 ||
 			depth.type() == CV_16UC1);
 	originalImage_ = depth;
-	image_ = uCvMat2QImage(depth).convertToFormat(QImage::Format_RGB32);
+
+	uCvQtDepthColorMap colorMap = uCvQtDepthWhiteToBlack;
+	if(colorMapBlackToWhite_->isChecked())
+	{
+		colorMap = uCvQtDepthBlackToWhite;
+	}
+	else if(colorMapRedToBlue_->isChecked())
+	{
+		colorMap = uCvQtDepthRedToBlue;
+	}
+	else if(colorMapBlueToRed_->isChecked())
+	{
+		colorMap = uCvQtDepthBlueToRed;
+	}
+
+	image_ = uCvMat2QImage(depth, true, colorMap).convertToFormat(QImage::Format_RGB32);
 
 	imageRGB_ = QImage();
 	if(!rgb.empty())
@@ -121,6 +155,32 @@ void EditDepthArea::resetChanges()
     image_ = uCvMat2QImage(originalImage_).convertToFormat(QImage::Format_RGB32);
     modified_ = false;
     update();
+}
+
+void EditDepthArea::setColorMap(uCvQtDepthColorMap type)
+{
+	if(type == uCvQtDepthBlackToWhite)
+	{
+		colorMapBlackToWhite_->setChecked(true);
+	}
+	else if(type == uCvQtDepthRedToBlue)
+	{
+		colorMapRedToBlue_->setChecked(true);
+	}
+	else if(type == uCvQtDepthBlueToRed)
+	{
+		colorMapBlueToRed_->setChecked(true);
+	}
+	else
+	{
+		colorMapWhiteToBlack_->setChecked(true);
+	}
+
+	if(!originalImage_.empty())
+	{
+		image_ = uCvMat2QImage(originalImage_, true, type).convertToFormat(QImage::Format_RGB32);
+		update();
+	}
 }
 
 void EditDepthArea::mousePressEvent(QMouseEvent *event)
@@ -225,8 +285,9 @@ void EditDepthArea::resizeEvent(QResizeEvent *event)
     QWidget::resizeEvent(event);
 }
 
-void floodfill(QImage & image, const cv::Mat & depthImage, int x, int y, float lastDepthValue, float error)
+void floodfill(QRgb * bits, const cv::Mat & depthImage, int x, int y, float lastDepthValue, float error, int &iterations)
 {
+	++iterations;
 	if(x>=0 && x<depthImage.cols &&
 	   y>=0 && y<depthImage.rows)
 	{
@@ -239,13 +300,13 @@ void floodfill(QImage & image, const cv::Mat & depthImage, int x, int y, float l
 		{
 			currentValue = float(depthImage.at<unsigned short>(y, x))/1000.0f;
 		}
-
-		QRgb rgb = image.pixel(x,y);
-		if(qRed(rgb) == 0 && qGreen(rgb) == 0 && qBlue(rgb) == 0)
+		if(currentValue == 0.0f)
 		{
 			return;
 		}
-		if(currentValue == 0.0f)
+
+		QRgb & rgb = bits[x+y*depthImage.cols];
+		if(qRed(rgb) == 0 && qGreen(rgb) == 0 && qBlue(rgb) == 0)
 		{
 			return;
 		}
@@ -253,13 +314,40 @@ void floodfill(QImage & image, const cv::Mat & depthImage, int x, int y, float l
 		{
 			return;
 		}
+		rgb = 0;
 
-		image.setPixel(x, y, 0);
-
-		floodfill(image, depthImage, x, y+1, currentValue, error);
-		floodfill(image, depthImage, x, y-1, currentValue, error);
-		floodfill(image, depthImage, x-1, y, currentValue, error);
-		floodfill(image, depthImage, x+1, y, currentValue, error);
+		if(y+1<depthImage.rows)
+		{
+			QRgb & rgb = bits[x+(y+1)*depthImage.cols];
+			if(qRed(rgb) != 0 || qGreen(rgb) != 0 || qBlue(rgb) != 0)
+			{
+				floodfill(bits, depthImage, x, y+1, currentValue, error, iterations);
+			}
+		}
+		if(y-1>=0)
+		{
+			QRgb & rgb = bits[x+(y-1)*depthImage.cols];
+			if(qRed(rgb) != 0 || qGreen(rgb) != 0 || qBlue(rgb) != 0)
+			{
+				floodfill(bits, depthImage, x, y-1, currentValue, error, iterations);
+			}
+		}
+		if(x+1<depthImage.cols)
+		{
+			QRgb & rgb = bits[x+1+y*depthImage.cols];
+			if(qRed(rgb) != 0 || qGreen(rgb) != 0 || qBlue(rgb) != 0)
+			{
+				floodfill(bits, depthImage, x+1, y, currentValue, error, iterations);
+			}
+		}
+		if(x-1>=0)
+		{
+			QRgb & rgb = bits[x-1+y*depthImage.cols];
+			if(qRed(rgb) != 0 || qGreen(rgb) != 0 || qBlue(rgb) != 0)
+			{
+				floodfill(bits, depthImage, x-1, y, currentValue, error, iterations);
+			}
+		}
 	}
 }
 
@@ -280,19 +368,50 @@ void EditDepthArea::contextMenuEvent(QContextMenuEvent * e)
 		if(pixel.x()>=0 && pixel.x() < originalImage_.cols &&
 		   pixel.y()>=0 && pixel.y() < originalImage_.rows)
 		{
-			floodfill(image_, originalImage_, pixel.x(), pixel.y(), -1.0f, 0.02f);
+			int iterations=0;
+			floodfill((QRgb*)image_.bits(), originalImage_, pixel.x(), pixel.y(), -1.0f, clusterError_, iterations);
 		}
 		modified_=true;
 		this->update();
 	}
+	else if(action == clusterErrorCluster_)
+	{
+		bool ok;
+		double error = QInputDialog::getDouble(this, tr("Set Cluster Error"), tr("Error:"), clusterError(), 0.001, 1, 3, &ok);
+		if(ok)
+		{
+			clusterError_= error;
+		}
+		modified_=true;
+	}
 	else if(action == setPenWidth_)
 	{
 		bool ok;
-		int width = QInputDialog::getInt(this, tr("Set Pen Width"), tr("Width:"), penWidth(), 1, 99, 1, &ok);
+		int width = QInputDialog::getInt(this, tr("Set Pen Width"), tr("Width (pixels):"), penWidth(), 1, 999, 1, &ok);
 		if(ok)
 		{
 			myPenWidth_ = width;
 		}
+	}
+	else if(action == colorMapBlackToWhite_ ||
+			action == colorMapWhiteToBlack_ ||
+			action == colorMapRedToBlue_ ||
+			action == colorMapBlueToRed_)
+	{
+		uCvQtDepthColorMap colorMap = uCvQtDepthWhiteToBlack;
+		if(colorMapBlackToWhite_->isChecked())
+		{
+			colorMap = uCvQtDepthBlackToWhite;
+		}
+		else if(colorMapRedToBlue_->isChecked())
+		{
+			colorMap = uCvQtDepthRedToBlue;
+		}
+		else if(colorMapBlueToRed_->isChecked())
+		{
+			colorMap = uCvQtDepthBlueToRed;
+		}
+		this->setColorMap(colorMap);
 	}
 	else if(action == resetChanges_)
 	{
