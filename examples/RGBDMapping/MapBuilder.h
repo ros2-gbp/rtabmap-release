@@ -171,7 +171,7 @@ protected Q_SLOTS:
 		//============================
 		const std::map<int, Transform> & poses = stats.poses();
 		QMap<std::string, Transform> clouds = cloudViewer_->getAddedClouds();
-		for(std::map<int, Transform>::const_iterator iter = poses.begin(); iter!=poses.end(); ++iter)
+		for(std::map<int, Transform>::const_iterator iter = poses.lower_bound(1); iter!=poses.end(); ++iter)
 		{
 			if(!iter->second.isNull())
 			{
@@ -192,9 +192,9 @@ protected Q_SLOTS:
 					}
 					cloudViewer_->setCloudVisibility(cloudName, true);
 				}
-				else if(uContains(stats.getSignatures(), iter->first))
+				else if(iter->first == stats.getLastSignatureData().id())
 				{
-					Signature s = stats.getSignatures().at(iter->first);
+					Signature s = stats.getLastSignatureData();
 					s.sensorData().uncompressData(); // make sure data is uncompressed
 					// Add the new cloud
 					pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud = util3d::cloudRGBFromSensorData(
@@ -230,7 +230,7 @@ protected Q_SLOTS:
 			// Set graph
 			pcl::PointCloud<pcl::PointXYZ>::Ptr graph(new pcl::PointCloud<pcl::PointXYZ>);
 			pcl::PointCloud<pcl::PointXYZ>::Ptr graphNodes(new pcl::PointCloud<pcl::PointXYZ>);
-			for(std::map<int, Transform>::const_iterator iter=poses.begin(); iter!=poses.end(); ++iter)
+			for(std::map<int, Transform>::const_iterator iter=poses.lower_bound(1); iter!=poses.end(); ++iter)
 			{
 				graph->push_back(pcl::PointXYZ(iter->second.x(), iter->second.y(), iter->second.z()));
 			}
@@ -246,25 +246,16 @@ protected Q_SLOTS:
 		//============================
 		// Update/add occupancy grid (when RGBD/CreateOccupancyGrid is true)
 		//============================
-		for(std::map<int, Transform>::const_reverse_iterator iter = stats.poses().rbegin(); iter!=stats.poses().rend(); ++iter)
+		if(grid_.addedNodes().find(stats.getLastSignatureData().id()) == grid_.addedNodes().end())
 		{
-			int id = iter->first;
-			if(grid_.addedNodes().find(id) == grid_.addedNodes().end())
+			if(stats.getLastSignatureData().sensorData().gridCellSize() > 0.0f)
 			{
-				std::map<int, Signature>::const_iterator jter = stats.getSignatures().find(id);
-				if(jter != stats.getSignatures().end() && jter->second.sensorData().gridCellSize() > 0.0f)
-				{
-					cv::Mat groundCells, obstacleCells, emptyCells;
-					jter->second.sensorData().uncompressDataConst(0, 0, 0, 0, &groundCells, &obstacleCells, &emptyCells);
-					grid_.addToCache(id, groundCells, obstacleCells, emptyCells);
-				}
-			}
-			else
-			{
-				// Assume that older nodes are already added to map
-				break;
+				cv::Mat groundCells, obstacleCells, emptyCells;
+				stats.getLastSignatureData().sensorData().uncompressDataConst(0, 0, 0, 0, &groundCells, &obstacleCells, &emptyCells);
+				grid_.addToCache(stats.getLastSignatureData().id(), groundCells, obstacleCells, emptyCells);
 			}
 		}
+
 		if(grid_.addedNodes().size() || grid_.cacheSize())
 		{
 			grid_.update(stats.poses());

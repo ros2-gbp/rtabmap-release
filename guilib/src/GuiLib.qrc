@@ -35,5 +35,7 @@
         <file>images/zr300.png</file>
         <file>images/d435.png</file>
         <file>images/d415.png</file>
+        <file>images/tara.png</file>
+        <file>images/t265.png</file>
     </qresource>
 </RCC>

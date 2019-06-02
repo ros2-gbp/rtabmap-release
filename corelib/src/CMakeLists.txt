@@ -15,10 +15,25 @@ SET(SRC_FILES
 	
     Camera.cpp
     CameraThread.cpp
-    CameraRGB.cpp
-    CameraRGBD.cpp
-    CameraStereo.cpp
     CameraModel.cpp
+    
+    camera/CameraFreenect.cpp
+    camera/CameraFreenect2.cpp
+    camera/CameraImages.cpp
+    camera/CameraK4W2.cpp
+    camera/CameraOpenni.cpp
+    camera/CameraOpenNI2.cpp
+    camera/CameraOpenNICV.cpp
+    camera/CameraRealSense.cpp
+    camera/CameraRealSense2.cpp
+    camera/CameraRGBDImages.cpp
+    camera/CameraStereoDC1394.cpp
+    camera/CameraStereoFlyCapture2.cpp
+    camera/CameraStereoImages.cpp
+    camera/CameraStereoVideo.cpp
+    camera/CameraStereoZed.cpp
+	camera/CameraStereoTara.cpp
+    camera/CameraVideo.cpp
     
     EpipolarGeometry.cpp
 	VisualWord.cpp
@@ -49,10 +64,10 @@ SET(SRC_FILES
 	LaserScan.cpp
 	
 	Optimizer.cpp
-	OptimizerTORO.cpp
-	OptimizerG2O.cpp
-	OptimizerGTSAM.cpp
-	OptimizerCVSBA.cpp
+	optimizer/OptimizerTORO.cpp
+	optimizer/OptimizerG2O.cpp
+	optimizer/OptimizerGTSAM.cpp
+	optimizer/OptimizerCVSBA.cpp
 	
 	Registration.cpp
 	RegistrationIcp.cpp
@@ -60,24 +75,31 @@ SET(SRC_FILES
 	
 	Odometry.cpp
 	OdometryThread.cpp
-	OdometryF2M.cpp
-	OdometryMono.cpp
-	OdometryF2F.cpp
-	OdometryFovis.cpp
-	OdometryViso2.cpp
-	OdometryDVO.cpp
-	OdometryOkvis.cpp
-	OdometryORBSLAM2.cpp
-	OdometryLOAM.cpp
-	OdometryMSCKF.cpp
+	odometry/OdometryF2M.cpp
+	odometry/OdometryMono.cpp
+	odometry/OdometryF2F.cpp
+	odometry/OdometryFovis.cpp
+	odometry/OdometryViso2.cpp
+	odometry/OdometryDVO.cpp
+	odometry/OdometryOkvis.cpp
+	odometry/OdometryORBSLAM2.cpp
+	odometry/OdometryLOAM.cpp
+	odometry/OdometryMSCKF.cpp
+	odometry/OdometryVINS.cpp
 	
 	IMUThread.cpp
+	IMUFilter.cpp
+	imufilter/ComplementaryFilter.cpp
 	
 	Stereo.cpp
 	StereoDense.cpp
 	StereoCameraModel.cpp
+	stereo/StereoBM.cpp
+	stereo/StereoSGBM.cpp
 	
 	OccupancyGrid.cpp
+	
+	MarkerDetector.cpp
 	
 	GainCompensator.cpp
 		
@@ -90,6 +112,8 @@ SET(SRC_FILES
 	clams/discrete_depth_distortion_model.cpp
 	clams/frame_projector.cpp
 	clams/slam_calibrator.cpp
+	
+	opencv/ORBextractor.cc
 )
 
 IF(OpenCV_VERSION_MAJOR EQUAL 2)
@@ -248,12 +272,12 @@ ENDIF(FlyCapture2_FOUND)
 IF(WITH_TORO)
 	SET(SRC_FILES
     	${SRC_FILES}
-		toro3d/posegraph3.cpp
-		toro3d/treeoptimizer3_iteration.cpp
-		toro3d/treeoptimizer3.cpp
+		optimizer/toro3d/posegraph3.cpp
+		optimizer/toro3d/treeoptimizer3_iteration.cpp
+		optimizer/toro3d/treeoptimizer3.cpp
 	
-		toro3d/posegraph2.cpp
-		toro3d/treeoptimizer2.cpp
+		optimizer/toro3d/posegraph2.cpp
+		optimizer/toro3d/treeoptimizer2.cpp
 	)
 ENDIF(WITH_TORO)
 
@@ -266,15 +290,18 @@ IF(G2O_FOUND)
 		${LIBRARIES}
 		${G2O_LIBRARIES}
 	)
-	
+	SET(SRC_FILES
+    		${SRC_FILES}
+		optimizer/g2o/edge_se3_xyzprior.cpp
+	)
 	IF(WITH_VERTIGO)
 		SET(SRC_FILES
-    		${SRC_FILES}
-			vertigo/g2o/edge_se2Switchable.cpp
-			vertigo/g2o/edge_se3Switchable.cpp
-			vertigo/g2o/edge_switchPrior.cpp
-			vertigo/g2o/types_g2o_robust.cpp
-			vertigo/g2o/vertex_switchLinear.cpp
+    			${SRC_FILES}
+			optimizer/vertigo/g2o/edge_se2Switchable.cpp
+			optimizer/vertigo/g2o/edge_se3Switchable.cpp
+			optimizer/vertigo/g2o/edge_switchPrior.cpp
+			optimizer/vertigo/g2o/types_g2o_robust.cpp
+			optimizer/vertigo/g2o/vertex_switchLinear.cpp
 		)
 	ENDIF(WITH_VERTIGO)
 ENDIF(G2O_FOUND)
@@ -409,6 +436,17 @@ IF(msckf_vio_FOUND)
 	)
 ENDIF(msckf_vio_FOUND)
 
+IF(vins_FOUND)
+    SET(INCLUDE_DIRS
+		${vins_INCLUDE_DIRS}
+		${INCLUDE_DIRS}
+	)
+	SET(LIBRARIES
+		${vins_LIBRARIES}
+		${LIBRARIES}
+	)
+ENDIF(vins_FOUND)
+
 IF(ORB_SLAM2_FOUND)
     SET(INCLUDE_DIRS
         ${ORB_SLAM2_INCLUDE_DIRS} #before so that g2o includes are taken from ORB_SLAM2 directory before the official g2o one
@@ -433,6 +471,10 @@ IF(GTSAM_FOUND)
 			${GTSAM_INCLUDE_DIRS}
 		)
 	ENDIF()
+	SET(SRC_FILES
+    	${SRC_FILES}
+		optimizer/gtsam/GravityFactor.cpp
+	)
 	IF(WIN32)
 		# GTSAM should be built in STATIC on Windows to avoid "error C2338: THIS_METHOD_IS_ONLY_FOR_1x1_EXPRESSIONS" when building GTSAM
 		add_definitions("-DGTSAM_IMPORT_STATIC") 
@@ -442,6 +484,13 @@ IF(GTSAM_FOUND)
 		gtsam # Windows: Place static libs at the end
 	)
 ENDIF(GTSAM_FOUND)
+
+IF(WITH_MADGWICK)
+	SET(SRC_FILES
+		${SRC_FILES}
+		imufilter/MadgwickFilter.cpp
+	)
+ENDIF(WITH_MADGWICK)
 
 ####################################
 # Generate resources files

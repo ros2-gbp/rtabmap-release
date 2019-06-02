@@ -36,6 +36,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap/utilite/UDirectory.h>
 #include <rtabmap/utilite/UTimer.h>
 #include <rtabmap/utilite/UStl.h>
+#include <rtabmap/utilite/UMath.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -47,9 +48,16 @@ using namespace rtabmap;
 void showUsage()
 {
 	printf("\nUsage:\n"
-			"rtabmap-reprocess [options] \"input.db\" \"output.db\"\n"
+			"   rtabmap-reprocess [options] \"input.db\" \"output.db\"\n"
+			"   rtabmap-reprocess [options] \"input1.db;input2.db;input3.db\" \"output.db\"\n"
+			"   For the second example, only parameters from the first database are used.\n"
+			"   If Mem/IncrementalMemory is false, RTAB-Map is initialized with the first input database.\n"
+			"   To see warnings when loop closures are rejected, add \"--uwarn\" argument.\n"
 			"  Options:\n"
-			"     -r          Use database stamps as input rate.\n"
+			"     -r                Use database stamps as input rate.\n"
+			"     -c \"path.ini\"   Configuration file, overwriting parameters read \n"
+			"                       from the database. If custom parameters are also set as \n"
+			"                       arguments, they overwrite those in config file and the database.\n"
 			"     -g2         Assemble 2D occupancy grid map and save it to \"[output]_map.pgm\".\n"
 			"     -g3         Assemble 3D cloud map and save it to \"[output]_map.pcd\".\n"
 			"     -o2         Assemble OctoMap 2D projection and save it to \"[output]_octomap.pgm\".\n"
@@ -67,6 +75,62 @@ void sighandler(int sig)
 	g_loopForever = false;
 }
 
+int loopCount = 0;
+int totalFrames = 0;
+std::vector<float> previousLocalizationDistances;
+std::vector<float> odomDistances;
+std::vector<float> localizationDistances;
+std::vector<float> localizationTime;
+void showLocalizationStats()
+{
+	printf("Total localizations on previous session = %d/%d\n", loopCount, totalFrames);
+	loopCount = 0;
+	totalFrames = 0;
+	{
+		float m = uMean(localizationTime);
+		float var = uVariance(localizationTime, m);
+		float stddev = -1;
+		if(var>0)
+		{
+			stddev = sqrt(var);
+		}
+		printf("Average localization time = %f ms (stddev=%f ms)\n", m, stddev);
+	}
+	if(!localizationDistances.empty())
+	{
+		float m = uMean(localizationDistances);
+		float var = uVariance(localizationDistances, m);
+		float stddev = -1;
+		if(var>0)
+		{
+			stddev = sqrt(var);
+		}
+		printf("Average localization distance = %f m (stddev=%f m)\n", m, stddev);
+	}
+	if(!previousLocalizationDistances.empty())
+	{
+		float m = uMean(previousLocalizationDistances);
+		float var = uVariance(previousLocalizationDistances, m);
+		float stddev = -1;
+		if(var>0)
+		{
+			stddev = sqrt(var);
+		}
+		printf("Average distance from previous localization = %f m (stddev=%f m)\n", m, stddev);
+	}
+	if(!odomDistances.empty())
+	{
+		float m = uMean(odomDistances);
+		float var = uVariance(odomDistances, m);
+		float stddev = -1;
+		if(var>0)
+		{
+			stddev = sqrt(var);
+		}
+		printf("Average odometry distances = %f m (stddev=%f m)\n", m, stddev);
+	}
+}
+
 int main(int argc, char * argv[])
 {
 	signal(SIGABRT, &sighandler);
@@ -75,6 +139,8 @@ int main(int argc, char * argv[])
 
 	ULogger::setType(ULogger::kTypeConsole);
 	ULogger::setLevel(ULogger::kError);
+
+	ParametersMap customParameters = Parameters::parseArguments(argc, argv);
 
 	if(argc < 3)
 	{
@@ -86,24 +152,42 @@ int main(int argc, char * argv[])
 	bool assemble2dOctoMap = false;
 	bool assemble3dOctoMap = false;
 	bool useDatabaseRate = false;
+	ParametersMap configParameters;
 	for(int i=1; i<argc-2; ++i)
 	{
-		if(strcmp(argv[i], "-r") == 0)
+		if(strcmp(argv[i], "-r") == 0 || strcmp(argv[i], "--r") == 0)
 		{
 			useDatabaseRate = true;
 			printf("Using database stamps as input rate.\n");
 		}
-		else if(strcmp(argv[i], "-g2") == 0)
+		else if (strcmp(argv[i], "-c") == 0 || strcmp(argv[i], "--c") == 0)
+		{
+			++i;
+			if (i < argc - 2 && UFile::exists(argv[i]) && UFile::getExtension(argv[i]).compare("ini") == 0)
+			{
+				Parameters::readINI(argv[i], configParameters);
+				printf("Using %d parameters from config file \"%s\"\n", (int)configParameters.size(), argv[i]);
+			}
+			else if(i < argc - 2)
+			{
+				printf("Config file \"%s\" is not valid or doesn't exist!\n", argv[i]);
+			}
+			else
+			{
+				printf("Config file is not set!\n");
+			}
+		}
+		else if(strcmp(argv[i], "-g2") == 0 || strcmp(argv[i], "--g2") == 0)
 		{
 			assemble2dMap = true;
 			printf("2D occupancy grid will be assembled (-g2 option).\n");
 		}
-		else if(strcmp(argv[i], "-g3") == 0)
+		else if(strcmp(argv[i], "-g3") == 0 || strcmp(argv[i], "--g3") == 0)
 		{
 			assemble3dMap = true;
 			printf("3D cloud map will be assembled (-g3 option).\n");
 		}
-		else if(strcmp(argv[i], "-o2") == 0)
+		else if(strcmp(argv[i], "-o2") == 0 || strcmp(argv[i], "--o2") == 0)
 		{
 #ifdef RTABMAP_OCTOMAP
 			assemble2dOctoMap = true;
@@ -112,7 +196,7 @@ int main(int argc, char * argv[])
 			printf("RTAB-Map is not built with OctoMap support, cannot set -o2 option!\n");
 #endif
 		}
-		else if(strcmp(argv[i], "-o3") == 0)
+		else if(strcmp(argv[i], "-o3") == 0 || strcmp(argv[i], "--o3") == 0)
 		{
 #ifdef RTABMAP_OCTOMAP
 			assemble3dOctoMap = true;
@@ -123,22 +207,30 @@ int main(int argc, char * argv[])
 		}
 	}
 
-	ParametersMap customParameters = Parameters::parseArguments(argc, argv);
-
 	std::string inputDatabasePath = uReplaceChar(argv[argc-2], '~', UDirectory::homeDir());
 	std::string outputDatabasePath = uReplaceChar(argv[argc-1], '~', UDirectory::homeDir());
 
-	if(!UFile::exists(inputDatabasePath))
+	std::list<std::string> databases = uSplit(inputDatabasePath, ';');
+	if (databases.empty())
 	{
-		printf("Input database \"%s\" doesn't exist!\n", inputDatabasePath.c_str());
+		printf("No input database \"%s\" detected!\n", inputDatabasePath.c_str());
 		return -1;
+	}
+	for (std::list<std::string>::iterator iter = databases.begin(); iter != databases.end(); ++iter)
+	{
+		if (!UFile::exists(*iter))
+		{
+			printf("Input database \"%s\" doesn't exist!\n", iter->c_str());
+			return -1;
+		}
+
+		if (UFile::getExtension(*iter).compare("db") != 0)
+		{
+			printf("File \"%s\" is not a database format (*.db)!\n", iter->c_str());
+			return -1;
+		}
 	}
 
-	if(UFile::getExtension(inputDatabasePath).compare("db") != 0)
-	{
-		printf("File \"%s\" is not a database format (*.db)!\n", inputDatabasePath.c_str());
-		return -1;
-	}
 	if(UFile::getExtension(outputDatabasePath).compare("db") != 0)
 	{
 		printf("File \"%s\" is not a database format (*.db)!\n", outputDatabasePath.c_str());
@@ -150,8 +242,9 @@ int main(int argc, char * argv[])
 		UFile::erase(outputDatabasePath);
 	}
 
+	// Get parameters of the first database
 	DBDriver * dbDriver = DBDriver::create();
-	if(!dbDriver->openConnection(inputDatabasePath, false))
+	if(!dbDriver->openConnection(databases.front(), false))
 	{
 		printf("Failed opening input database!\n");
 		delete dbDriver;
@@ -161,10 +254,7 @@ int main(int argc, char * argv[])
 	ParametersMap parameters = dbDriver->getLastParameters();
 	if(parameters.empty())
 	{
-		printf("Failed getting parameters from database, reprocessing cannot be done. Database version may be too old.\n");
-		dbDriver->closeConnection(false);
-		delete dbDriver;
-		return -1;
+		printf("WARNING: Failed getting parameters from database, reprocessing will be done with default parameters! Database version may be too old (%s).\n", dbDriver->getDatabaseVersion().c_str());
 	}
 	if(customParameters.size())
 	{
@@ -174,7 +264,13 @@ int main(int argc, char * argv[])
 			printf("  %s\t= %s\n", iter->first.c_str(), iter->second.c_str());
 		}
 	}
+	uInsert(parameters, configParameters);
 	uInsert(parameters, customParameters);
+
+	bool incrementalMemory = Parameters::defaultMemIncrementalMemory();
+	Parameters::parse(parameters, Parameters::kMemIncrementalMemory(), incrementalMemory);
+
+	int totalIds = 0;
 	std::set<int> ids;
 	dbDriver->getAllNodeIds(ids);
 	if(ids.empty())
@@ -184,9 +280,41 @@ int main(int argc, char * argv[])
 		delete dbDriver;
 		return -1;
 	}
-
+	if(!(!incrementalMemory && databases.size() > 1))
+	{
+		totalIds = ids.size();
+	}
 	dbDriver->closeConnection(false);
+
+	// Count remaining ids in the other databases
+	for (std::list<std::string>::iterator iter = ++databases.begin(); iter != databases.end(); ++iter)
+	{
+		if (!dbDriver->openConnection(*iter, false))
+		{
+			printf("Failed opening input database!\n");
+			delete dbDriver;
+			return -1;
+		}
+		ids.clear();
+		dbDriver->getAllNodeIds(ids);
+		totalIds += ids.size();
+		dbDriver->closeConnection(false);
+	}
 	delete dbDriver;
+	dbDriver = 0;
+
+	std::string workingDirectory = UDirectory::getDir(outputDatabasePath);
+	printf("Set working directory to \"%s\".\n", workingDirectory.c_str());
+	uInsert(parameters, ParametersPair(Parameters::kRtabmapWorkingDirectory(), workingDirectory));
+	uInsert(parameters, ParametersPair(Parameters::kRtabmapPublishStats(), "true")); // to log status below
+
+	if(!incrementalMemory && databases.size() > 1)
+	{
+		UFile::copy(databases.front(), outputDatabasePath);
+		printf("Parameter \"%s\" is set to false, initializing RTAB-Map with \"%s\" for localization...\n", Parameters::kMemIncrementalMemory().c_str(), databases.front().c_str());
+		databases.pop_front();
+		inputDatabasePath = uJoin(databases, ";");
+	}
 
 	Rtabmap rtabmap;
 	rtabmap.init(parameters, outputDatabasePath);
@@ -208,6 +336,7 @@ int main(int argc, char * argv[])
 	int processed = 0;
 	CameraInfo info;
 	SensorData data = dbReader.takeImage(&info);
+	Transform lastLocalizationPose = info.odomPose;
 	while(data.isValid() && g_loopForever)
 	{
 		UTimer iterationTime;
@@ -221,7 +350,15 @@ int main(int argc, char * argv[])
 			if(!odometryIgnored && !info.odomCovariance.empty() && info.odomCovariance.at<double>(0,0)>=9999)
 			{
 				printf("High variance detected, triggering a new map...\n");
-				rtabmap.triggerNewMap();
+				if(!incrementalMemory && processed>0)
+				{
+					showLocalizationStats();
+					lastLocalizationPose = info.odomPose;
+				}
+				if(incrementalMemory)
+				{
+					rtabmap.triggerNewMap();
+				}
 			}
 			UTimer t;
 			if(!rtabmap.process(data, info.odomPose, info.odomCovariance, info.odomVelocity, globalMapStats))
@@ -239,11 +376,11 @@ int main(int argc, char * argv[])
 				double timeUpdateOctoMap = 0.0;
 #endif
 				const rtabmap::Statistics & stats = rtabmap.getStatistics();
-				if(stats.poses().size() && stats.getSignatures().size())
+				if(stats.poses().size() && stats.getLastSignatureData().id())
 				{
 					int id = stats.poses().rbegin()->first;
-					if(stats.getSignatures().find(id)!=stats.getSignatures().end() &&
-					   stats.getSignatures().find(id)->second.sensorData().gridCellSize() > 0.0f)
+					if(id == stats.getLastSignatureData().id() &&
+					   stats.getLastSignatureData().sensorData().gridCellSize() > 0.0f)
 					{
 						bool updateGridMap = false;
 						bool updateOctoMap = false;
@@ -260,7 +397,7 @@ int main(int argc, char * argv[])
 						if(updateGridMap || updateOctoMap)
 						{
 							cv::Mat ground, obstacles, empty;
-							stats.getSignatures().find(id)->second.sensorData().uncompressDataConst(0, 0, 0, 0, &ground, &obstacles, &empty);
+							stats.getLastSignatureData().sensorData().uncompressDataConst(0, 0, 0, 0, &ground, &obstacles, &empty);
 
 							timeUpdateInit = t.ticks();
 
@@ -273,7 +410,7 @@ int main(int argc, char * argv[])
 #ifdef RTABMAP_OCTOMAP
 							if(updateOctoMap)
 							{
-								const cv::Point3f & viewpoint = stats.getSignatures().find(id)->second.sensorData().gridViewPoint();
+								const cv::Point3f & viewpoint = stats.getLastSignatureData().sensorData().gridViewPoint();
 								octomap.addToCache(id, ground, obstacles, empty, viewpoint);
 								octomap.update(stats.poses());
 								timeUpdateOctoMap = t.ticks() + timeUpdateInit;
@@ -310,9 +447,65 @@ int main(int argc, char * argv[])
 			}
 		}
 
-		printf("Processed %d/%d nodes... %dms\n", ++processed, (int)ids.size(), int(iterationTime.ticks()*1000));
+		const rtabmap::Statistics & stats = rtabmap.getStatistics();
+		int loopId = stats.loopClosureId() > 0? stats.loopClosureId(): stats.proximityDetectionId() > 0?stats.proximityDetectionId() :0;
+		int landmarkId = (int)uValue(stats.data(), rtabmap::Statistics::kLoopLandmark_detected(), 0.0f);
+		int refMapId = stats.refImageMapId();
+		++totalFrames;
+		if (loopId>0)
+		{
+			++loopCount;
+			int loopMapId = stats.loopClosureId() > 0? stats.loopClosureMapId(): stats.proximityDetectionMapId();
+			printf("Processed %d/%d nodes [%d]... %dms Loop on %d [%d]\n", ++processed, totalIds, refMapId, int(iterationTime.ticks() * 1000), loopId, loopMapId);
+		}
+		else if(landmarkId != 0)
+		{
+			printf("Processed %d/%d nodes [%d]... %dms Loop on landmark %d\n", ++processed, totalIds, refMapId, int(iterationTime.ticks() * 1000), landmarkId);
+		}
+		else
+		{
+			printf("Processed %d/%d nodes [%d]... %dms\n", ++processed, totalIds, refMapId, int(iterationTime.ticks() * 1000));
+		}
 
+		// Here we accumulate statistics about distance from last localization
+		if(!incrementalMemory &&
+		   !lastLocalizationPose.isNull() &&
+		   !info.odomPose.isNull())
+		{
+			if(loopId>0 || landmarkId != 0)
+			{
+				previousLocalizationDistances.push_back(lastLocalizationPose.getDistance(info.odomPose));
+				lastLocalizationPose = info.odomPose;
+			}
+		}
+		if(!incrementalMemory)
+		{
+			float totalTime = uValue(stats.data(), rtabmap::Statistics::kTimingTotal(), 0.0f);
+			localizationTime.push_back(totalTime);
+			if(loopId>0)
+			{
+				localizationDistances.push_back(stats.loopClosureTransform().getNorm());
+			}
+		}
+
+		Transform odomPose = info.odomPose;
 		data = dbReader.takeImage(&info);
+
+		if(!incrementalMemory &&
+		   !odomPose.isNull() &&
+		   !info.odomPose.isNull())
+		{
+			odomDistances.push_back(odomPose.getDistance(info.odomPose));
+		}
+	}
+
+	if(!incrementalMemory)
+	{
+		showLocalizationStats();
+	}
+	else
+	{
+		printf("Total loop closures = %d\n", loopCount);
 	}
 
 	printf("Closing database \"%s\"...\n", outputDatabasePath.c_str());

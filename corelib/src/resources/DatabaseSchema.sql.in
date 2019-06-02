@@ -23,7 +23,7 @@ CREATE TABLE Node (
 	velocity BLOB,            -- 6 float (vx,vy,vz,vroll,vpitch,vyaw) m/s and rad/s
 	label TEXT,
 	gps BLOB,                 -- 1x6 double: stamp, longitude (DD), latitude (DD), altitude (m), accuracy (m), bearing (North 0->360 deg clockwise)
-	
+	env_sensors BLOB,         -- Variable 3xdouble: (sensorId1, value, stamp, sensorId2, value, stamp, ...)
 	time_enter DATE,
 	PRIMARY KEY (id)
 );
@@ -53,7 +53,7 @@ CREATE TABLE Data (
 CREATE TABLE Link (
 	from_id INTEGER NOT NULL,
 	to_id INTEGER NOT NULL,
-	type INTEGER NOT NULL,    -- neighbor=0, loop=1, child=2
+	type INTEGER NOT NULL,    -- kNeighbor=0, kGlobalClosure=1, kLocalSpaceClosure=2, kLocalTimeClosure=3, kUserClosure=4, kVirtualClosure=5, kNeighborMerged=6, kPosePrior=7, kLandmark=8
 	information_matrix BLOB NOT NULL, -- 6x6 double (inverse covariance)
 	transform BLOB,           -- 3x4 float
 	user_data BLOB,           -- compressed data (User data)
@@ -86,6 +86,8 @@ CREATE TABLE Feature (
 	descriptor BLOB,
 	FOREIGN KEY (node_id) REFERENCES Node(id)
 );
+
+--
 
 CREATE TABLE Info (
 	STM_size INTEGER,
