@@ -468,7 +468,11 @@ void RegistrationIcp::parseParameters(const ParametersMap & parameters)
 			params["maxDist"] = uNumber2Str(_maxCorrespondenceDistance);
 			params["knn"] = uNumber2Str(_libpointmatcherKnn);
 			params["epsilon"] = uNumber2Str(_libpointmatcherEpsilon);
+#if POINTMATCHER_VERSION_INT >= 10300
+			icp->matcher = PM::get().MatcherRegistrar.create("KDTreeMatcher", params);
+#else
 			icp->matcher.reset(PM::get().MatcherRegistrar.create("KDTreeMatcher", params));
+#endif
 			params.clear();
 
 			params["ratio"] = uNumber2Str(_libpointmatcherOutlierRatio);
@@ -482,12 +486,20 @@ void RegistrationIcp::parseParameters(const ParametersMap & parameters)
 				params.clear();
 
 				params["force2D"] = force3DoF()?"1":"0";
+#if POINTMATCHER_VERSION_INT >= 10300
+				icp->errorMinimizer = PM::get().ErrorMinimizerRegistrar.create("PointToPlaneErrorMinimizer", params);
+#else
 				icp->errorMinimizer.reset(PM::get().ErrorMinimizerRegistrar.create("PointToPlaneErrorMinimizer", params));
+#endif
 				params.clear();
 			}
 			else
 			{
+#if POINTMATCHER_VERSION_INT >= 10300
+				icp->errorMinimizer = PM::get().ErrorMinimizerRegistrar.create("PointToPointErrorMinimizer");
+#else
 				icp->errorMinimizer.reset(PM::get().ErrorMinimizerRegistrar.create("PointToPointErrorMinimizer"));
+#endif
 			}
 
 			icp->transformationCheckers.clear();
@@ -592,7 +604,7 @@ Transform RegistrationIcp::computeTransformationImpl(
 				{
 					tooLowComplexityForPlaneToPlane = true;
 					complexityVectors = fromComplexity<toComplexity?complexityVectorsFrom:complexityVectorsTo;
-					UWARN("ICP PointToPlane ignored as structural complexity is too low (corridor-like environment): %f < %f (%s). PointToPoint is done instead.", complexity, _pointToPlaneMinComplexity, Parameters::kIcpPointToPlaneMinComplexity().c_str());
+					UWARN("ICP PointToPlane ignored as structural complexity is too low (corridor-like environment): %f < %f (%s). PointToPoint is done instead, orientation is still optimized but translation will be limited to direction of normals.", complexity, _pointToPlaneMinComplexity, Parameters::kIcpPointToPlaneMinComplexity().c_str());
 				}
 				else
 				{
@@ -610,7 +622,7 @@ Transform RegistrationIcp::computeTransformationImpl(
 					{
 						// Load point clouds
 						DP data = laserScanToDP(fromScan);
-						DP ref = laserScanToDP(LaserScan(toScan.data(), toScan.maxPoints(), toScan.maxRange(), toScan.format(), guess * toScan.localTransform()));
+						DP ref = laserScanToDP(LaserScan(toScan.data(), toScan.maxPoints(), toScan.rangeMax(), toScan.format(), guess * toScan.localTransform()));
 
 						// Compute the transformation to express data in ref
 						PM::TransformationParameters T;
@@ -765,7 +777,7 @@ Transform RegistrationIcp::computeTransformationImpl(
 					{
 						tooLowComplexityForPlaneToPlane = true;
 						complexityVectors = fromComplexity<toComplexity?complexityVectorsFrom:complexityVectorsTo;
-						UWARN("ICP PointToPlane ignored as structural complexity is too low (corridor-like environment): %f < %f (%s). PointToPoint is done instead.", complexity, _pointToPlaneMinComplexity, Parameters::kIcpPointToPlaneMinComplexity().c_str());
+						UWARN("ICP PointToPlane ignored as structural complexity is too low (corridor-like environment): %f < %f (%s). PointToPoint is done instead, orientation is still optimized but translation will be limited to direction of normals.", complexity, _pointToPlaneMinComplexity, Parameters::kIcpPointToPlaneMinComplexity().c_str());
 					}
 					else
 					{
@@ -782,41 +794,41 @@ Transform RegistrationIcp::computeTransformationImpl(
 						// update output scans
 						if(fromScan.is2d())
 						{
-							fromSignature.sensorData().setLaserScanRaw(
+							fromSignature.sensorData().setLaserScan(
 									LaserScan(
 											util3d::laserScan2dFromPointCloud(*fromCloudNormals, fromScan.localTransform().inverse()),
 											maxLaserScansFrom,
-											fromScan.maxRange(),
+											fromScan.rangeMax(),
 											LaserScan::kXYNormal,
 											fromScan.localTransform()));
 						}
 						else
 						{
-							fromSignature.sensorData().setLaserScanRaw(
+							fromSignature.sensorData().setLaserScan(
 									LaserScan(
 											util3d::laserScanFromPointCloud(*fromCloudNormals, fromScan.localTransform().inverse()),
 											maxLaserScansFrom,
-											fromScan.maxRange(),
+											fromScan.rangeMax(),
 											LaserScan::kXYZNormal,
 											fromScan.localTransform()));
 						}
 						if(toScan.is2d())
 						{
-							toSignature.sensorData().setLaserScanRaw(
+							toSignature.sensorData().setLaserScan(
 									LaserScan(
 											util3d::laserScan2dFromPointCloud(*toCloudNormals, (guess*toScan.localTransform()).inverse()),
 											maxLaserScansTo,
-											toScan.maxRange(),
+											toScan.rangeMax(),
 											LaserScan::kXYNormal,
 											toScan.localTransform()));
 						}
 						else
 						{
-							toSignature.sensorData().setLaserScanRaw(
+							toSignature.sensorData().setLaserScan(
 									LaserScan(
 											util3d::laserScanFromPointCloud(*toCloudNormals, (guess*toScan.localTransform()).inverse()),
 											maxLaserScansTo,
-											toScan.maxRange(),
+											toScan.rangeMax(),
 											LaserScan::kXYZNormal,
 											toScan.localTransform()));
 						}
@@ -833,7 +845,7 @@ Transform RegistrationIcp::computeTransformationImpl(
 							{
 								// Load point clouds
 								DP data = laserScanToDP(fromScan);
-								DP ref = laserScanToDP(LaserScan(toScan.data(), toScan.maxPoints(), toScan.maxRange(), toScan.format(), guess*toScan.localTransform()));
+								DP ref = laserScanToDP(LaserScan(toScan.data(), toScan.maxPoints(), toScan.rangeMax(), toScan.format(), guess*toScan.localTransform()));
 
 								// Compute the transformation to express data in ref
 								PM::TransformationParameters T;
@@ -901,41 +913,41 @@ Transform RegistrationIcp::computeTransformationImpl(
 						// update output scans
 						if(fromScan.is2d())
 						{
-							fromSignature.sensorData().setLaserScanRaw(
+							fromSignature.sensorData().setLaserScan(
 									LaserScan(
 											util3d::laserScan2dFromPointCloud(*fromCloudFiltered, fromScan.localTransform().inverse()),
 											maxLaserScansFrom,
-											fromScan.maxRange(),
+											fromScan.rangeMax(),
 											LaserScan::kXY,
 											fromScan.localTransform()));
 						}
 						else
 						{
-							fromSignature.sensorData().setLaserScanRaw(
+							fromSignature.sensorData().setLaserScan(
 									LaserScan(
 											util3d::laserScanFromPointCloud(*fromCloudFiltered, fromScan.localTransform().inverse()),
 											maxLaserScansFrom,
-											fromScan.maxRange(),
+											fromScan.rangeMax(),
 											LaserScan::kXYZ,
 											fromScan.localTransform()));
 						}
 						if(toScan.is2d())
 						{
-							toSignature.sensorData().setLaserScanRaw(
+							toSignature.sensorData().setLaserScan(
 									LaserScan(
 											util3d::laserScan2dFromPointCloud(*toCloudFiltered, (guess*toScan.localTransform()).inverse()),
 											maxLaserScansTo,
-											toScan.maxRange(),
+											toScan.rangeMax(),
 											LaserScan::kXY,
 											toScan.localTransform()));
 						}
 						else
 						{
-							toSignature.sensorData().setLaserScanRaw(
+							toSignature.sensorData().setLaserScan(
 									LaserScan(
 											util3d::laserScanFromPointCloud(*toCloudFiltered, (guess*toScan.localTransform()).inverse()),
 											maxLaserScansTo,
-											toScan.maxRange(),
+											toScan.rangeMax(),
 											LaserScan::kXYZ,
 											toScan.localTransform()));
 						}
@@ -948,7 +960,7 @@ Transform RegistrationIcp::computeTransformationImpl(
 					{
 						// Load point clouds
 						DP data = laserScanToDP(fromScan);
-						DP ref = laserScanToDP(LaserScan(toScan.data(), toScan.maxPoints(), toScan.maxRange(), toScan.format(), guess*toScan.localTransform()));
+						DP ref = laserScanToDP(LaserScan(toScan.data(), toScan.maxPoints(), toScan.rangeMax(), toScan.format(), guess*toScan.localTransform()));
 
 						// Compute the transformation to express data in ref
 						PM::TransformationParameters T;
@@ -961,8 +973,11 @@ Transform RegistrationIcp::computeTransformationImpl(
 							{
 								// temporary set PointToPointErrorMinimizer
 								PM::ICP & icpTmp = icp;
+#if POINTMATCHER_VERSION_INT >= 10300
+								icpTmp.errorMinimizer = PM::get().ErrorMinimizerRegistrar.create("PointToPointErrorMinimizer");
+#else
 								icpTmp.errorMinimizer.reset(PM::get().ErrorMinimizerRegistrar.create("PointToPointErrorMinimizer"));
-
+#endif
 								for(PM::OutlierFilters::iterator iter=icpTmp.outlierFilters.begin(); iter!=icpTmp.outlierFilters.end();)
 								{
 									if((*iter)->className.compare("SurfaceNormalOutlierFilter") == 0)

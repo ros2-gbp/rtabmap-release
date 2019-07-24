@@ -60,10 +60,11 @@ class NodeItem: public QGraphicsEllipseItem
 {
 public:
 	// in meter
-	NodeItem(int id, int mapId, const Transform & pose, float radius) :
+	NodeItem(int id, int mapId, const Transform & pose, float radius, int weight=-1) :
 		QGraphicsEllipseItem(QRectF(-radius*100.0f,-radius*100.0f,radius*100.0f*2.0f,radius*100.0f*2.0f)),
 		_id(id),
 		_mapId(mapId),
+		_weight(weight),
 		_pose(pose),
 		_line(0)
 	{
@@ -106,7 +107,14 @@ public:
 protected:
 	virtual void hoverEnterEvent ( QGraphicsSceneHoverEvent * event )
 	{
-		this->setToolTip(QString("%1 [%2] %3").arg(_id).arg(_mapId).arg(_pose.prettyPrint().c_str()));
+		if(_weight>=0)
+		{
+			this->setToolTip(QString("%1 [map=%2, w=%3] %4").arg(_id).arg(_mapId).arg(_weight).arg(_pose.prettyPrint().c_str()));
+		}
+		else
+		{
+			this->setToolTip(QString("%1 [map=%2] %3").arg(_id).arg(_mapId).arg(_pose.prettyPrint().c_str()));
+		}
 		this->setScale(2);
 		QGraphicsEllipseItem::hoverEnterEvent(event);
 	}
@@ -120,6 +128,7 @@ protected:
 private:
 	int _id;
 	int _mapId;
+	int _weight;
 	Transform _pose;
 	QGraphicsLineItem * _line;
 };
@@ -234,6 +243,7 @@ GraphViewer::GraphViewer(QWidget * parent) :
 		_loopClosureUserColor(Qt::red),
 		_loopClosureVirtualColor(Qt::magenta),
 		_neighborMergedColor(QColor(255,170,0)),
+		_landmarkColor(Qt::darkGreen),
 		_loopClosureRejectedColor(Qt::black),
 		_localPathColor(Qt::cyan),
 		_globalPathColor(Qt::darkMagenta),
@@ -242,6 +252,8 @@ GraphViewer::GraphViewer(QWidget * parent) :
 		_loopIntraSessionColor(Qt::red),
 		_loopInterSessionColor(Qt::green),
 		_intraInterSessionColors(false),
+		_worldMapRotation(0.0f),
+		_world(0),
 		_root(0),
 		_graphRoot(0),
 		_globalPathRoot(0),
@@ -262,19 +274,23 @@ GraphViewer::GraphViewer(QWidget * parent) :
 	_workingDirectory = QDir::homePath();
 
 	this->scene()->clear();
+	_world = (QGraphicsItem *)this->scene()->addEllipse(QRectF(-0.0001,-0.0001,0.0001,0.0001));
 	_root = (QGraphicsItem *)this->scene()->addEllipse(QRectF(-0.0001,-0.0001,0.0001,0.0001));
+	_root->setParentItem(_world);
 
 	// add referential
 	_originReferential = new QGraphicsItemGroup();
 	this->scene()->addItem(_originReferential); // ownership transfered
 	QGraphicsLineItem * item = this->scene()->addLine(0,0,0,-100, QPen(QBrush(Qt::red), _linkWidth));
-	item->setZValue(100);
+	item->setZValue(1);
 	item->setParentItem(_root);
 	_originReferential->addToGroup(item);
 	item = this->scene()->addLine(0,0,-100,0, QPen(QBrush(Qt::green), _linkWidth));
-	item->setZValue(100);
+	item->setZValue(1);
 	item->setParentItem(_root);
 	_originReferential->addToGroup(item);
+	_originReferential->setZValue(1);
+	_originReferential->setParentItem(_root);
 
 	// current pose
 	_referential = new QGraphicsItemGroup();
@@ -287,6 +303,8 @@ GraphViewer::GraphViewer(QWidget * parent) :
 	item->setZValue(100);
 	item->setParentItem(_root);
 	_referential->addToGroup(item);
+	_referential->setZValue(100);
+	_referential->setParentItem(_root);
 
 	_localRadius = this->scene()->addEllipse(-0.0001,-0.0001,0.0001,0.0001);
 	_localRadius->setZValue(1);
@@ -327,9 +345,16 @@ GraphViewer::~GraphViewer()
 {
 }
 
+void GraphViewer::setWorldMapRotation(const float & theta)
+{
+	_worldMapRotation = theta;
+	setOrientationENU(isOrientationENU());
+}
+
 void GraphViewer::updateGraph(const std::map<int, Transform> & poses,
 				 const std::multimap<int, Link> & constraints,
-				 const std::map<int, int> & mapIds)
+				 const std::map<int, int> & mapIds,
+				 const std::map<int, int> & weights)
 {
 	UTimer timer;
 	bool wasVisible = _graphRoot->isVisible();
@@ -341,7 +366,8 @@ void GraphViewer::updateGraph(const std::map<int, Transform> & poses,
 	for(QMap<int, NodeItem*>::iterator iter = _nodeItems.begin(); iter!=_nodeItems.end(); ++iter)
 	{
 		iter.value()->hide();
-		iter.value()->setColor(_nodeColor); // reset color
+		iter.value()->setColor(iter.key()<0?QColor(255-_nodeColor.red(), 255-_nodeColor.green(), 255-_nodeColor.blue()):_nodeColor); // reset color
+		iter.value()->setZValue(iter.key()<0?21:20);
 	}
 	for(QMultiMap<int, LinkItem*>::iterator iter = _linkItems.begin(); iter!=_linkItems.end(); ++iter)
 	{
@@ -362,10 +388,10 @@ void GraphViewer::updateGraph(const std::map<int, Transform> & poses,
 			{
 				// create node item
 				const Transform & pose = iter->second;
-				NodeItem * item = new NodeItem(iter->first, uContains(mapIds, iter->first)?mapIds.at(iter->first):-1, pose, _nodeRadius);
+				NodeItem * item = new NodeItem(iter->first, uContains(mapIds, iter->first)?mapIds.at(iter->first):-1, pose, _nodeRadius, uContains(weights, iter->first)?weights.at(iter->first):-1);
 				this->scene()->addItem(item);
-				item->setZValue(20);
-				item->setColor(_nodeColor);
+				item->setZValue(iter->first<0?21:20);
+				item->setColor(iter->first<0?QColor(255-_nodeColor.red(), 255-_nodeColor.green(), 255-_nodeColor.blue()):_nodeColor);
 				item->setParentItem(_graphRoot);
 				item->setVisible(_nodeVisible);
 				_nodeItems.insert(iter->first, item);
@@ -453,6 +479,10 @@ void GraphViewer::updateGraph(const std::map<int, Transform> & poses,
 				{
 					linkItem->setColor(_loopClosureUserColor);
 				}
+				else if(iter->second.type() == Link::kLandmark)
+				{
+					linkItem->setColor(_landmarkColor);
+				}
 				else if(iter->second.type() == Link::kLocalSpaceClosure || iter->second.type() == Link::kLocalTimeClosure)
 				{
 					if(_intraInterSessionColors)
@@ -491,10 +521,7 @@ void GraphViewer::updateGraph(const std::map<int, Transform> & poses,
 					if(iter->second.type() != Link::kNeighbor &&
 					   iter->second.type() != Link::kNeighborMerged)
 					{
-						float linearError = uMax3(
-								fabs(iter->second.transform().x() - t.x()),
-								fabs(iter->second.transform().y() - t.y()),
-								fabs(iter->second.transform().z() - t.z()));
+						float linearError = fabs(iter->second.transform().getNorm() - t.getNorm());
 						if(linearError > _loopClosureOutlierThr)
 						{
 							linkItem->setColor(_loopClosureRejectedColor);
@@ -808,7 +835,10 @@ void GraphViewer::updateGPSGraph(
 
 void GraphViewer::updateReferentialPosition(const Transform & t)
 {
-	QTransform qt(t.r11(), t.r12(), t.r21(), t.r22(), -t.o24()*100.0f, -t.o14()*100.0f);
+	QTransform qt;
+	qt.translate(-t.o24()*100.0f, -t.o14()*100.0f);
+	qt.rotateRadians(-t.theta());
+
 	_referential->setTransform(qt);
 	_localRadius->setTransform(qt);
 
@@ -839,7 +869,7 @@ void GraphViewer::updateMap(const cv::Mat & map8U, float resolution, float xMin,
 	}
 }
 
-void GraphViewer::updatePosterior(const std::map<int, float> & posterior, float max)
+void GraphViewer::updatePosterior(const std::map<int, float> & posterior, float max, int zValueOffset)
 {
 	//find max
 	if(max <= 0.0f)
@@ -861,8 +891,9 @@ void GraphViewer::updatePosterior(const std::map<int, float> & posterior, float 
 			{
 				float v = jter->second>max?max:jter->second;
 				iter.value()->setColor(QColor::fromHsvF((1-v/max)*240.0f/360.0f, 1, 1, 1)); //0=red 240=blue
+				iter.value()->setZValue(iter.value()->zValue()+zValueOffset);
 			}
-			else
+			else if(iter.key() > 0)
 			{
 				iter.value()->setColor(QColor::fromHsvF(240.0f/360.0f, 1, 1, 1)); // blue
 			}
@@ -922,7 +953,7 @@ void GraphViewer::setCurrentGoalID(int id, const Transform & pose)
 
 void GraphViewer::setLocalRadius(float radius)
 {
-	_localRadius->setRect(-radius, -radius, radius*2, radius*2);
+	_localRadius->setRect(-radius*100, -radius*100, radius*200, radius*200);
 }
 
 void GraphViewer::updateLocalPath(const std::vector<int> & localPath)
@@ -1011,6 +1042,8 @@ void GraphViewer::clearGraph()
 	qDeleteAll(_gpsLinkItems);
 	_gpsLinkItems.clear();
 
+	_root->resetTransform();
+	_worldMapRotation = 0.0f;
 	_referential->resetTransform();
 	_localRadius->resetTransform();
 	this->scene()->setSceneRect(this->scene()->itemsBoundingRect());  // Re-shrink the scene to it's bounding contents
@@ -1300,6 +1333,17 @@ void GraphViewer::setNeighborMergedColor(const QColor & color)
 		}
 	}
 }
+void GraphViewer::setLandmarkColor(const QColor & color)
+{
+	_landmarkColor = color;
+	for(QMultiMap<int, LinkItem*>::iterator iter=_linkItems.begin(); iter!=_linkItems.end(); ++iter)
+	{
+		if(iter.value()->linkType() == Link::kLandmark)
+		{
+			iter.value()->setColor(_landmarkColor);
+		}
+	}
+}
 void GraphViewer::setRejectedLoopClosureColor(const QColor & color)
 {
 	_loopClosureRejectedColor = color;
@@ -1439,6 +1483,20 @@ void GraphViewer::setOrientationENU(bool enabled)
 		_orientationENU = enabled;
 		this->rotate(_orientationENU?90:270);
 	}
+	if(_orientationENU)
+	{
+		QTransform t;
+		t.rotateRadians(_worldMapRotation);
+		_root->setTransform(t);
+	}
+	else
+	{
+		_root->resetTransform();
+	}
+	if(_nodeItems.size() || _linkItems.size())
+	{
+		this->scene()->setSceneRect(this->scene()->itemsBoundingRect());  // Re-shrink the scene to it's bounding contents
+	}
 }
 
 void GraphViewer::restoreDefaults()
@@ -1452,6 +1510,7 @@ void GraphViewer::restoreDefaults()
 	setUserLoopClosureColor(Qt::red);
 	setVirtualLoopClosureColor(Qt::magenta);
 	setNeighborMergedColor(QColor(255,170,0));
+	setLandmarkColor(Qt::darkGreen);
 	setGridMapVisible(true);
 	setGraphVisible(true);
 	setGlobalPathVisible(true);
@@ -1501,6 +1560,7 @@ void GraphViewer::contextMenuEvent(QContextMenuEvent * event)
 	QAction * aChangeUserLoopColor = menuLink->addAction(tr("User loop closure"));
 	QAction * aChangeVirtualLoopColor = menuLink->addAction(tr("Virtual loop closure"));
 	QAction * aChangeNeighborMergedColor = menuLink->addAction(tr("Neighbor merged"));
+	QAction * aChangeLandmarkColor = menuLink->addAction(tr("Landmark"));
 	QAction * aChangeRejectedLoopColor = menuLink->addAction(tr("Outlier loop closure"));
 	QAction * aChangeRejectedLoopThr = menuLink->addAction(tr("Set outlier threshold..."));
 	QAction * aChangeLocalPathColor = menuLink->addAction(tr("Local path"));
@@ -1517,11 +1577,12 @@ void GraphViewer::contextMenuEvent(QContextMenuEvent * event)
 	aChangeUserLoopColor->setIcon(createIcon(_loopClosureUserColor));
 	aChangeVirtualLoopColor->setIcon(createIcon(_loopClosureVirtualColor));
 	aChangeNeighborMergedColor->setIcon(createIcon(_neighborMergedColor));
+	aChangeLandmarkColor->setIcon(createIcon(_landmarkColor));
 	aChangeRejectedLoopColor->setIcon(createIcon(_loopClosureRejectedColor));
 	aChangeLocalPathColor->setIcon(createIcon(_localPathColor));
 	aChangeGlobalPathColor->setIcon(createIcon(_globalPathColor));
 	aChangeGTColor->setIcon(createIcon(_gtPathColor));
-	aChangeGPSColor->setIcon(createIcon(_gpsPathColor));
+	aChangeGPSColor->setIcon(createIcon(_gpsPathColor));;
 	aChangeIntraSessionLoopColor->setIcon(createIcon(_loopIntraSessionColor));
 	aChangeInterSessionLoopColor->setIcon(createIcon(_loopInterSessionColor));
 	aChangeNeighborColor->setIconVisibleInMenu(true);
@@ -1798,6 +1859,10 @@ void GraphViewer::contextMenuEvent(QContextMenuEvent * event)
 		{
 			color = _neighborMergedColor;
 		}
+		else if(r == aChangeLandmarkColor)
+		{
+			color = _landmarkColor;
+		}
 		else if(r == aChangeRejectedLoopColor)
 		{
 			color = _loopClosureRejectedColor;
@@ -1861,6 +1926,10 @@ void GraphViewer::contextMenuEvent(QContextMenuEvent * event)
 			else if(r == aChangeNeighborMergedColor)
 			{
 				this->setNeighborMergedColor(color);
+			}
+			else if(r == aChangeLandmarkColor)
+			{
+				this->setLandmarkColor(color);
 			}
 			else if(r == aChangeRejectedLoopColor)
 			{
