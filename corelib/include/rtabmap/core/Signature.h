@@ -82,7 +82,7 @@ public:
 	void addLinks(const std::map<int, Link> & links);
 	void addLink(const Link & link);
 
-	bool hasLink(int idTo) const;
+	bool hasLink(int idTo, Link::Type type = Link::kUndef) const;
 
 	void changeLinkIds(int idFrom, int idTo);
 
@@ -90,10 +90,13 @@ public:
 	void removeLink(int idTo);
 	void removeVirtualLinks();
 
+	void addLandmark(const Link & landmark) {_landmarks.insert(std::make_pair(landmark.to(), landmark));}
+	const std::map<int, Link> & getLandmarks() const {return _landmarks;}
+
 	void setSaved(bool saved) {_saved = saved;}
 	void setModified(bool modified) {_modified = modified; _linksModified = modified;}
 
-	const std::map<int, Link> & getLinks() const {return _links;}
+	const std::multimap<int, Link> & getLinks() const {return _links;}
 	bool isSaved() const {return _saved;}
 	bool isModified() const {return _modified || _linksModified;}
 	bool isLinksModified() const {return _linksModified;}
@@ -140,7 +143,8 @@ private:
 	int _id;
 	int _mapId;
 	double _stamp;
-	std::map<int, Link> _links; // id, transform
+	std::multimap<int, Link> _links; // id, transform
+	std::map<int, Link> _landmarks;
 	int _weight;
 	std::string _label;
 	bool _saved; // If it's saved to bd

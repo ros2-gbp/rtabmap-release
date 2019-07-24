@@ -37,6 +37,14 @@ namespace rtabmap {
 
 class RTABMAP_EXP StereoDense {
 public:
+	enum Type {
+		kTypeBM = 0,
+		kTypeSGBM = 1
+	};
+	static StereoDense * create(const ParametersMap & parameters);
+	static StereoDense * create(StereoDense::Type type, const ParametersMap & parameters = ParametersMap());
+
+public:
 	virtual ~StereoDense() {}
 
 	virtual void parseParameters(const ParametersMap & parameters) {}
@@ -46,29 +54,6 @@ public:
 
 protected:
 	StereoDense(const ParametersMap & parameters = ParametersMap()) {}
-};
-
-class RTABMAP_EXP StereoBM : public StereoDense {
-public:
-	StereoBM(int blockSize, int numDisparities);
-	StereoBM(const ParametersMap & parameters = ParametersMap());
-	virtual ~StereoBM() {}
-
-	virtual void parseParameters(const ParametersMap & parameters);
-	virtual cv::Mat computeDisparity(
-			const cv::Mat & leftImage,
-			const cv::Mat & rightImage) const;
-
-private:
-	int blockSize_;         //15
-	int minDisparity_;      //0
-	int numDisparities_;    //64
-	int preFilterSize_;     //9
-	int preFilterCap_;      //31
-	int uniquenessRatio_;   //15
-	int textureThreshold_;  //10
-	int speckleWindowSize_; //100
-	int speckleRange_;      //4
 };
 
 } /* namespace rtabmap */

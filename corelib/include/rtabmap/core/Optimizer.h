@@ -38,6 +38,19 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 namespace rtabmap {
 
+class FeatureBA
+{
+public:
+	FeatureBA(const cv::KeyPoint & kptIn, const float & depthIn = 0.0f, const cv::Mat & descriptorIn = cv::Mat()):
+		kpt(kptIn),
+		depth(depthIn),
+		descriptor(descriptorIn)
+	{}
+	cv::KeyPoint kpt;
+	float depth;
+	cv::Mat descriptor;
+};
+
 ////////////////////////////////////////////
 // Graph optimizers
 ////////////////////////////////////////////
@@ -56,13 +69,12 @@ public:
 	static Optimizer * create(Optimizer::Type type, const ParametersMap & parameters = ParametersMap());
 
 	// Get connected poses and constraints from a set of links
-	static void getConnectedGraph(
+	void getConnectedGraph(
 			int fromId,
 			const std::map<int, Transform> & posesIn,
-			const std::multimap<int, Link> & linksIn, // only one link between two poses
+			const std::multimap<int, Link> & linksIn,
 			std::map<int, Transform> & posesOut,
-			std::multimap<int, Link> & linksOut,
-			int depth = 0);
+			std::multimap<int, Link> & linksOut) const;
 
 public:
 	virtual ~Optimizer() {}
@@ -76,6 +88,8 @@ public:
 	double epsilon() const {return epsilon_;}
 	bool isRobust() const {return robust_;}
 	bool priorsIgnored() const {return priorsIgnored_;}
+	bool landmarksIgnored() const {return landmarksIgnored_;}
+	float gravitySigma() const {return gravitySigma_;}
 
 	// setters
 	void setIterations(int iterations) {iterations_ = iterations;}
@@ -84,6 +98,8 @@ public:
 	void setEpsilon(double epsilon) {epsilon_ = epsilon;}
 	void setRobust(bool enabled) {robust_ = enabled;}
 	void setPriorsIgnored(bool enabled) {priorsIgnored_ = enabled;}
+	void setLandmarksIgnored(bool enabled) {landmarksIgnored_ = enabled;}
+	void setGravitySigma(float value) {gravitySigma_ = value;}
 
 	virtual void parseParameters(const ParametersMap & parameters);
 
@@ -118,20 +134,30 @@ public:
 			const std::multimap<int, Link> & links,
 			const std::map<int, CameraModel> & models, // in case of stereo, Tx should be set
 			std::map<int, cv::Point3f> & points3DMap,
-			const std::map<int, std::map<int, cv::Point3f> > & wordReferences, // <ID words, IDs frames + keypoint(x,y,depth)>
+			const std::map<int, std::map<int, FeatureBA> > & wordReferences, // <ID words, IDs frames + keypoint/depth/descriptor>
 			std::set<int> * outliers = 0);
 
 	std::map<int, Transform> optimizeBA(
 			int rootId,
 			const std::map<int, Transform> & poses,
 			const std::multimap<int, Link> & links,
-			const std::map<int, Signature> & signatures);
+			const std::map<int, Signature> & signatures,
+			std::map<int, cv::Point3f> & points3DMap,
+			std::map<int, std::map<int, FeatureBA> > & wordReferences, // <ID words, IDs frames + keypoint/depth/descriptor>
+			bool rematchFeatures = false);
+
+	std::map<int, Transform> optimizeBA(
+			int rootId,
+			const std::map<int, Transform> & poses,
+			const std::multimap<int, Link> & links,
+			const std::map<int, Signature> & signatures,
+			bool rematchFeatures = false);
 
 	Transform optimizeBA(
 			const Link & link,
 			const CameraModel & model,
 			std::map<int, cv::Point3f> & points3DMap,
-			const std::map<int, std::map<int, cv::Point3f> > & wordReferences,
+			const std::map<int, std::map<int, FeatureBA> > & wordReferences,
 			std::set<int> * outliers = 0);
 
 	void computeBACorrespondences(
@@ -139,7 +165,8 @@ public:
 			const std::multimap<int, Link> & links,
 			const std::map<int, Signature> & signatures,
 			std::map<int, cv::Point3f> & points3DMap,
-			std::map<int, std::map<int, cv::Point3f> > & wordReferences); // <ID words, IDs frames + keypoint/depth>
+			std::map<int, std::map<int, FeatureBA > > & wordReferences, // <ID words, IDs frames + keypoint/depth/descriptor>
+			bool rematchFeatures = false);
 
 protected:
 	Optimizer(
@@ -148,7 +175,9 @@ protected:
 			bool covarianceIgnored = Parameters::defaultOptimizerVarianceIgnored(),
 			double epsilon         = Parameters::defaultOptimizerEpsilon(),
 			bool robust            = Parameters::defaultOptimizerRobust(),
-			bool priorsIgnored     = Parameters::defaultOptimizerPriorsIgnored());
+			bool priorsIgnored     = Parameters::defaultOptimizerPriorsIgnored(),
+			bool landmarksIgnored  = Parameters::defaultOptimizerLandmarksIgnored(),
+			float gravitySigma     = Parameters::defaultOptimizerGravitySigma());
 	Optimizer(const ParametersMap & parameters);
 
 private:
@@ -158,6 +187,8 @@ private:
 	double epsilon_;
 	bool robust_;
 	bool priorsIgnored_;
+	bool landmarksIgnored_;
+	float gravitySigma_;
 };
 
 } /* namespace rtabmap */
