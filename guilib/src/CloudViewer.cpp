@@ -1328,14 +1328,17 @@ void CloudViewer::removeCoordinate(const std::string & id)
 	}
 }
 
-void CloudViewer::removeAllCoordinates()
+void CloudViewer::removeAllCoordinates(const std::string & prefix)
 {
 	std::set<std::string> coordinates = _coordinates;
 	for(std::set<std::string>::iterator iter = coordinates.begin(); iter!=coordinates.end(); ++iter)
 	{
-		this->removeCoordinate(*iter);
+		if(prefix.empty() || iter->find(prefix) != std::string::npos)
+		{
+			this->removeCoordinate(*iter);
+		}
 	}
-	UASSERT(_coordinates.empty());
+	UASSERT(!prefix.empty() || _coordinates.empty());
 }
 
 void CloudViewer::addOrUpdateLine(
@@ -2127,7 +2130,7 @@ std::string CloudViewer::getIdByActor(vtkProp * actor) const
 		if(iter->second.GetPointer() == actor)
 		{
 			std::string id = iter->first;
-			while(id.back() == '*')
+			while(id.size() && id.at(id.size()-1) == '*')
 			{
 				id.erase(id.size()-1);
 			}
@@ -2650,6 +2653,30 @@ bool CloudViewer::isCameraLockZ() const
 bool CloudViewer::isCameraOrtho() const
 {
 	return _aCameraOrtho->isChecked();
+}
+bool CloudViewer::isBackfaceCulling() const
+{
+	return _aBackfaceCulling->isChecked();
+}
+bool CloudViewer::isFrontfaceCulling() const
+{
+	return _frontfaceCulling;
+}
+bool CloudViewer::isPolygonPicking() const
+{
+	return _aPolygonPicking->isChecked();
+}
+bool CloudViewer::isLightingOn() const
+{
+	return _aSetLighting->isChecked();
+}
+bool CloudViewer::isShadingOn() const
+{
+	return _aSetFlatShading->isChecked();
+}
+bool CloudViewer::isEdgeVisible() const
+{
+	return _aSetEdgeVisibility->isChecked();
 }
 double CloudViewer::getRenderingRate() const
 {
