@@ -256,10 +256,12 @@ public:
 
 	void addOrUpdateFrustum(
 			const std::string & id,
-			const Transform & transform,
+			const Transform & pose,
 			const Transform & localTransform,
 			double scale,
-			const QColor & color = QColor());
+			const QColor & color = QColor(),
+			float fovX=1.1,
+			float fovY=0.85);
 	bool updateFrustumPose(
 			const std::string & id,
 			const Transform & pose);
@@ -290,6 +292,8 @@ public:
 	void setTrajectoryShown(bool shown);
 	void setTrajectorySize(unsigned int value);
 	void clearTrajectory();
+	bool isCameraAxisShown() const;
+	void setCameraAxisShown(bool shown);
 	bool isFrustumShown() const;
 	float getFrustumScale() const;
 	QColor getFrustumColor() const;
@@ -359,6 +363,10 @@ public:
 	float getNormalsScale() const;
 	void setNormalsStep(int step);
 	void setNormalsScale(float scale);
+	bool isIntensityRedColormap() const;
+	float getIntensityMax() const;
+	void setIntensityRedColormap(bool value);
+	void setIntensityMax(float value);
 	void buildPickingLocator(bool enable);
 	const std::map<std::string, vtkSmartPointer<vtkOBBTree> > & getLocators() const {return _locators;}
 
@@ -400,6 +408,7 @@ private:
     QAction * _aShowTrajectory;
     QAction * _aSetTrajectorySize;
     QAction * _aClearTrajectory;
+    QAction * _aShowCameraAxis;
     QAction * _aShowFrustum;
     QAction * _aSetFrustumScale;
     QAction * _aSetFrustumColor;
@@ -409,6 +418,8 @@ private:
     QAction * _aShowNormals;
 	QAction * _aSetNormalsStep;
 	QAction * _aSetNormalsScale;
+	QAction * _aSetIntensityRedColormap;
+	QAction * _aSetIntensityMaximum;
     QAction * _aSetBackgroundColor;
     QAction * _aSetRenderingRate;
     QAction * _aSetLighting;
@@ -446,6 +457,7 @@ private:
     bool _frontfaceCulling;
     double _renderingRate;
     vtkProp * _octomapActor;
+    float _intensityAbsMax;
 };
 
 } /* namespace rtabmap */

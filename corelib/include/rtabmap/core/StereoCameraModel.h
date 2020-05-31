@@ -43,7 +43,7 @@ public:
 			const cv::Size & imageSize2,
 			const cv::Mat & K2, const cv::Mat & D2, const cv::Mat & R2, const cv::Mat & P2,
 			const cv::Mat & R, const cv::Mat & T, const cv::Mat & E, const cv::Mat & F,
-			const Transform & localTransform = Transform::getIdentity());
+			const Transform & localTransform = Transform(0,0,1,0, -1,0,0,0, 0,-1,0,0));
 
 	// if R and T are not null, left and right camera models should be valid to be rectified.
 	StereoCameraModel(
@@ -68,7 +68,7 @@ public:
 			double cx,
 			double cy,
 			double baseline,
-			const Transform & localTransform = Transform::getIdentity(),
+			const Transform & localTransform = Transform(0,0,1,0, -1,0,0,0, 0,-1,0,0),
 			const cv::Size & imageSize = cv::Size(0,0));
 	//minimal to be saved
 	StereoCameraModel(
@@ -78,7 +78,7 @@ public:
 			double cx,
 			double cy,
 			double baseline,
-			const Transform & localTransform = Transform::getIdentity(),
+			const Transform & localTransform = Transform(0,0,1,0, -1,0,0,0, 0,-1,0,0),
 			const cv::Size & imageSize = cv::Size(0,0));
 	virtual ~StereoCameraModel() {}
 
@@ -86,7 +86,7 @@ public:
 	bool isValidForRectification() const {return left_.isValidForRectification() && right_.isValidForRectification();}
 
 	void initRectificationMap() {left_.initRectificationMap(); right_.initRectificationMap();}
-	bool isRectificationMapInitialized() {return left_.isRectificationMapInitialized() && right_.isRectificationMapInitialized();}
+	bool isRectificationMapInitialized() const {return left_.isRectificationMapInitialized() && right_.isRectificationMapInitialized();}
 
 	void setName(const std::string & name, const std::string & leftSuffix = "left", const std::string & rightSuffix = "right");
 	const std::string & name() const {return name_;}
@@ -124,6 +124,9 @@ public:
 
 	const std::string & getLeftSuffix() const {return leftSuffix_;}
 	const std::string & getRightSuffix() const {return rightSuffix_;}
+
+private:
+	void updateStereoRectification();
 
 private:
 	std::string leftSuffix_;

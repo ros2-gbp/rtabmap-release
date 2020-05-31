@@ -156,16 +156,22 @@ public:
 	void rejectLastLoopClosure();
 	void deleteLastLocation();
 	void setOptimizedPoses(const std::map<int, Transform> & poses);
-	void get3DMap(std::map<int, Signature> & signatures,
-			std::map<int, Transform> & poses,
-			std::multimap<int, Link> & constraints,
-			bool optimized,
-			bool global) const;
+	Signature getSignatureCopy(int id, bool images, bool scan, bool userData, bool occupancyGrid) const;
+	RTABMAP_DEPRECATED(
+		void get3DMap(std::map<int, Signature> & signatures,
+				std::map<int, Transform> & poses,
+				std::multimap<int, Link> & constraints,
+				bool optimized,
+				bool global) const, "Use getGraph() instead with withImages=true, withScan=true, withUserData=true and withGrid=true.");
 	void getGraph(std::map<int, Transform> & poses,
 			std::multimap<int, Link> & constraints,
 			bool optimized,
 			bool global,
-			std::map<int, Signature> * signatures = 0);
+			std::map<int, Signature> * signatures = 0,
+			bool withImages = false,
+			bool withScan = false,
+			bool withUserData = false,
+			bool withGrid = false) const;
 	int detectMoreLoopClosures(
 			float clusterRadius = 0.5f,
 			float clusterAngle = M_PI/6.0f,
@@ -174,6 +180,7 @@ public:
 			bool interSession = true,
 			const ProgressState * state = 0);
 	int refineLinks();
+	bool addLink(const Link & link);
 	cv::Mat getInformation(const cv::Mat & covariance) const;
 
 	int getPathStatus() const {return _pathStatus;} // -1=failed 0=idle/executing 1=success
@@ -230,6 +237,7 @@ private:
 	unsigned int _maxMemoryAllowed; // signatures count in WM
 	float _loopThr;
 	float _loopRatio;
+	float _maxLoopClosureDistance;
 	bool _verifyLoopClosureHypothesis;
 	unsigned int _maxRetrieved;
 	unsigned int _maxLocalRetrieved;
@@ -255,6 +263,7 @@ private:
 	float _proximityFilteringRadius;
 	bool _proximityRawPosesUsed;
 	float _proximityAngle;
+	bool _proximityOdomGuess;
 	std::string _databasePath;
 	bool _optimizeFromGraphEnd;
 	float _optimizationMaxError;
@@ -275,6 +284,7 @@ private:
 	double _lastProcessTime;
 	bool _someNodesHaveBeenTransferred;
 	float _distanceTravelled;
+	bool _optimizeFromGraphEndChanged;
 
 	// Abstract classes containing all loop closure
 	// strategies for a type of signature or configuration.
@@ -304,6 +314,7 @@ private:
 	bool _currentSessionHasGPS;
 	std::map<int, Transform> _odomCachePoses;       // used in localization mode to reject loop closures
 	std::multimap<int, Link> _odomCacheConstraints; // used in localization mode to reject loop closures
+	std::map<int, Transform> _odomCacheAddLink; // used in localization mode when adding external link
 
 	// Planning stuff
 	int _pathStatus;

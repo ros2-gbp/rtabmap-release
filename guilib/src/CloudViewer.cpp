@@ -68,6 +68,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <vtkOpenGLRenderWindow.h>
 #include <vtkPointPicker.h>
 #include <vtkTextActor.h>
+#include <vtkTexture.h>
 #include <vtkOBBTree.h>
 #include <vtkObjectFactory.h>
 #include <vtkQuad.h>
@@ -89,6 +90,7 @@ CloudViewer::CloudViewer(QWidget *parent, CloudViewerInteractorStyle * style) :
 		_aShowTrajectory(0),
 		_aSetTrajectorySize(0),
 		_aClearTrajectory(0),
+		_aShowCameraAxis(0),
 		_aShowFrustum(0),
 		_aSetFrustumScale(0),
 		_aSetFrustumColor(0),
@@ -120,7 +122,8 @@ CloudViewer::CloudViewer(QWidget *parent, CloudViewerInteractorStyle * style) :
 		_currentBgColor(Qt::black),
 		_frontfaceCulling(false),
 		_renderingRate(5.0),
-		_octomapActor(0)
+		_octomapActor(0),
+		_intensityAbsMax(0.0f)
 {
 	UDEBUG("");
 	this->setMinimumSize(200, 200);
@@ -202,7 +205,10 @@ void CloudViewer::clear()
 	this->removeOccupancyGridMap();
 	this->removeOctomap();
 
-	this->addOrUpdateCoordinate("reference", Transform::getIdentity(), 0.2);
+	if(_aShowCameraAxis->isChecked())
+	{
+		this->addOrUpdateCoordinate("reference", Transform::getIdentity(), 0.2);
+	}
 	_lastPose.setNull();
 	if(_aLockCamera->isChecked() || _aFollowCamera->isChecked())
 	{
@@ -234,6 +240,9 @@ void CloudViewer::createMenu()
 	_aShowTrajectory->setChecked(true);
 	_aSetTrajectorySize = new QAction("Set trajectory size...", this);
 	_aClearTrajectory = new QAction("Clear trajectory", this);
+	_aShowCameraAxis= new QAction("Show base frame", this);
+	_aShowCameraAxis->setCheckable(true);
+	_aShowCameraAxis->setChecked(true);
 	_aShowFrustum= new QAction("Show frustum", this);
 	_aShowFrustum->setCheckable(true);
 	_aShowFrustum->setChecked(false);
@@ -247,6 +256,10 @@ void CloudViewer::createMenu()
 	_aShowNormals->setCheckable(true);
 	_aSetNormalsStep = new QAction("Set normals step...", this);
 	_aSetNormalsScale = new QAction("Set normals scale...", this);
+	_aSetIntensityRedColormap = new QAction("Red/Yellow Colormap", this);
+	_aSetIntensityRedColormap->setCheckable(true);
+	_aSetIntensityRedColormap->setChecked(false);
+	_aSetIntensityMaximum = new QAction("Set maximum absolute intensity...", this);
 	_aSetBackgroundColor = new QAction("Set background color...", this);	
 	_aSetRenderingRate = new QAction("Set rendering rate...", this);
 	_aSetLighting = new QAction("Lighting", this);
@@ -298,13 +311,19 @@ void CloudViewer::createMenu()
 	normalsMenu->addAction(_aSetNormalsStep);
 	normalsMenu->addAction(_aSetNormalsScale);
 
+	QMenu * scanMenu = new QMenu("Scan", this);
+	scanMenu->addAction(_aSetIntensityRedColormap);
+	scanMenu->addAction(_aSetIntensityMaximum);
+
 	//menus
 	_menu = new QMenu(this);
 	_menu->addMenu(cameraMenu);
 	_menu->addMenu(trajectoryMenu);
+	_menu->addAction(_aShowCameraAxis);
 	_menu->addMenu(frustumMenu);
 	_menu->addMenu(gridMenu);
 	_menu->addMenu(normalsMenu);
+	_menu->addMenu(scanMenu);
 	_menu->addAction(_aSetBackgroundColor);
 	_menu->addAction(_aSetRenderingRate);
 	_menu->addAction(_aSetLighting);
@@ -352,8 +371,13 @@ void CloudViewer::saveSettings(QSettings & settings, const QString & group) cons
 	settings.setValue("normals_step", this->getNormalsStep());
 	settings.setValue("normals_scale", (double)this->getNormalsScale());
 
+	settings.setValue("intensity_red_colormap", this->isIntensityRedColormap());
+	settings.setValue("intensity_max", (double)this->getIntensityMax());
+
 	settings.setValue("trajectory_shown", this->isTrajectoryShown());
 	settings.setValue("trajectory_size", this->getTrajectorySize());
+
+	settings.setValue("camera_axis_shown", this->isCameraAxisShown());
 
 	settings.setValue("frustum_shown", this->isFrustumShown());
 	settings.setValue("frustum_scale", this->getFrustumScale());
@@ -396,8 +420,13 @@ void CloudViewer::loadSettings(QSettings & settings, const QString & group)
 	this->setNormalsStep(settings.value("normals_step", this->getNormalsStep()).toInt());
 	this->setNormalsScale(settings.value("normals_scale", this->getNormalsScale()).toFloat());
 
+	this->setIntensityRedColormap(settings.value("intensity_red_colormap", this->isIntensityRedColormap()).toBool());
+	this->setIntensityMax(settings.value("intensity_max", this->getIntensityMax()).toFloat());
+
 	this->setTrajectoryShown(settings.value("trajectory_shown", this->isTrajectoryShown()).toBool());
 	this->setTrajectorySize(settings.value("trajectory_size", this->getTrajectorySize()).toUInt());
+
+	this->setCameraAxisShown(settings.value("camera_axis_shown", this->isCameraAxisShown()).toBool());
 
 	this->setFrustumShown(settings.value("frustum_shown", this->isFrustumShown()).toBool());
 	this->setFrustumScale(settings.value("frustum_scale", this->getFrustumScale()).toDouble());
@@ -451,6 +480,137 @@ bool CloudViewer::updateCloudPose(
 	}
 	return false;
 }
+
+class PointCloudColorHandlerIntensityField : public pcl::visualization::PointCloudColorHandler<pcl::PCLPointCloud2>
+{
+	typedef pcl::visualization::PointCloudColorHandler<pcl::PCLPointCloud2>::PointCloud PointCloud;
+	typedef PointCloud::Ptr PointCloudPtr;
+	typedef PointCloud::ConstPtr PointCloudConstPtr;
+
+public:
+	typedef boost::shared_ptr<PointCloudColorHandlerIntensityField > Ptr;
+	typedef boost::shared_ptr<const PointCloudColorHandlerIntensityField > ConstPtr;
+
+	/** \brief Constructor. */
+	PointCloudColorHandlerIntensityField (const PointCloudConstPtr &cloud, float maxAbsIntensity = 0.0f, bool redYellowColormap = true) :
+		pcl::visualization::PointCloudColorHandler<pcl::PCLPointCloud2>::PointCloudColorHandler (cloud),
+		maxAbsIntensity_(maxAbsIntensity),
+		redColormap_(redYellowColormap)
+		{
+		field_idx_  = pcl::getFieldIndex (*cloud, "intensity");
+		if (field_idx_ != -1)
+			capable_ = true;
+		else
+			capable_ = false;
+		}
+
+	/** \brief Empty destructor */
+	virtual ~PointCloudColorHandlerIntensityField () {}
+
+	/** \brief Obtain the actual color for the input dataset as vtk scalars.
+	 * \param[out] scalars the output scalars containing the color for the dataset
+	 * \return true if the operation was successful (the handler is capable and
+	 * the input cloud was given as a valid pointer), false otherwise
+	 */
+	virtual bool
+	getColor (vtkSmartPointer<vtkDataArray> &scalars) const
+	{
+		if (!capable_ || !cloud_)
+			return (false);
+
+		if (!scalars)
+			scalars = vtkSmartPointer<vtkUnsignedCharArray>::New ();
+		scalars->SetNumberOfComponents (3);
+
+		vtkIdType nr_points = cloud_->width * cloud_->height;
+		// Allocate enough memory to hold all colors
+		float * intensities = new float[nr_points];
+		float intensity;
+		size_t point_offset = cloud_->fields[field_idx_].offset;
+		size_t j = 0;
+
+		// If XYZ present, check if the points are invalid
+		int x_idx = pcl::getFieldIndex (*cloud_, "x");
+		if (x_idx != -1)
+		{
+			float x_data, y_data, z_data;
+			size_t x_point_offset = cloud_->fields[x_idx].offset;
+
+			// Color every point
+			for (vtkIdType cp = 0; cp < nr_points; ++cp,
+			point_offset += cloud_->point_step,
+			x_point_offset += cloud_->point_step)
+			{
+				// Copy the value at the specified field
+				memcpy (&intensity, &cloud_->data[point_offset], sizeof (float));
+
+				memcpy (&x_data, &cloud_->data[x_point_offset], sizeof (float));
+				memcpy (&y_data, &cloud_->data[x_point_offset + sizeof (float)], sizeof (float));
+				memcpy (&z_data, &cloud_->data[x_point_offset + 2 * sizeof (float)], sizeof (float));
+
+				if (!std::isfinite (x_data) || !std::isfinite (y_data) || !std::isfinite (z_data))
+					continue;
+
+				intensities[j++] = intensity;
+			}
+		}
+		// No XYZ data checks
+		else
+		{
+			// Color every point
+			for (vtkIdType cp = 0; cp < nr_points; ++cp, point_offset += cloud_->point_step)
+			{
+				// Copy the value at the specified field
+				memcpy (&intensity, &cloud_->data[point_offset], sizeof (float));
+
+				intensities[j++] = intensity;
+			}
+		}
+		if (j != 0)
+		{
+			// Allocate enough memory to hold all colors
+			unsigned char* colors = new unsigned char[j * 3];
+			float min, max;
+			if(maxAbsIntensity_>0.0f)
+			{
+				max = maxAbsIntensity_;
+			}
+			else
+			{
+				uMinMax(intensities, j, min, max);
+			}
+			for(size_t k=0; k<j; ++k)
+			{
+				colors[k*3+0] = colors[k*3+1] = colors[k*3+2] = max>0?(unsigned char)(std::min(intensities[k]/max*255.0f, 255.0f)):255;
+				if(redColormap_)
+				{
+					colors[k*3+0] = 255;
+					colors[k*3+2] = 0;
+				}
+			}
+			reinterpret_cast<vtkUnsignedCharArray*>(&(*scalars))->SetNumberOfTuples (j);
+			reinterpret_cast<vtkUnsignedCharArray*>(&(*scalars))->SetArray (colors, j*3, 0, vtkUnsignedCharArray::VTK_DATA_ARRAY_DELETE);
+		}
+		else
+			reinterpret_cast<vtkUnsignedCharArray*>(&(*scalars))->SetNumberOfTuples (0);
+		//delete [] colors;
+		delete [] intensities;
+		return (true);
+	}
+
+protected:
+	/** \brief Get the name of the class. */
+	virtual std::string
+	getName () const { return ("PointCloudColorHandlerIntensityField"); }
+
+	/** \brief Get the name of the field used. */
+	virtual std::string
+	getFieldName () const { return ("intensity"); }
+
+private:
+	float maxAbsIntensity_;
+	bool redColormap_;
+};
 
 bool CloudViewer::addCloud(
 		const std::string & id,
@@ -512,8 +672,8 @@ bool CloudViewer::addCloud(
 		}
 		else if(hasIntensity)
 		{
-			//rgb
-			colorHandler.reset(new pcl::visualization::PointCloudColorHandlerGenericField<pcl::PCLPointCloud2>(binaryCloud, "intensity"));
+			//intensity
+			colorHandler.reset(new PointCloudColorHandlerIntensityField(binaryCloud, _intensityAbsMax, _aSetIntensityRedColormap->isChecked()));
 			_visualizer->addPointCloud (binaryCloud, colorHandler, origin, orientation, id, 1);
 		}
 		else if(previousColorIndex == 5)
@@ -1139,8 +1299,8 @@ bool CloudViewer::addTextureMesh (
 
   vtkSmartPointer<vtkLODActor> actor = vtkSmartPointer<vtkLODActor>::New ();
   vtkTextureUnitManager* tex_manager = vtkOpenGLRenderWindow::SafeDownCast (_visualizer->getRenderWindow())->GetTextureUnitManager ();
-  if (!tex_manager)
-    return (false);
+    if (!tex_manager)
+      return (false);
  
     vtkSmartPointer<vtkTexture> texture = vtkSmartPointer<vtkTexture>::New ();
     // fill vtkTexture from pcl::TexMaterial structure
@@ -1671,18 +1831,20 @@ static const float frustum_vertices[] = {
     0.0f,  0.0f, 0.0f,
 	1.0f, 1.0f, 1.0f,
 	1.0f, -1.0f, 1.0f,
-	1.0f, -1.0f, -1.0f,
-	1.0f, 1.0f, -1.0f};
+	-1.0f, -1.0f, 1.0f,
+	-1.0f, 1.0f, 1.0f};
 
 static const int frustum_indices[] = {
     1, 2, 3, 4, 1, 0, 2, 0, 3, 0, 4};
 
 void CloudViewer::addOrUpdateFrustum(
 			const std::string & id,
-			const Transform & transform,
+			const Transform & pose,
 			const Transform & localTransform,
 			double scale,
-			const QColor & color)
+			const QColor & color,
+			float fovX,
+			float fovY)
 {
 	if(id.empty())
 	{
@@ -1694,7 +1856,7 @@ void CloudViewer::addOrUpdateFrustum(
 	this->removeFrustum(id);
 #endif
 
-	if(!transform.isNull())
+	if(!pose.isNull())
 	{
 		if(_frustums.find(id)==_frustums.end())
 		{
@@ -1705,9 +1867,9 @@ void CloudViewer::addOrUpdateFrustum(
 			frustumSize/=3;
 			pcl::PointCloud<pcl::PointXYZ> frustumPoints;
 			frustumPoints.resize(frustumSize);
-			float scaleX = 0.5f * scale;
-			float scaleY = 0.4f * scale; //4x3 arbitrary ratio
-			float scaleZ = 0.3f * scale;
+			float scaleX = tan((fovX>0?fovX:1.1)/2.0f) * scale;
+			float scaleY = tan((fovY>0?fovY:0.85)/2.0f) * scale;
+			float scaleZ = scale;
 			QColor c = Qt::gray;
 			if(color.isValid())
 			{
@@ -1716,9 +1878,9 @@ void CloudViewer::addOrUpdateFrustum(
 			Transform opticalRotInv(0, -1, 0, 0, 0, 0, -1, 0, 1, 0, 0, 0);
 
 #if PCL_VERSION_COMPARE(<, 1, 7, 2)
-			Eigen::Affine3f t = (transform*localTransform*opticalRotInv).toEigen3f();
+			Eigen::Affine3f t = (pose*localTransform).toEigen3f();
 #else
-			Eigen::Affine3f t = (localTransform*opticalRotInv).toEigen3f();
+			Eigen::Affine3f t = (localTransform).toEigen3f();
 #endif
 			for(int i=0; i<frustumSize; ++i)
 			{
@@ -1742,7 +1904,7 @@ void CloudViewer::addOrUpdateFrustum(
 			_visualizer->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_OPACITY, c.alphaF(), id);
 		}
 #if PCL_VERSION_COMPARE(>=, 1, 7, 2)
-		if(!this->updateFrustumPose(id, transform))
+		if(!this->updateFrustumPose(id, pose))
 		{
 			UERROR("Failed updating pose of frustum %s!?", id.c_str());
 		}
@@ -1967,6 +2129,25 @@ void CloudViewer::clearTrajectory()
 	_trajectory->clear();
 	_visualizer->removeShape("trajectory");
 	this->update();
+}
+
+bool CloudViewer::isCameraAxisShown() const
+{
+	return _aShowCameraAxis->isChecked();
+}
+
+void CloudViewer::setCameraAxisShown(bool shown)
+{
+	if(!shown)
+	{
+		this->removeCoordinate("reference");
+	}
+	else
+	{
+		this->addOrUpdateCoordinate("reference", Transform::getIdentity(), 0.2);
+	}
+	this->update();
+	_aShowCameraAxis->setChecked(shown);
 }
 
 bool CloudViewer::isFrustumShown() const
@@ -2447,15 +2628,18 @@ void CloudViewer::updateCameraTargetPosition(const Transform & pose)
 				cameras.front().view[2] = _aLockViewZ->isChecked()?1:Fp[10];
 			}
 
+			if(_aShowCameraAxis->isChecked())
+			{
 #if PCL_VERSION_COMPARE(>=, 1, 7, 2)
-			if(_coordinates.find("reference") != _coordinates.end())
-			{
-				this->updateCoordinatePose("reference", pose);
-			}
-			else
+				if(_coordinates.find("reference") != _coordinates.end())
+				{
+					this->updateCoordinatePose("reference", pose);
+				}
+				else
 #endif
-			{
-				this->addOrUpdateCoordinate("reference", pose, 0.2);
+				{
+					this->addOrUpdateCoordinate("reference", pose, 0.2);
+				}
 			}
 
 			_visualizer->setCameraPosition(
@@ -2504,7 +2688,7 @@ void CloudViewer::updateCameraFrustums(const Transform & pose, const std::vector
 				}
 				std::string id = uFormat("reference_frustum_%d", i);
 				this->removeFrustum(id);
-				this->addOrUpdateFrustum(id, pose, baseToCamera, _frustumScale, _frustumColor);
+				this->addOrUpdateFrustum(id, pose, baseToCamera, _frustumScale, _frustumColor, models[i].fovX(), models[i].fovY());
 				if(!baseToCamera.isIdentity())
 				{
 					this->addOrUpdateLine(uFormat("reference_frustum_line_%d", i), pose, pose * baseToCamera, _frustumColor);
@@ -2826,6 +3010,31 @@ void CloudViewer::setNormalsScale(float scale)
 	}
 }
 
+bool CloudViewer::isIntensityRedColormap() const
+{
+	return _aSetIntensityRedColormap->isChecked();
+}
+float CloudViewer::getIntensityMax() const
+{
+	return _intensityAbsMax;
+}
+
+void CloudViewer::setIntensityRedColormap(bool on)
+{
+	_aSetIntensityRedColormap->setChecked(on);
+}
+void CloudViewer::setIntensityMax(float value)
+{
+	if(value >= 0.0f)
+	{
+		_intensityAbsMax = value;
+	}
+	else
+	{
+		UERROR("Cannot set normals scale < 0, value=%f", value);
+	}
+}
+
 void CloudViewer::buildPickingLocator(bool enable)
 {
 	_buildLocator = enable;
@@ -3082,6 +3291,10 @@ void CloudViewer::handleAction(QAction * a)
 	{
 		this->clearTrajectory();
 	}
+	else if(a == _aShowCameraAxis)
+	{
+		this->setCameraAxisShown(a->isChecked());
+	}
 	else if(a == _aShowFrustum)
 	{
 		this->setFrustumShown(a->isChecked());
@@ -3132,7 +3345,7 @@ void CloudViewer::handleAction(QAction * a)
 	else if(a == _aSetGridCellSize)
 	{
 		bool ok;
-		double value = QInputDialog::getDouble(this, tr("Set grid cell size"), tr("Size (m)"), _gridCellSize, 0.01, 10, 2, &ok);
+		double value = QInputDialog::getDouble(this, tr("Set grid cell size"), tr("Size (m)"), _gridCellSize, 0.01, 1000, 2, &ok);
 		if(ok)
 		{
 			this->setGridCellSize(value);
@@ -3160,6 +3373,19 @@ void CloudViewer::handleAction(QAction * a)
 		{
 			this->setNormalsScale(value);
 		}
+	}
+	else if(a == _aSetIntensityMaximum)
+	{
+		bool ok;
+		double value = QInputDialog::getDouble(this, tr("Set maximum absolute intensity"), tr("Intensity (0=auto)"), _intensityAbsMax, 0.0, 99999, 2, &ok);
+		if(ok)
+		{
+			this->setIntensityMax(value);
+		}
+	}
+	else if(a == _aShowNormals)
+	{
+		this->setIntensityRedColormap(_aSetIntensityRedColormap->isChecked());
 	}
 	else if(a == _aSetBackgroundColor)
 	{

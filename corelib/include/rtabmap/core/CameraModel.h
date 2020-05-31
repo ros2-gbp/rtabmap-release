@@ -50,7 +50,7 @@ public:
 			const cv::Mat & D,
 			const cv::Mat & R,
 			const cv::Mat & P,
-			const Transform & localTransform = Transform::getIdentity());
+			const Transform & localTransform = Transform(0,0,1,0, -1,0,0,0, 0,-1,0,0));
 
 	// minimal
 	CameraModel(
@@ -58,7 +58,7 @@ public:
 			double fy,
 			double cx,
 			double cy,
-			const Transform & localTransform = Transform::getIdentity(),
+			const Transform & localTransform = Transform(0,0,1,0, -1,0,0,0, 0,-1,0,0),
 			double Tx = 0.0f,
 			const cv::Size & imageSize = cv::Size(0,0));
 	// minimal to be saved
@@ -68,14 +68,14 @@ public:
 			double fy,
 			double cx,
 			double cy,
-			const Transform & localTransform = Transform::getIdentity(),
+			const Transform & localTransform = Transform(0,0,1,0, -1,0,0,0, 0,-1,0,0),
 			double Tx = 0.0f,
 			const cv::Size & imageSize = cv::Size(0,0));
 
 	virtual ~CameraModel() {}
 
 	void initRectificationMap();
-	bool isRectificationMapInitialized() {return !mapX_.empty() && !mapY_.empty();}
+	bool isRectificationMapInitialized() const {return !mapX_.empty() && !mapY_.empty();}
 
 	bool isValidForProjection() const {return fx()>0.0 && fy()>0.0 && cx()>0.0 && cy()>0.0;}
 	bool isValidForReprojection() const {return fx()>0.0 && fy()>0.0 && cx()>0.0 && cy()>0.0 && imageWidth()>0 && imageHeight()>0;}
@@ -112,6 +112,9 @@ public:
 	const cv::Size & imageSize() const {return imageSize_;}
 	int imageWidth() const {return imageSize_.width;}
 	int imageHeight() const {return imageSize_.height;}
+
+	double fovX() const {return imageSize_.width>0 && fx()>0?2.0*atan(imageSize_.width/(fx()*2.0)):0.0;}
+	double fovY() const {return imageSize_.height>0 && fy()>0?2.0*atan(imageSize_.height/(fy()*2.0)):0.0;}
 
 	bool load(const std::string & directory, const std::string & cameraName);
 	bool save(const std::string & directory) const;

@@ -67,16 +67,18 @@ private:
 	int scanMaximumMapSize_;
 	float scanSubtractRadius_;
 	float scanSubtractAngle_;
+	float scanMapMaxRange_;
 	int bundleAdjustment_;
 	int bundleMaxFrames_;
 	float validDepthRatio_;
+	int pointToPlaneK_;
+	float pointToPlaneRadius_;
 
 	Registration * regPipeline_;
 	Signature * map_;
 	Signature * lastFrame_;
 	int lastFrameOldestNewId_;
 	std::vector<std::pair<pcl::PointCloud<pcl::PointNormal>::Ptr, pcl::IndicesPtr> > scansBuffer_;
-	std::map<double, Transform> imus_;
 	bool initGravity_;
 
 	std::map<int, std::map<int, FeatureBA> > bundleWordReferences_; //<WordId, <FrameId, pt2D+depth>>
