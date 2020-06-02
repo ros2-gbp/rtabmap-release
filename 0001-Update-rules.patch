@@ -1,0 +1,25 @@
+From 8e3444f367841ae1ded0c645302c4356b8fda0bd Mon Sep 17 00:00:00 2001
+From: matlabbe <matlabbe@gmail.com>
+Date: Mon, 1 Jun 2020 22:34:51 -0400
+Subject: [PATCH] Update rules
+
+---
+ debian/rules | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/debian/rules b/debian/rules
+index 79ba57b..2e3a47e 100755
+--- a/debian/rules
++++ b/debian/rules
+@@ -48,7 +48,7 @@ override_dh_shlibdeps:
+ 	# in the install tree that was dropped by catkin, and source it.  It will
+ 	# set things like CMAKE_PREFIX_PATH, PKG_CONFIG_PATH, and PYTHONPATH.
+ 	if [ -f "/opt/ros/noetic/setup.sh" ]; then . "/opt/ros/noetic/setup.sh"; fi && \
+-	dh_shlibdeps -l$(CURDIR)/debian/ros-noetic-rtabmap//opt/ros/noetic/lib/
++	dh_shlibdeps -l$(CURDIR)/debian/ros-noetic-rtabmap//opt/ros/noetic/lib/:$(CURDIR)/debian/ros-noetic-rtabmap//opt/ros/noetic/lib/x86_64-linux-gnu/:$(CURDIR)/debian/ros-noetic-rtabmap//opt/ros/noetic/lib/i386-linux-gnu/:$(CURDIR)/debian/ros-noetic-rtabmap//opt/ros/noetic/lib/arm-linux-gnueabihf/:$(CURDIR)/debian/ros-noetic-rtabmap//opt/ros/noetic/lib/aarch64-linux-gnu/
+ 
+ override_dh_auto_install:
+ 	# In case we're installing to a non-standard location, look for a setup.sh
+-- 
+2.25.1
+
