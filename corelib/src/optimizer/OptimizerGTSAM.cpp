@@ -152,7 +152,8 @@ std::map<int, Transform> OptimizerGTSAM::optimize(
 			}
 		}
 
-		UDEBUG("fill poses to gtsam... rootId=%d", rootId);
+		UDEBUG("fill poses to gtsam... rootId=%d (priorsIgnored=%d gpsPriorOnly=%d landmarksIgnored=%d)",
+				rootId, priorsIgnored()?1:0, gpsPriorOnly?1:0, landmarksIgnored()?1:0);
 		gtsam::Values initialEstimate;
 		std::map<int, bool> isLandmarkWithRotation;
 		for(std::map<int, Transform>::const_iterator iter = poses.begin(); iter!=poses.end(); ++iter)
@@ -515,8 +516,9 @@ std::map<int, Transform> OptimizerGTSAM::optimize(
 							{
 								if(isLandmarkWithRotation.at(key))
 								{
+									poses.at(key).getTranslationAndEulerAngles(x,y,z,roll,pitch,yaw);
 									gtsam::Pose2 p = iter->value.cast<gtsam::Pose2>();
-									tmpPoses.insert(std::make_pair(key, Transform(p.x(), p.y(), p.theta())));
+									tmpPoses.insert(std::make_pair(key, Transform(p.x(), p.y(), z, roll, pitch, p.theta())));
 								}
 								else
 								{
@@ -617,8 +619,9 @@ std::map<int, Transform> OptimizerGTSAM::optimize(
 					{
 						if(isLandmarkWithRotation.at(key))
 						{
+							poses.at(key).getTranslationAndEulerAngles(x,y,z,roll,pitch,yaw);
 							gtsam::Pose2 p = iter->value.cast<gtsam::Pose2>();
-							optimizedPoses.insert(std::make_pair(key, Transform(p.x(), p.y(), p.theta())));
+							optimizedPoses.insert(std::make_pair(key, Transform(p.x(), p.y(), z, roll, pitch, p.theta())));
 						}
 						else
 						{

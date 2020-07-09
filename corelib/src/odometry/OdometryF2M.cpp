@@ -27,19 +27,17 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "rtabmap/core/OdometryInfo.h"
 #include "rtabmap/core/Memory.h"
-#include "rtabmap/core/VisualWord.h"
 #include "rtabmap/core/Signature.h"
 #include "rtabmap/core/RegistrationVis.h"
+#include "rtabmap/core/util3d.h"
 #include "rtabmap/core/util3d_transforms.h"
 #include "rtabmap/core/util3d_registration.h"
-#include "rtabmap/core/util3d_correspondences.h"
 #include "rtabmap/core/util3d_motion_estimation.h"
 #include "rtabmap/core/util3d_filtering.h"
+#include "rtabmap/core/util3d_surface.h"
 #include "rtabmap/core/Optimizer.h"
 #include "rtabmap/core/VWDictionary.h"
-#include "rtabmap/core/util3d.h"
 #include "rtabmap/core/Graph.h"
-#include "rtflann/flann.hpp"
 #include "rtabmap/utilite/ULogger.h"
 #include "rtabmap/utilite/UTimer.h"
 #include "rtabmap/utilite/UMath.h"
@@ -66,9 +64,12 @@ OdometryF2M::OdometryF2M(const ParametersMap & parameters) :
 	scanMaximumMapSize_(Parameters::defaultOdomF2MScanMaxSize()),
 	scanSubtractRadius_(Parameters::defaultOdomF2MScanSubtractRadius()),
 	scanSubtractAngle_(Parameters::defaultOdomF2MScanSubtractAngle()),
+	scanMapMaxRange_(Parameters::defaultOdomF2MScanRange()),
 	bundleAdjustment_(Parameters::defaultOdomF2MBundleAdjustment()),
 	bundleMaxFrames_(Parameters::defaultOdomF2MBundleAdjustmentMaxFrames()),
 	validDepthRatio_(Parameters::defaultOdomF2MValidDepthRatio()),
+	pointToPlaneK_(Parameters::defaultIcpPointToPlaneK()),
+	pointToPlaneRadius_(Parameters::defaultIcpPointToPlaneRadius()),
 	map_(new Signature(-1)),
 	lastFrame_(new Signature(1)),
 	lastFrameOldestNewId_(0),
@@ -88,20 +89,25 @@ OdometryF2M::OdometryF2M(const ParametersMap & parameters) :
 	{
 		scanSubtractAngle_ *= M_PI/180.0f;
 	}
+	Parameters::parse(parameters, Parameters::kOdomF2MScanRange(), scanMapMaxRange_);
 	Parameters::parse(parameters, Parameters::kOdomF2MBundleAdjustment(), bundleAdjustment_);
 	Parameters::parse(parameters, Parameters::kOdomF2MBundleAdjustmentMaxFrames(), bundleMaxFrames_);
 	Parameters::parse(parameters, Parameters::kOdomF2MValidDepthRatio(), validDepthRatio_);
+
+	Parameters::parse(parameters, Parameters::kIcpPointToPlaneK(), pointToPlaneK_);
+	Parameters::parse(parameters, Parameters::kIcpPointToPlaneRadius(), pointToPlaneRadius_);
 
 	UASSERT(bundleMaxFrames_ >= 0);
 	ParametersMap bundleParameters = parameters;
 	if(bundleAdjustment_ > 0)
 	{
 		if((bundleAdjustment_==1 && Optimizer::isAvailable(Optimizer::kTypeG2O)) ||
-		   (bundleAdjustment_==2 && Optimizer::isAvailable(Optimizer::kTypeCVSBA)))
+		(bundleAdjustment_==2 && Optimizer::isAvailable(Optimizer::kTypeCVSBA)) ||
+		(bundleAdjustment_==3 && Optimizer::isAvailable(Optimizer::kTypeCeres)))
 		{
 			// disable bundle in RegistrationVis as we do it already here
 			uInsert(bundleParameters, ParametersPair(Parameters::kVisBundleAdjustment(), "0"));
-			sba_ = Optimizer::create(bundleAdjustment_==2?Optimizer::kTypeCVSBA:Optimizer::kTypeG2O, bundleParameters);
+			sba_ = Optimizer::create(bundleAdjustment_==3?Optimizer::kTypeCeres:bundleAdjustment_==2?Optimizer::kTypeCVSBA:Optimizer::kTypeG2O, bundleParameters);
 		}
 		else
 		{
@@ -145,13 +151,6 @@ OdometryF2M::~OdometryF2M()
 {
 	delete map_;
 	delete lastFrame_;
-	scansBuffer_.clear();
-	bundleWordReferences_.clear();
-	bundlePoses_.clear();
-	bundleLinks_.clear();
-	bundleModels_.clear();
-	bundlePoseReferences_.clear();
-	imus_.clear();
 	delete sba_;
 	delete regPipeline_;
 	UDEBUG("");
@@ -175,7 +174,6 @@ void OdometryF2M::reset(const Transform & initialPose)
 		bundlePoseReferences_.clear();
 		bundleSeq_ = 0;
 		lastFrameOldestNewId_ = 0;
-		imus_.clear();
 	}
 	initGravity_ = false;
 }
@@ -200,30 +198,27 @@ Transform OdometryF2M::computeTransform(
 		info->type = 0;
 	}
 
+	Transform imuT;
 	if(sba_ && sba_->gravitySigma() > 0.0f && !data.imu().empty())
 	{
-		if(data.imu().orientation()[0] == 0.0 && data.imu().orientation()[1] == 0.0 && data.imu().orientation()[2] == 0.0)
+		if(imus().empty())
 		{
-			UERROR("IMU received doesn't have orientation set, it is ignored.");
+			UERROR("IMU received doesn't have orientation set, it is ignored. If you are using RTAB-Map standalone, enable IMU filtering in Preferences->Source panel. On ROS, use \"imu_filter_madgwick\" or \"imu_complementary_filter\" packages to compute the orientation.");
 		}
 		else
 		{
-			Transform orientation(0,0,0, data.imu().orientation()[0], data.imu().orientation()[1], data.imu().orientation()[2], data.imu().orientation()[3]);
-			//UWARN("%fs %s", data.stamp(), orientation.prettyPrint().c_str());
-			imus_.insert(std::make_pair(data.stamp(), orientation*data.imu().localTransform().inverse()));
-			if(imus_.size() > 1000)
-			{
-				imus_.erase(imus_.begin());
-			}
-
+			imuT = Transform::getTransform(imus(), data.stamp());
 			if(this->getPose().r11() == 1.0f && this->getPose().r22() == 1.0f && this->getPose().r33() == 1.0f)
 			{
-				Eigen::Quaterniond imuQuat = imus_.rbegin()->second.getQuaterniond();
-				Transform previous = this->getPose();
-				Transform newFramePose = Transform(previous.x(), previous.y(), previous.z(), imuQuat.x(), imuQuat.y(), imuQuat.z(), imuQuat.w());
-				UWARN("Updated initial pose from %s to %s with IMU orientation", previous.prettyPrint().c_str(), newFramePose.prettyPrint().c_str());
-				initGravity_ = true;
-				this->reset(newFramePose);
+				if(!imuT.isNull())
+				{
+					Eigen::Quaterniond imuQuat = imuT.getQuaterniond();
+					Transform previous = this->getPose();
+					Transform newFramePose = Transform(previous.x(), previous.y(), previous.z(), imuQuat.x(), imuQuat.y(), imuQuat.z(), imuQuat.w());
+					UWARN("Updated initial pose from %s to %s with IMU orientation", previous.prettyPrint().c_str(), newFramePose.prettyPrint().c_str());
+					initGravity_ = true;
+					this->reset(newFramePose);
+				}
 			}
 		}
 
@@ -270,7 +265,6 @@ Transform OdometryF2M::computeTransform(
 			std::map<int, Transform> bundlePoses;
 			std::multimap<int, Link> bundleLinks;
 			std::map<int, CameraModel> bundleModels;
-			std::map<int, StereoCameraModel> bundleStereoModels;
 
 			for(int guessIteration=0;
 					guessIteration<(!guess.isNull()&&regPipeline_->isImageRequired()?2:1) && transform.isNull();
@@ -286,7 +280,6 @@ Transform OdometryF2M::computeTransform(
 				bundlePoses.clear();
 				bundleLinks.clear();
 				bundleModels.clear();
-				bundleStereoModels.clear();
 
 				float maxCorrespondenceDistance = 0.0f;
 				float pmOutlierRatio = 0.0f;
@@ -332,12 +325,6 @@ Transform OdometryF2M::computeTransform(
 				UDEBUG("Registration time = %fs", regInfo.totalTime);
 				if(!transform.isNull())
 				{
-					Transform imuT;
-					if(!imus_.empty())
-					{
-						imuT = Transform::getClosestTransform(imus_, lastFrame_->getStamp());
-					}
-
 					// local bundle adjustment
 					if(bundleAdjustment_>0 && sba_ &&
 					   regPipeline_->isImageRequired() &&
@@ -368,10 +355,7 @@ Transform OdometryF2M::computeTransform(
 
 							UASSERT_MSG(bundlePoses.find(lastFrame_->id()) == bundlePoses.end(),
 									uFormat("Frame %d already added! Make sure the input frames have unique IDs!", lastFrame_->id()).c_str());
-							cv::Mat var = regInfo.covariance;//cv::Mat::eye(6,6,CV_64FC1); //regInfo.covariance.inv()
-							//var(cv::Range(0,3), cv::Range(0,3)) *= 0.001;
-							//var(cv::Range(3,6), cv::Range(3,6)) *= 0.001;
-							bundleLinks.insert(std::make_pair(bundlePoses_.rbegin()->first, Link(bundlePoses_.rbegin()->first, lastFrame_->id(), Link::kNeighbor, bundlePoses_.rbegin()->second.inverse()*transform, var.inv())));
+							bundleLinks.insert(std::make_pair(bundlePoses_.rbegin()->first, Link(bundlePoses_.rbegin()->first, lastFrame_->id(), Link::kNeighbor, bundlePoses_.rbegin()->second.inverse()*transform, regInfo.covariance.inv())));
 							bundlePoses.insert(std::make_pair(lastFrame_->id(), transform));
 
 							if(!imuT.isNull())
@@ -507,6 +491,17 @@ Transform OdometryF2M::computeTransform(
 										std::multimap<int, Link>::iterator iter = graph::findLink(bundleLinks, bundlePoses_.rbegin()->first, lastFrame_->id(), false);
 										UASSERT(iter != bundleLinks.end());
 										iter->second.setTransform(bundlePoses_.rbegin()->second.inverse()*transform);
+
+										iter = graph::findLink(bundleLinks, lastFrame_->id(), lastFrame_->id(), false);
+										if(info && iter!=bundleLinks.end() && iter->second.type() == Link::kGravity)
+										{
+											float rollImu,pitchImu,yaw;
+											iter->second.transform().getEulerAngles(rollImu, pitchImu, yaw);
+											float roll,pitch;
+											transform.getEulerAngles(roll, pitch, yaw);
+											info->gravityRollError = fabs(rollImu - roll);
+											info->gravityPitchError = fabs(pitchImu - pitch);
+										}
 									}
 								}
 								UDEBUG("Local Bundle Adjustment After : %s", transform.prettyPrint().c_str());
@@ -571,7 +566,14 @@ Transform OdometryF2M::computeTransform(
 						  visKeyFrameThr_ == 0 ||
 						  float(regInfo.inliers) <= (keyFrameThr_*float(lastFrame_->getWords().size())) ||
 						  regInfo.inliers <= visKeyFrameThr_);
-				bool addGeometricKeyFrame = regPipeline_->isScanRequired() && (scanKeyFrameThr_==0 || regInfo.icpInliersRatio <= scanKeyFrameThr_);
+				float minComplexity = Parameters::defaultIcpPointToPlaneMinComplexity();
+				bool p2n = Parameters::defaultIcpPointToPlane();
+				Parameters::parse(parameters_, Parameters::kIcpPointToPlane(), p2n);
+				Parameters::parse(parameters_, Parameters::kIcpPointToPlaneMinComplexity(), minComplexity);
+				bool addGeometricKeyFrame =
+					regPipeline_->isScanRequired() &&
+					(scanKeyFrameThr_==0 || regInfo.icpInliersRatio <= scanKeyFrameThr_) &&
+					(addVisualKeyFrame || !p2n || regInfo.icpStructuralComplexity>=minComplexity);
 
 				addKeyFrame = false;//bundleLinks.rbegin()->second.transform().getNorm() > 5.0f*0.075f;
 				addKeyFrame = addKeyFrame || addVisualKeyFrame || addGeometricKeyFrame;
@@ -914,19 +916,36 @@ Transform OdometryF2M::computeTransform(
 					if(lastFrame_->sensorData().laserScanRaw().size())
 					{
 						pcl::PointCloud<pcl::PointNormal>::Ptr mapCloudNormals = util3d::laserScanToPointCloudNormal(mapScan, tmpMap.sensorData().laserScanRaw().localTransform());
-						pcl::PointCloud<pcl::PointNormal>::Ptr frameCloudNormals = util3d::laserScanToPointCloudNormal(lastFrame_->sensorData().laserScanRaw(), newFramePose * lastFrame_->sensorData().laserScanRaw().localTransform());
-
+						Transform viewpoint =  newFramePose * lastFrame_->sensorData().laserScanRaw().localTransform();
+						pcl::PointCloud<pcl::PointNormal>::Ptr frameCloudNormals (new pcl::PointCloud<pcl::PointNormal>());
+						
+						if(scanMapMaxRange_ > 0)
+						{
+							frameCloudNormals = util3d::laserScanToPointCloudNormal(
+									lastFrame_->sensorData().laserScanRaw());
+							frameCloudNormals = util3d::cropBox(frameCloudNormals,
+									Eigen::Vector4f(-scanMapMaxRange_ / 2, -scanMapMaxRange_ / 2,-scanMapMaxRange_ / 2, 0),
+									Eigen::Vector4f(scanMapMaxRange_ / 2,scanMapMaxRange_ / 2,scanMapMaxRange_ / 2, 0)
+									);
+							frameCloudNormals = util3d::transformPointCloud(frameCloudNormals, viewpoint);
+						} else
+						{
+							frameCloudNormals = util3d::laserScanToPointCloudNormal(
+									lastFrame_->sensorData().laserScanRaw(), viewpoint);
+						}
+						
 						pcl::IndicesPtr frameCloudNormalsIndices(new std::vector<int>);
 						int newPoints;
 						if(mapCloudNormals->size() && scanSubtractRadius_ > 0.0f)
 						{
+							// remove points that overlap (the ones found in both clouds)
 							frameCloudNormalsIndices = util3d::subtractFiltering(
 									frameCloudNormals,
 									pcl::IndicesPtr(new std::vector<int>),
 									mapCloudNormals,
 									pcl::IndicesPtr(new std::vector<int>),
 									scanSubtractRadius_,
-									scanSubtractAngle_);
+									lastFrame_->sensorData().laserScanRaw().hasNormals()&&mapScan.hasNormals()?scanSubtractAngle_:0.0f);
 							newPoints = frameCloudNormalsIndices->size();
 						}
 						else
@@ -936,72 +955,108 @@ Transform OdometryF2M::computeTransform(
 
 						if(newPoints)
 						{
-							scansBuffer_.push_back(std::make_pair(frameCloudNormals, frameCloudNormalsIndices));
+							if (scanMapMaxRange_ > 0) {
+								// Copying new points to tmp cloud
+								// These are the points that have no overlap between mapScan and lastFrame
+								pcl::PointCloud<pcl::PointNormal> tmp;
+								pcl::copyPointCloud(*frameCloudNormals, *frameCloudNormalsIndices, tmp);
 
-							//remove points if too big
-							UDEBUG("scansBuffer=%d, mapSize=%d newPoints=%d maxPoints=%d",
-									(int)scansBuffer_.size(),
-									int(mapCloudNormals->size()),
-									newPoints,
-									scanMaximumMapSize_);
-
-							if(scansBuffer_.size() > 1 &&
-								int(mapCloudNormals->size() + newPoints) > scanMaximumMapSize_)
-							{
-								//regenerate the local map
-								mapCloudNormals->clear();
-								std::list<int> toRemove;
-								int i = int(scansBuffer_.size())-1;
-								for(; i>=0; --i)
+								if (int(mapCloudNormals->size() + newPoints) > scanMaximumMapSize_) // 20 000 points
 								{
-									int pointsToAdd = scansBuffer_[i].second->size()?scansBuffer_[i].second->size():scansBuffer_[i].first->size();
-									if((int)mapCloudNormals->size() + pointsToAdd > scanMaximumMapSize_ ||
-										i == 0)
+									// Print mapSize
+									UINFO("mapSize=%d newPoints=%d maxPoints=%d",
+										  int(mapCloudNormals->size()),
+										  newPoints,
+										  scanMaximumMapSize_);
+
+									*mapCloudNormals += tmp;
+									cv::Point3f boxMin (-scanMapMaxRange_/2, -scanMapMaxRange_/2, -scanMapMaxRange_/2);
+									cv::Point3f boxMax (scanMapMaxRange_/2, scanMapMaxRange_/2, scanMapMaxRange_/2);
+
+									boxMin = util3d::transformPoint(boxMin, viewpoint.translation());
+									boxMax = util3d::transformPoint(boxMax, viewpoint.translation());
+
+									mapCloudNormals = util3d::cropBox(mapCloudNormals, Eigen::Vector4f(boxMin.x, boxMin.y, boxMin.z, 0 ), Eigen::Vector4f(boxMax.x, boxMax.y, boxMax.z, 0 ));
+
+								} else {
+									*mapCloudNormals += tmp;
+								}
+
+								mapCloudNormals = util3d::voxelize(mapCloudNormals, scanSubtractRadius_);
+								pcl::PointCloud<pcl::PointXYZI>::Ptr mapCloud (new pcl::PointCloud<pcl::PointXYZI> ());
+								copyPointCloud(*mapCloudNormals, *mapCloud);
+								pcl::PointCloud<pcl::Normal>::Ptr normals = util3d::computeNormals(mapCloud, pointToPlaneK_, pointToPlaneRadius_, Eigen::Vector3f(viewpoint.x(), viewpoint.y(), viewpoint.z()));
+								copyPointCloud(*normals, *mapCloudNormals);
+
+							} else {
+								scansBuffer_.push_back(std::make_pair(frameCloudNormals, frameCloudNormalsIndices));
+
+								//remove points if too big
+								UDEBUG("scansBuffer=%d, mapSize=%d newPoints=%d maxPoints=%d",
+									   (int)scansBuffer_.size(),
+									   int(mapCloudNormals->size()),
+									   newPoints,
+									   scanMaximumMapSize_);
+
+								if(scansBuffer_.size() > 1 &&
+								   int(mapCloudNormals->size() + newPoints) > scanMaximumMapSize_)
+								{
+									//regenerate the local map
+									mapCloudNormals->clear();
+									std::list<int> toRemove;
+									int i = int(scansBuffer_.size())-1;
+									for(; i>=0; --i)
 									{
-										*mapCloudNormals += *scansBuffer_[i].first;
-										break;
-									}
-									else
-									{
-										if(scansBuffer_[i].second->size())
+										int pointsToAdd = scansBuffer_[i].second->size()?scansBuffer_[i].second->size():scansBuffer_[i].first->size();
+										if((int)mapCloudNormals->size() + pointsToAdd > scanMaximumMapSize_ ||
+										   i == 0)
 										{
-											pcl::PointCloud<pcl::PointNormal> tmp;
-											pcl::copyPointCloud(*scansBuffer_[i].first, *scansBuffer_[i].second, tmp);
-											*mapCloudNormals += tmp;
+											*mapCloudNormals += *scansBuffer_[i].first;
+											break;
 										}
 										else
 										{
-											*mapCloudNormals += *scansBuffer_[i].first;
+											if(scansBuffer_[i].second->size())
+											{
+												pcl::PointCloud<pcl::PointNormal> tmp;
+												pcl::copyPointCloud(*scansBuffer_[i].first, *scansBuffer_[i].second, tmp);
+												*mapCloudNormals += tmp;
+											}
+											else
+											{
+												*mapCloudNormals += *scansBuffer_[i].first;
+											}
 										}
 									}
-								}
-								// remove old clouds
-								if(i > 0)
-								{
-									std::vector<std::pair<pcl::PointCloud<pcl::PointNormal>::Ptr, pcl::IndicesPtr> > scansTmp(scansBuffer_.size()-i);
-									int oi = 0;
-									for(; i<(int)scansBuffer_.size(); ++i)
+									// remove old clouds
+									if(i > 0)
 									{
-										UASSERT(oi < (int)scansTmp.size());
-										scansTmp[oi++] = scansBuffer_[i];
+										std::vector<std::pair<pcl::PointCloud<pcl::PointNormal>::Ptr, pcl::IndicesPtr> > scansTmp(scansBuffer_.size()-i);
+										int oi = 0;
+										for(; i<(int)scansBuffer_.size(); ++i)
+										{
+											UASSERT(oi < (int)scansTmp.size());
+											scansTmp[oi++] = scansBuffer_[i];
+										}
+										scansBuffer_ = scansTmp;
 									}
-									scansBuffer_ = scansTmp;
-								}
-							}
-							else
-							{
-								// just append the last cloud
-								if(scansBuffer_.back().second->size())
-								{
-									pcl::PointCloud<pcl::PointNormal> tmp;
-									pcl::copyPointCloud(*scansBuffer_.back().first, *scansBuffer_.back().second, tmp);
-									*mapCloudNormals += tmp;
 								}
 								else
 								{
-									*mapCloudNormals += *scansBuffer_.back().first;
+									// just append the last cloud
+									if(scansBuffer_.back().second->size())
+									{
+										pcl::PointCloud<pcl::PointNormal> tmp;
+										pcl::copyPointCloud(*scansBuffer_.back().first, *scansBuffer_.back().second, tmp);
+										*mapCloudNormals += tmp;
+									}
+									else
+									{
+										*mapCloudNormals += *scansBuffer_.back().first;
+									}
 								}
 							}
+
 							if(mapScan.is2d())
 							{
 								Transform mapViewpoint(-newFramePose.x(), -newFramePose.y(),0,0,0,0);
@@ -1185,7 +1240,7 @@ Transform OdometryF2M::computeTransform(
 						bundleModels_.insert(std::make_pair(lastFrame_->id(), model));
 						bundlePoses_.insert(std::make_pair(lastFrame_->id(), newFramePose));
 
-						if(!imus_.empty())
+						if(!imuT.isNull())
 						{
 							bundleIMUOrientations_.insert(std::make_pair(lastFrame_->id(), Link(lastFrame_->id(), lastFrame_->id(), Link::kGravity, newFramePose)));
 						}
@@ -1205,33 +1260,65 @@ Transform OdometryF2M::computeTransform(
 			{
 				if (lastFrame_->sensorData().laserScanRaw().size())
 				{
-					frameValid = true;
 					pcl::PointCloud<pcl::PointNormal>::Ptr mapCloudNormals = util3d::laserScanToPointCloudNormal(lastFrame_->sensorData().laserScanRaw(), newFramePose * lastFrame_->sensorData().laserScanRaw().localTransform());
-					scansBuffer_.push_back(std::make_pair(mapCloudNormals, pcl::IndicesPtr(new std::vector<int>)));
-					if(lastFrame_->sensorData().laserScanRaw().is2d())
+
+					double complexity = 0.0;;
+					if(!frameValid)
 					{
-						Transform mapViewpoint(-newFramePose.x(), -newFramePose.y(),0,0,0,0);
-						map_->sensorData().setLaserScan(
-								LaserScan(
-										util3d::laserScan2dFromPointCloud(*mapCloudNormals, mapViewpoint),
-										0,
-										0.0f,
-										LaserScan::kXYNormal,
-										Transform(newFramePose.x(), newFramePose.y(), lastFrame_->sensorData().laserScanRaw().localTransform().z(),0,0,0)));
+						float minComplexity = Parameters::defaultIcpPointToPlaneMinComplexity();
+						bool p2n = Parameters::defaultIcpPointToPlane();
+						Parameters::parse(parameters_, Parameters::kIcpPointToPlane(), p2n);
+						Parameters::parse(parameters_, Parameters::kIcpPointToPlaneMinComplexity(), minComplexity);
+						if(p2n && minComplexity>0.0f)
+						{
+							complexity = util3d::computeNormalsComplexity(*mapCloudNormals, Transform::getIdentity(), lastFrame_->sensorData().laserScanRaw().is2d());
+							if(complexity > minComplexity)
+							{
+								frameValid = true;
+							}
+						}
+						else
+						{
+							frameValid = true;
+						}
+					}
+
+					if(frameValid)
+					{
+						if (scanMapMaxRange_ > 0 ){
+							UINFO("Local map will be updated using range instead of time with range threshold set at %f", scanMapMaxRange_);
+						} else {
+							scansBuffer_.push_back(std::make_pair(mapCloudNormals, pcl::IndicesPtr(new std::vector<int>)));
+						}
+						if(lastFrame_->sensorData().laserScanRaw().is2d())
+						{
+							Transform mapViewpoint(-newFramePose.x(), -newFramePose.y(),0,0,0,0);
+							map_->sensorData().setLaserScan(
+									LaserScan(
+											util3d::laserScan2dFromPointCloud(*mapCloudNormals, mapViewpoint),
+											0,
+											0.0f,
+											LaserScan::kXYNormal,
+											Transform(newFramePose.x(), newFramePose.y(), lastFrame_->sensorData().laserScanRaw().localTransform().z(),0,0,0)));
+						}
+						else
+						{
+							Transform mapViewpoint(-newFramePose.x(), -newFramePose.y(), -newFramePose.z(),0,0,0);
+							map_->sensorData().setLaserScan(
+									LaserScan(
+											util3d::laserScanFromPointCloud(*mapCloudNormals, mapViewpoint),
+											0,
+											0.0f,
+											LaserScan::kXYZNormal,
+											newFramePose.translation()));
+						}
+
+						addKeyFrame = true;
 					}
 					else
 					{
-						Transform mapViewpoint(-newFramePose.x(), -newFramePose.y(), -newFramePose.z(),0,0,0);
-						map_->sensorData().setLaserScan(
-								LaserScan(
-										util3d::laserScanFromPointCloud(*mapCloudNormals, mapViewpoint),
-										0,
-										0.0f,
-										LaserScan::kXYZNormal,
-										newFramePose.translation()));
+						UWARN("Scan complexity too low (%f) to init first keyframe.", complexity);
 					}
-
-					addKeyFrame = true;
 				}
 				else
 				{
