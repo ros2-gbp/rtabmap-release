@@ -40,6 +40,7 @@ class Camera;
 
 namespace rtabmap
 {
+class ZedIMUThread;
 
 class RTABMAP_EXP CameraStereoZed :
 	public Camera
@@ -58,7 +59,8 @@ public:
 			float imageRate=0.0f,
 			const Transform & localTransform = Transform::getIdentity(),
 			bool selfCalibration = true,
-			bool odomForce3DoF = false);
+			bool odomForce3DoF = false,
+			int texturenessConfidenceThr = 90); // introduced with ZED SDK 3
 	CameraStereoZed(
 			const std::string & svoFilePath,
 			int quality = 1,    // 0=NONE, 1=PERFORMANCE, 2=QUALITY
@@ -68,13 +70,16 @@ public:
 			float imageRate=0.0f,
 			const Transform & localTransform = Transform::getIdentity(),
 			bool selfCalibration = true,
-			bool odomForce3DoF = false);
+			bool odomForce3DoF = false,
+			int texturenessConfidenceThr = 90); // introduced with ZED SDK 3
 	virtual ~CameraStereoZed();
 
 	virtual bool init(const std::string & calibrationFolder = ".", const std::string & cameraName = "");
 	virtual bool isCalibrated() const;
 	virtual std::string getSerial() const;
 	virtual bool odomProvided() const;
+
+	void publishInterIMU(bool enabled);
 
 protected:
 	virtual SensorData captureImage(CameraInfo * info = 0);
@@ -86,15 +91,18 @@ private:
 	Transform imuLocalTransform_;
 	CameraVideo::Source src_;
 	int usbDevice_;
-	std::string svoFilePath_;
+    std::string svoFilePath_;
 	int resolution_;
 	int quality_;
 	bool selfCalibration_;
 	int sensingMode_;
 	int confidenceThr_;
+	int texturenessConfidenceThr_; // introduced with ZED SDK 3
 	bool computeOdometry_;
 	bool lost_;
 	bool force3DoF_;
+	bool publishInterIMU_;
+	ZedIMUThread * imuPublishingThread_;
 #endif
 };
 
