@@ -220,7 +220,11 @@ cv::Mat RTABMAP_EXP mergeTextures(
 		int brightnessContrastRatioLow = 0,  //0=disabled, values between 0 and 100
 		int brightnessContrastRatioHigh = 0, //0=disabled, values between 0 and 100
 		bool exposureFusion = false,         //Exposure fusion can be used only with OpenCV3
-		const ProgressState * state = 0);
+		const ProgressState * state = 0,
+		unsigned char blankValue = 255,      //Gray value for blank polygons (without texture)
+		std::map<int, std::map<int, cv::Vec4d> > * gains = 0, // <Camera ID, Camera Sub Index (multi-cameras), gains Gray-R-G-B>
+		std::map<int, std::map<int, cv::Mat> > * blendingGains = 0, // <Camera ID, Camera Sub Index (multi-cameras), gains>
+		std::pair<float, float> * contrastValues = 0); // Alpha/beta contrast values
 cv::Mat RTABMAP_EXP mergeTextures(
 		pcl::TextureMesh & mesh,
 		const std::map<int, cv::Mat> & images, // raw or compressed, can be empty if memory or dbDriver should be used
@@ -238,9 +242,29 @@ cv::Mat RTABMAP_EXP mergeTextures(
 		int brightnessContrastRatioLow = 0,  //0=disabled, values between 0 and 100
 		int brightnessContrastRatioHigh = 0, //0=disabled, values between 0 and 100
 		bool exposureFusion = false,         //Exposure fusion can be used only with OpenCV3
-		const ProgressState * state = 0);
+		const ProgressState * state = 0,
+		unsigned char blankValue = 255,      //Gray value for blank polygons (without texture)
+		std::map<int, std::map<int, cv::Vec4d> > * gains = 0, // <Camera ID, Camera Sub Index (multi-cameras), gains Gray-R-G-B>
+		std::map<int, std::map<int, cv::Mat> > * blendingGains = 0, // <Camera ID, Camera Sub Index (multi-cameras), gains>
+		std::pair<float, float> * contrastValues = 0); // Alpha/beta contrast values
 
 void RTABMAP_EXP fixTextureMeshForVisualization(pcl::TextureMesh & textureMesh);
+
+bool RTABMAP_EXP multiBandTexturing(
+		const std::string & outputOBJPath,
+		const pcl::PCLPointCloud2 & cloud,
+		const std::vector<pcl::Vertices> & polygons,
+		const std::map<int, Transform> & cameraPoses,
+		const std::vector<std::map<int, pcl::PointXY> > & vertexToPixels, // required output of util3d::createTextureMesh()
+		const std::map<int, cv::Mat> & images,        // raw or compressed, can be empty if memory or dbDriver should be used
+		const std::map<int, std::vector<CameraModel> > & cameraModels, // Should match images
+		const Memory * memory = 0,                    // Should be set if images are not set
+		const DBDriver * dbDriver = 0,                // Should be set if images and memory are not set
+		int textureSize = 8192,
+		const std::string & textureFormat = "jpg",    // png, jpg
+		const std::map<int, std::map<int, cv::Vec4d> > & gains = std::map<int, std::map<int, cv::Vec4d> >(),       // optional output of util3d::mergeTextures()
+		const std::map<int, std::map<int, cv::Mat> > & blendingGains = std::map<int, std::map<int, cv::Mat> >(),    // optional output of util3d::mergeTextures()
+		const std::pair<float, float> & contrastValues = std::pair<float, float>(0,0));               // optional output of util3d::mergeTextures()
 
 cv::Mat RTABMAP_EXP computeNormals(
 		const cv::Mat & laserScan,
@@ -315,20 +339,24 @@ pcl::PointCloud<pcl::Normal>::Ptr RTABMAP_EXP computeFastOrganizedNormals(
 
 float RTABMAP_EXP computeNormalsComplexity(
 		const LaserScan & scan,
+		const Transform & t = Transform::getIdentity(),
 		cv::Mat * pcaEigenVectors = 0,
 		cv::Mat * pcaEigenValues = 0);
 float RTABMAP_EXP computeNormalsComplexity(
 		const pcl::PointCloud<pcl::Normal> & normals,
+		const Transform & t = Transform::getIdentity(),
 		bool is2d = false,
 		cv::Mat * pcaEigenVectors = 0,
 		cv::Mat * pcaEigenValues = 0);
 float RTABMAP_EXP computeNormalsComplexity(
 		const pcl::PointCloud<pcl::PointNormal> & cloud,
+		const Transform & t = Transform::getIdentity(),
 		bool is2d = false,
 		cv::Mat * pcaEigenVectors = 0,
 		cv::Mat * pcaEigenValues = 0);
 float RTABMAP_EXP computeNormalsComplexity(
 		const pcl::PointCloud<pcl::PointXYZRGBNormal> & cloud,
+		const Transform & t = Transform::getIdentity(),
 		bool is2d = false,
 		cv::Mat * pcaEigenVectors = 0,
 		cv::Mat * pcaEigenValues = 0);
@@ -397,6 +425,49 @@ void denseMeshPostProcessing(
 		bool cleanMesh = true,             // Remove polygons not colored (if coloredOutput is disabled, transferColorRadius is still used to clean the mesh)
 		int minClusterSize = 50,           // Remove small polygon clusters after the mesh has been cleaned (0=disabled)
 		ProgressState * progressState = 0);
+
+/**
+ * intersectRayTriangle(): find the 3D intersection of a ray with a triangle
+ *     Input:   p = origin of the ray
+ *              dir = direction of the ray
+ *              v0 = point 0 of the triangle
+ *              v1 = point 1 of the triangle
+ *              v2 = point 2 of the triangle
+ *     Output:  distance = distance from origin along ray direction
+ *              normal = normal of the triangle (not normalized)
+ *     Return: true = intersect in unique point inside the triangle
+ *
+ *     Intersection point can be computed with "I = p + dir*distance"
+ *
+ *  Copyright 2001 softSurfer, 2012 Dan Sunday
+ *  This code may be freely used and modified for any purpose
+ *  providing that this copyright notice is included with it.
+ *  SoftSurfer makes no warranty for this code, and cannot be held
+ *  liable for any real or imagined damage resulting from its use.
+ *  Users of this code must verify correctness for their application.
+ *
+ *   Mathieu:  Adapted for PCL format
+ */
+bool RTABMAP_EXP intersectRayTriangle(
+		const Eigen::Vector3f & p,
+		const Eigen::Vector3f & dir,
+		const Eigen::Vector3f & v0,
+		const Eigen::Vector3f & v1,
+		const Eigen::Vector3f & v2,
+		float & distance,
+		Eigen::Vector3f & normal);
+
+template<typename PointT>
+bool intersectRayMesh(
+		const Eigen::Vector3f & origin,
+		const Eigen::Vector3f & dir,
+		const typename pcl::PointCloud<PointT> & cloud,
+		const std::vector<pcl::Vertices> & polygons,
+		bool ignoreBackFaces,
+		float & distance,
+		Eigen::Vector3f & normal,
+		int & index);
+
 
 } // namespace util3d
 } // namespace rtabmap

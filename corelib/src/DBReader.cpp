@@ -47,25 +47,28 @@ DBReader::DBReader(const std::string & databasePath,
 				   bool odometryIgnored,
 				   bool ignoreGoalDelay,
 				   bool goalsIgnored,
-				   int startIndex,
+				   int stopId,
 				   int cameraIndex,
-				   int maxFrames) :
+				   int endId) :
 	Camera(frameRate),
 	_paths(uSplit(databasePath, ';')),
 	_odometryIgnored(odometryIgnored),
 	_ignoreGoalDelay(ignoreGoalDelay),
 	_goalsIgnored(goalsIgnored),
-	_startIndex(startIndex),
-	_maxFrames(maxFrames),
+	_startId(stopId),
+	_stopId(endId),
 	_cameraIndex(cameraIndex),
 	_dbDriver(0),
 	_currentId(_ids.end()),
 	_previousMapId(-1),
 	_previousStamp(0),
 	_previousMapID(0),
-	_calibrated(false),
-	_framesPublished(0)
+	_calibrated(false)
 {
+	if(_stopId>0 && _stopId<_startId)
+	{
+		_stopId = _startId;
+	}
 }
 
 DBReader::DBReader(const std::list<std::string> & databasePaths,
@@ -73,25 +76,28 @@ DBReader::DBReader(const std::list<std::string> & databasePaths,
 				   bool odometryIgnored,
 				   bool ignoreGoalDelay,
 				   bool goalsIgnored,
-				   int startIndex,
+				   int stopId,
 				   int cameraIndex,
-				   int maxFrames) :
+				   int endId) :
 	Camera(frameRate),
    _paths(databasePaths),
 	_odometryIgnored(odometryIgnored),
 	_ignoreGoalDelay(ignoreGoalDelay),
 	_goalsIgnored(goalsIgnored),
-	_startIndex(startIndex),
-	_maxFrames(maxFrames),
+	_startId(stopId),
+	_stopId(endId),
 	_cameraIndex(cameraIndex),
 	_dbDriver(0),
 	_currentId(_ids.end()),
 	_previousMapId(-1),
 	_previousStamp(0),
 	_previousMapID(0),
-	_calibrated(false),
-	_framesPublished(0)
+	_calibrated(false)
 {
+	if(_stopId>0 && _stopId<_startId)
+	{
+		_stopId = _startId;
+	}
 }
 
 DBReader::~DBReader()
@@ -120,7 +126,6 @@ bool DBReader::init(
 	_previousStamp = 0;
 	_previousMapID = 0;
 	_calibrated = false;
-	_framesPublished = 0;
 
 	if(_paths.size() == 0)
 	{
@@ -153,12 +158,12 @@ bool DBReader::init(
 
 	_dbDriver->getAllNodeIds(_ids);
 	_currentId = _ids.begin();
-	if(_startIndex>0 && _ids.size())
+	if(_startId>0 && _ids.size())
 	{
-		std::set<int>::iterator iter = uIteratorAt(_ids, _startIndex);
+		std::set<int>::iterator iter = _ids.find(_startId);
 		if(iter == _ids.end())
 		{
-			UWARN("Start index is too high (%d), the last in database is %d. Starting from beginning...", _startIndex, _ids.size()-1);
+			UWARN("Start index is too high (%d), the last ID in database is %d. Starting from beginning...", _startId, *_ids.rbegin());
 		}
 		else
 		{
@@ -219,13 +224,12 @@ std::string DBReader::getSerial() const
 
 SensorData DBReader::captureImage(CameraInfo * info)
 {
-	if(_maxFrames>0 && ++_framesPublished > _maxFrames)
+	SensorData data = this->getNextData(info);
+	if(data.id()>0 && _stopId>0 && data.id() > _stopId)
 	{
-		UINFO("Maximum frames (%d) reached!", _maxFrames);
+		UINFO("Last ID %d has been reached! Ignoring", _stopId);
 		return SensorData();
 	}
-
-	SensorData data = this->getNextData(info);
 	if(data.id() == 0)
 	{
 		UINFO("no more images...");
@@ -353,6 +357,14 @@ SensorData DBReader::getNextData(CameraInfo * info)
 			{
 				globalPose = priorLinks.begin()->second.transform();
 				globalPoseCov = priorLinks.begin()->second.infMatrix().inv();
+				if(data.gps().stamp() != 0.0 &&
+						globalPoseCov.at<double>(3,3)>=9999 &&
+						globalPoseCov.at<double>(4,4)>=9999 &&
+						globalPoseCov.at<double>(5,5)>=9999)
+				{
+					// clear global pose as GPS was used for prior
+					globalPose.setNull();
+				}
 			}
 
 			Transform gravityTransform;
@@ -488,13 +500,14 @@ SensorData DBReader::getNextData(CameraInfo * info)
 						Transform::getIdentity())); // we assume that gravity links are already transformed in base_link
 			}
 
-			UDEBUG("Laser=%d RGB/Left=%d Depth/Right=%d, Grid=%d, UserData=%d, GlobalPose=%d, IMU=%d",
+			UDEBUG("Laser=%d RGB/Left=%d Depth/Right=%d, Grid=%d, UserData=%d, GlobalPose=%d, GPS=%d, IMU=%d",
 					data.laserScanRaw().isEmpty()?0:1,
 					data.imageRaw().empty()?0:1,
 					data.depthOrRightRaw().empty()?0:1,
 					data.gridCellSize()==0.0f?0:1,
 					data.userDataRaw().empty()?0:1,
 					globalPose.isNull()?0:1,
+					data.gps().stamp()!=0.0?1:0,
 					gravityTransform.isNull()?0:1);
 
 			cv::Mat descriptors;

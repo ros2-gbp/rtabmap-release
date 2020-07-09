@@ -189,9 +189,16 @@ void CameraThread::postUpdate(SensorData * dataPtr, CameraInfo * info) const
 {
 	UASSERT(dataPtr!=0);
 	SensorData & data = *dataPtr;
-	if(_colorOnly && !data.depthRaw().empty())
+	if(_colorOnly)
 	{
-		data.setRGBDImage(data.imageRaw(), cv::Mat(), data.cameraModels());
+		if(!data.depthRaw().empty())
+		{
+			data.setRGBDImage(data.imageRaw(), cv::Mat(), data.cameraModels());
+		}
+		else if(!data.rightRaw().empty())
+		{
+			data.setRGBDImage(data.imageRaw(), cv::Mat(), data.stereoCameraModel().left());
+		}
 	}
 
 	if(_distortionModel && !data.depthRaw().empty())
@@ -405,26 +412,18 @@ void CameraThread::postUpdate(SensorData * dataPtr, CameraInfo * info) const
 	// IMU filtering
 	if(_imuFilter && !data.imu().empty())
 	{
-		_imuFilter->update(
-				data.imu().angularVelocity()[0],
-				data.imu().angularVelocity()[1],
-				data.imu().angularVelocity()[2],
-				data.imu().linearAcceleration()[0],
-				data.imu().linearAcceleration()[1],
-				data.imu().linearAcceleration()[2],
-				data.stamp());
-		double qx,qy,qz,qw;
-		_imuFilter->getOrientation(qx,qy,qz,qw);
-		data.setIMU(IMU(
-				cv::Vec4d(qx,qy,qz,qw), cv::Mat::eye(3,3,CV_64FC1),
-				data.imu().angularVelocity(), data.imu().angularVelocityCovariance(),
-				data.imu().linearAcceleration(), data.imu().linearAccelerationCovariance(),
-				data.imu().localTransform()));
-		UDEBUG("%f %f %f %f (gyro=%f %f %f, acc=%f %f %f, %fs)",
-					data.imu().orientation()[0],
-					data.imu().orientation()[1],
-					data.imu().orientation()[2],
-					data.imu().orientation()[3],
+		if(data.imu().angularVelocity()[0] == 0 &&
+		   data.imu().angularVelocity()[1] == 0 &&
+		   data.imu().angularVelocity()[2] == 0 &&
+		   data.imu().linearAcceleration()[0] == 0 &&
+		   data.imu().linearAcceleration()[1] == 0 &&
+		   data.imu().linearAcceleration()[2] == 0)
+		{
+			UWARN("IMU's acc and gyr values are null! Please disable IMU filtering.");
+		}
+		else
+		{
+			_imuFilter->update(
 					data.imu().angularVelocity()[0],
 					data.imu().angularVelocity()[1],
 					data.imu().angularVelocity()[2],
@@ -432,6 +431,26 @@ void CameraThread::postUpdate(SensorData * dataPtr, CameraInfo * info) const
 					data.imu().linearAcceleration()[1],
 					data.imu().linearAcceleration()[2],
 					data.stamp());
+			double qx,qy,qz,qw;
+			_imuFilter->getOrientation(qx,qy,qz,qw);
+			data.setIMU(IMU(
+					cv::Vec4d(qx,qy,qz,qw), cv::Mat::eye(3,3,CV_64FC1),
+					data.imu().angularVelocity(), data.imu().angularVelocityCovariance(),
+					data.imu().linearAcceleration(), data.imu().linearAccelerationCovariance(),
+					data.imu().localTransform()));
+			UDEBUG("%f %f %f %f (gyro=%f %f %f, acc=%f %f %f, %fs)",
+						data.imu().orientation()[0],
+						data.imu().orientation()[1],
+						data.imu().orientation()[2],
+						data.imu().orientation()[3],
+						data.imu().angularVelocity()[0],
+						data.imu().angularVelocity()[1],
+						data.imu().angularVelocity()[2],
+						data.imu().linearAcceleration()[0],
+						data.imu().linearAcceleration()[1],
+						data.imu().linearAcceleration()[2],
+						data.stamp());
+		}
 	}
 }
 
