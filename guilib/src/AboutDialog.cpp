@@ -47,11 +47,24 @@ AboutDialog::AboutDialog(QWidget * parent) :
 	version.append(" [DEMO]");
 #endif
 	QString cv_version = CV_VERSION;
-#ifdef RTABMAP_NONFREE
+#if CV_MAJOR_VERSION < 3
+  #ifdef RTABMAP_NONFREE
 	cv_version.append(" [With nonfree]");
 	_ui->label_opencv_license->setText("Not Commercial");
-#else
+  #else
 	cv_version.append(" [Without nonfree]");
+	_ui->label_opencv_license->setText("BSD");
+  #endif
+#elif defined(HAVE_OPENCV_XFEATURES2D)
+  #ifdef RTABMAP_NONFREE
+	cv_version.append(" [With xfeatures2d, nonfree]");
+	_ui->label_opencv_license->setText("Not Commercial");
+  #else
+	cv_version.append(" [With xfeatures2d]");
+	_ui->label_opencv_license->setText("BSD");
+  #endif
+#else
+	cv_version.append(" [Without xfeatures2d and nonfree]");
 	_ui->label_opencv_license->setText("BSD");
 #endif
 	_ui->label_version->setText(version);
@@ -65,6 +78,27 @@ AboutDialog::AboutDialog(QWidget * parent) :
 #else
 	_ui->label_orboctree->setText("No");
 	_ui->label_orboctree_license->setEnabled(false);
+#endif
+#ifdef RTABMAP_SUPERPOINT_TORCH
+	_ui->label_sptorch->setText("Yes");
+	_ui->label_sptorch_license->setEnabled(true);
+#else
+	_ui->label_sptorch->setText("No");
+	_ui->label_sptorch_license->setEnabled(false);
+#endif
+#ifdef RTABMAP_PYMATCHER
+	_ui->label_pymatcher->setText("Yes");
+	_ui->label_pymatcher_license->setEnabled(true);
+#else
+	_ui->label_pymatcher->setText("No");
+	_ui->label_pymatcher_license->setEnabled(false);
+#endif
+#ifdef RTABMAP_FASTCV
+	_ui->label_fastcv->setText("Yes");
+	_ui->label_fastcv_license->setEnabled(true);
+#else
+	_ui->label_fastcv->setText("No");
+	_ui->label_fastcv_license->setEnabled(false);
 #endif
 #ifdef RTABMAP_OCTOMAP
 	_ui->label_octomap->setText("Yes");
@@ -85,6 +119,13 @@ AboutDialog::AboutDialog(QWidget * parent) :
 #else
 	_ui->label_openchisel->setText("No");
 #endif
+#ifdef RTABMAP_ALICE_VISION
+	_ui->label_aliceVision->setText("Yes");
+	_ui->label_aliceVision_license->setEnabled(true);
+#else
+	_ui->label_aliceVision->setText("No");
+	_ui->label_aliceVision_license->setEnabled(false);
+#endif
 
 	_ui->label_freenect->setText(CameraFreenect::available()?"Yes":"No");
 	_ui->label_freenect_license->setEnabled(CameraFreenect::available());
@@ -100,6 +141,8 @@ AboutDialog::AboutDialog(QWidget * parent) :
 	_ui->label_dc1394_license->setEnabled(CameraStereoDC1394::available());
 	_ui->label_flycapture2->setText(CameraStereoFlyCapture2::available()?"Yes":"No");
 	_ui->label_zed->setText(CameraStereoZed::available()?"Yes":"No");
+	_ui->label_k4w2->setText(CameraK4W2::available() ? "Yes" : "No");
+	_ui->label_k4a->setText(CameraK4A::available() ? "Yes" : "No");
 
 	_ui->label_toro->setText(Optimizer::isAvailable(Optimizer::kTypeTORO)?"Yes":"No");
 	_ui->label_toro_license->setEnabled(Optimizer::isAvailable(Optimizer::kTypeTORO)?true:false);
@@ -109,6 +152,8 @@ AboutDialog::AboutDialog(QWidget * parent) :
 	_ui->label_gtsam_license->setEnabled(Optimizer::isAvailable(Optimizer::kTypeGTSAM)?true:false);
 	_ui->label_cvsba->setText(Optimizer::isAvailable(Optimizer::kTypeCVSBA)?"Yes":"No");
 	_ui->label_cvsba_license->setEnabled(Optimizer::isAvailable(Optimizer::kTypeCVSBA)?true:false);
+	_ui->label_ceres->setText(Optimizer::isAvailable(Optimizer::kTypeCeres)?"Yes":"No");
+	_ui->label_ceres_license->setEnabled(Optimizer::isAvailable(Optimizer::kTypeCeres)?true:false);
 
 #ifdef RTABMAP_POINTMATCHER
 	_ui->label_libpointmatcher->setText("Yes");

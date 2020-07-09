@@ -37,6 +37,10 @@ namespace rtabmap {
 
 class Feature2D;
 
+#ifdef RTABMAP_PYMATCHER
+class PyMatcher;
+#endif
+
 // Visual registration
 class RTABMAP_EXP RegistrationVis : public Registration
 {
@@ -50,8 +54,11 @@ public:
 	float getInlierDistance() const {return _inlierDistance;}
 	int getIterations() const {return _iterations;}
 	int getMinInliers() const {return _minInliers;}
+	int getNNType() const {return _nnType;}
+	float getNNDR() const {return _nndr;}
+	int getEstimationType() const {return _estimationType;}
 
-	Feature2D * createFeatureDetector() const; // for convenience
+	const Feature2D * getDetector() const {return _detectorFrom;}
 
 protected:
 	virtual Transform computeTransformationImpl(
@@ -81,13 +88,26 @@ private:
 	float _flowEps;
 	int _flowMaxLevel;
 	float _nndr;
+	int _nnType;
+	bool _gmsWithRotation;
+	bool _gmsWithScale;
+	double _gmsThresholdFactor;
 	int _guessWinSize;
 	bool _guessMatchToProjection;
 	int _bundleAdjustment;
 	bool _depthAsMask;
+	float _minInliersDistributionThr;
+	float _maxInliersMeanDistance;
 
 	ParametersMap _featureParameters;
 	ParametersMap _bundleParameters;
+
+	Feature2D * _detectorFrom;
+	Feature2D * _detectorTo;
+
+#ifdef RTABMAP_PYMATCHER
+	PyMatcher * _pyMatcher;
+#endif
 };
 
 }
