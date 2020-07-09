@@ -444,8 +444,8 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloudFromDepthRGB(
 	UASSERT_MSG((model.imageHeight() == 0 && model.imageWidth() == 0) ||
 			    (model.imageHeight() == imageRgb.rows && model.imageWidth() == imageRgb.cols),
 				uFormat("model=%dx%d rgb=%dx%d", model.imageWidth(), model.imageHeight(), imageRgb.cols, imageRgb.rows).c_str());
-	UASSERT_MSG(imageRgb.rows % imageDepthIn.rows == 0 && imageRgb.cols % imageDepthIn.cols == 0,
-			uFormat("rgb=%dx%d depth=%dx%d", imageRgb.cols, imageRgb.rows, imageDepthIn.cols, imageDepthIn.rows).c_str());
+	//UASSERT_MSG(imageRgb.rows % imageDepthIn.rows == 0 && imageRgb.cols % imageDepthIn.cols == 0,
+	//		uFormat("rgb=%dx%d depth=%dx%d", imageRgb.cols, imageRgb.rows, imageDepthIn.cols, imageDepthIn.rows).c_str());
 	UASSERT(!imageDepthIn.empty() && (imageDepthIn.type() == CV_16UC1 || imageDepthIn.type() == CV_32FC1));
 	if(decimation < 0)
 	{
@@ -1050,8 +1050,8 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr RTABMAP_EXP cloudRGBFromSensorData(
 		UDEBUG("");
 		UASSERT(int((sensorData.imageRaw().cols/sensorData.cameraModels().size())*sensorData.cameraModels().size()) == sensorData.imageRaw().cols);
 		UASSERT(int((sensorData.depthRaw().cols/sensorData.cameraModels().size())*sensorData.cameraModels().size()) == sensorData.depthRaw().cols);
-		UASSERT_MSG(sensorData.imageRaw().cols % sensorData.depthRaw().cols == 0, uFormat("rgb=%d depth=%d", sensorData.imageRaw().cols, sensorData.depthRaw().cols).c_str());
-		UASSERT_MSG(sensorData.imageRaw().rows % sensorData.depthRaw().rows == 0, uFormat("rgb=%d depth=%d", sensorData.imageRaw().rows, sensorData.depthRaw().rows).c_str());
+		//UASSERT_MSG(sensorData.imageRaw().cols % sensorData.depthRaw().cols == 0, uFormat("rgb=%d depth=%d", sensorData.imageRaw().cols, sensorData.depthRaw().cols).c_str());
+		//UASSERT_MSG(sensorData.imageRaw().rows % sensorData.depthRaw().rows == 0, uFormat("rgb=%d depth=%d", sensorData.imageRaw().rows, sensorData.depthRaw().rows).c_str());
 		int subRGBWidth = sensorData.imageRaw().cols/sensorData.cameraModels().size();
 		int subDepthWidth = sensorData.depthRaw().cols/sensorData.cameraModels().size();
 
@@ -1263,7 +1263,7 @@ pcl::PointCloud<pcl::PointXYZ> laserScanFromDepthImages(
 	return scan;
 }
 
-LaserScan laserScanFromPointCloud(const pcl::PCLPointCloud2 & cloud, bool filterNaNs)
+LaserScan laserScanFromPointCloud(const pcl::PCLPointCloud2 & cloud, bool filterNaNs, bool is2D, const Transform & transform)
 {
 	if(cloud.data.empty())
 	{
@@ -1271,7 +1271,11 @@ LaserScan laserScanFromPointCloud(const pcl::PCLPointCloud2 & cloud, bool filter
 	}
 	//determine the output type
 	int fieldStates[8] = {0}; // x,y,z,normal_x,normal_y,normal_z,rgb,intensity
+#if PCL_VERSION_COMPARE(>=, 1, 10, 0)
+	std::uint32_t fieldOffsets[8] = {0};
+#else
 	pcl::uint32_t fieldOffsets[8] = {0};
+#endif
 	for(unsigned int i=0; i<cloud.fields.size(); ++i)
 	{
 		if(cloud.fields[i].name.compare("x") == 0)
@@ -1284,7 +1288,7 @@ LaserScan laserScanFromPointCloud(const pcl::PCLPointCloud2 & cloud, bool filter
 			fieldStates[1] = 1;
 			fieldOffsets[1] = cloud.fields[i].offset;
 		}
-		else if(cloud.fields[i].name.compare("z") == 0)
+		else if(cloud.fields[i].name.compare("z") == 0 && !is2D)
 		{
 			fieldStates[2] = 1;
 			fieldOffsets[2] = cloud.fields[i].offset;
@@ -1332,15 +1336,23 @@ LaserScan laserScanFromPointCloud(const pcl::PCLPointCloud2 & cloud, bool filter
 	bool is3D = fieldStates[0] && fieldStates[1] && fieldStates[2];
 
 	LaserScan::Format format;
+	int outputNormalOffset = 0;
 	if(is3D)
 	{
 		if(hasNormals && hasIntensity)
 		{
 			format = LaserScan::kXYZINormal;
+			outputNormalOffset = 4;
+		}
+		else if(hasNormals && !hasIntensity && !hasRGB)
+		{
+			format = LaserScan::kXYZNormal;
+			outputNormalOffset = 3;
 		}
 		else if(hasNormals && hasRGB)
 		{
 			format = LaserScan::kXYZRGBNormal;
+			outputNormalOffset = 4;
 		}
 		else if(!hasNormals && hasIntensity)
 		{
@@ -1360,6 +1372,12 @@ LaserScan laserScanFromPointCloud(const pcl::PCLPointCloud2 & cloud, bool filter
 		if(hasNormals && hasIntensity)
 		{
 			format = LaserScan::kXYINormal;
+			outputNormalOffset = 3;
+		}
+		else if(hasNormals && !hasIntensity)
+		{
+			format = LaserScan::kXYNormal;
+			outputNormalOffset = 2;
 		}
 		else if(!hasNormals && hasIntensity)
 		{
@@ -1374,6 +1392,12 @@ LaserScan laserScanFromPointCloud(const pcl::PCLPointCloud2 & cloud, bool filter
 	UASSERT(cloud.data.size()/cloud.point_step == cloud.height*cloud.width);
 	cv::Mat laserScan = cv::Mat(1, (int)cloud.data.size()/cloud.point_step, CV_32FC(LaserScan::channels(format)));
 
+	bool transformValid = !transform.isNull() && !transform.isIdentity();
+	Transform transformRot;
+	if(transformValid)
+	{
+		transformRot = transform.rotation();
+	}
 	int oi=0;
 	for (uint32_t row = 0; row < cloud.height; ++row)
 	{
@@ -1416,9 +1440,15 @@ LaserScan laserScanFromPointCloud(const pcl::PCLPointCloud2 & cloud, bool filter
 				}
 				else // XYZRGB
 				{
+#if PCL_VERSION_COMPARE(>=, 1, 10, 0)
+					std::uint8_t b=*(msg_data + fieldOffsets[6]);
+					std::uint8_t g=*(msg_data + fieldOffsets[6]+1);
+					std::uint8_t r=*(msg_data + fieldOffsets[6]+2);
+#else
 					pcl::uint8_t b=*(msg_data + fieldOffsets[6]);
 					pcl::uint8_t g=*(msg_data + fieldOffsets[6]+1);
 					pcl::uint8_t r=*(msg_data + fieldOffsets[6]+2);
+#endif
 					int * ptrInt = (int*)ptr;
 					ptrInt[3] = int(b) | (int(g) << 8) | (int(r) << 16);
 				}
@@ -1461,9 +1491,15 @@ LaserScan laserScanFromPointCloud(const pcl::PCLPointCloud2 & cloud, bool filter
 				}
 				else // XYZRGBNormal
 				{
+#if PCL_VERSION_COMPARE(>=, 1, 10, 0)
+					std::uint8_t b=*(msg_data + fieldOffsets[6]);
+					std::uint8_t g=*(msg_data + fieldOffsets[6]+1);
+					std::uint8_t r=*(msg_data + fieldOffsets[6]+2);
+#else
 					pcl::uint8_t b=*(msg_data + fieldOffsets[6]);
 					pcl::uint8_t g=*(msg_data + fieldOffsets[6]+1);
 					pcl::uint8_t r=*(msg_data + fieldOffsets[6]+2);
+#endif
 					int * ptrInt = (int*)ptr;
 					ptrInt[3] = int(b) | (int(g) << 8) | (int(r) << 16);
 				}
@@ -1479,6 +1515,24 @@ LaserScan laserScanFromPointCloud(const pcl::PCLPointCloud2 & cloud, bool filter
 
 			if(!filterNaNs || valid)
 			{
+				if(valid && transformValid)
+				{
+					cv::Point3f pt = util3d::transformPoint(cv::Point3f(ptr[0], ptr[1], is3D?ptr[3]:0), transform);
+					ptr[0] = pt.x;
+					ptr[1] = pt.y;
+					if(is3D)
+					{
+						ptr[2] = pt.z;
+					}
+					if(hasNormals)
+					{
+						pt = util3d::transformPoint(cv::Point3f(ptr[outputNormalOffset], ptr[outputNormalOffset+1], ptr[outputNormalOffset+2]), transformRot);
+						ptr[outputNormalOffset] = pt.x;
+						ptr[outputNormalOffset+1] = pt.y;
+						ptr[outputNormalOffset+2] = pt.z;
+					}
+				}
+
 				++oi;
 			}
 		}
@@ -2487,9 +2541,13 @@ pcl::PointXYZRGB laserScanToPointRGB(const LaserScan & laserScan, int index, uns
 	}
 	else if(laserScan.hasIntensity())
 	{
-		// based on Velodyne/SICK specification of intensity 0-100
+		// package intensity float -> rgba
+		int * ptrInt = (int*)ptr;
 		int indexIntensity = laserScan.getIntensityOffset();
-		output.b = output.g = output.r = (unsigned char)ptr[indexIntensity];
+		output.r = (unsigned char)(ptrInt[indexIntensity] & 0xFF);
+		output.g = (unsigned char)((ptrInt[indexIntensity] >> 8) & 0xFF);
+		output.b = (unsigned char)((ptrInt[indexIntensity] >> 16) & 0xFF);
+		output.a = (unsigned char)((ptrInt[indexIntensity] >> 24) & 0xFF);
 	}
 	else
 	{
@@ -2547,9 +2605,12 @@ pcl::PointXYZRGBNormal laserScanToPointRGBNormal(const LaserScan & laserScan, in
 	}
 	else if(laserScan.hasIntensity())
 	{
-		// based on Velodyne/SICK specification of intensity 0-100
+		int * ptrInt = (int*)ptr;
 		int indexIntensity = laserScan.getIntensityOffset();
-		output.b = output.g = output.r = (unsigned char)ptr[indexIntensity];
+		output.r = (unsigned char)(ptrInt[indexIntensity] & 0xFF);
+		output.g = (unsigned char)((ptrInt[indexIntensity] >> 8) & 0xFF);
+		output.b = (unsigned char)((ptrInt[indexIntensity] >> 16) & 0xFF);
+		output.a = (unsigned char)((ptrInt[indexIntensity] >> 24) & 0xFF);
 	}
 	else
 	{

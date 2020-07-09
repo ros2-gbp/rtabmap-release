@@ -32,25 +32,48 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap/utilite/UFile.h>
 #include <rtabmap/utilite/UStl.h>
 #include <rtabmap/utilite/UMath.h>
-#include <rtabmap/utilite/UPlot.h>
 #include <rtabmap/utilite/ULogger.h>
-#include <QApplication>
 #include <stdio.h>
+#include <iostream>
+#include <fstream>
+
+#ifdef WITH_QT
+#include <rtabmap/utilite/UPlot.h>
+#include <QApplication>
+#endif
 
 using namespace rtabmap;
 
 void showUsage()
 {
 	printf("\nUsage:\n"
-			"rtabmap-report [\"Statistic/Id\"] [--latex] [--kitti] [--scale] [--poses] path\n"
+#ifdef WITH_QT
+			"rtabmap-report [\"Statistic/Id\"] [options] path\n"
+#else
+			"rtabmap-report [options] path\n"
+			"[Not built with Qt, statistics cannot be plotted]\n"
+#endif
 			"  path               Directory containing rtabmap databases or path of a database.\n"
-			"  --latex            Print table formatted in LaTeX with results.\n"
-			"  --kitti            Compute error based on KITTI benchmark.\n"
-			"  --relative         Compute relative motion error between poses.\n"
-			"  --scale            Find the best scale for the map against the ground truth\n"
-			"                       and compute error based on the scaled path.\n"
-			"  --poses            Export poses to [path]_poses.txt, ground truth to [path]_gt.txt\n"
-			"                       and valid ground truth indices to [path]_indices.txt \n\n");
+			"  Options:"
+			"    --latex            Print table formatted in LaTeX with results.\n"
+			"    --kitti            Compute error based on KITTI benchmark.\n"
+			"    --relative         Compute relative motion error between poses.\n"
+			"    --loop             Compute relative motion error of loop closures.\n"
+			"    --scale            Find the best scale for the map against the ground truth\n"
+			"                         and compute error based on the scaled path.\n"
+			"    --poses            Export poses to [path]_poses.txt, ground truth to [path]_gt.txt\n"
+			"                         and valid ground truth indices to [path]_indices.txt \n"
+#ifdef WITH_QT
+			"    --stats            Show available statistics to plot (if path is a file). \n"
+			"    --invert           When reading many databases, put all curves from a same \n"
+			"                       database in same figure, instead of all same curves from \n"
+			"                       different database in same figure. When reading a single \n"
+			"                       database, the inverse will be done. \n"
+			"    --ids              Use IDs for x axis instead of time in the figures. \n"
+			"    --start #          Start from this node ID for the figures.\n"
+#endif
+			"    --report           Export all statistics values in report.txt \n"
+			"    --help             Show usage\n\n");
 	exit(1);
 }
 
@@ -63,18 +86,32 @@ int main(int argc, char * argv[])
 
 	ULogger::setType(ULogger::kTypeConsole);
 	ULogger::setLevel(ULogger::kWarning);
-
+#ifdef WITH_QT
 	QApplication app(argc, argv);
+#endif
 
 	bool outputLatex = false;
 	bool outputScaled = false;
 	bool outputPoses = false;
 	bool outputKittiError = false;
 	bool outputRelativeError = false;
+	bool outputReport = false;
+	bool outputLoopAccuracy = false;
+	bool showAvailableStats = false;
+	bool invertFigures = false;
+	bool useIds = false;
+	int startId = 0;
+	std::vector<std::string> statsToShow;
+#ifdef WITH_QT
 	std::map<std::string, UPlot*> figures;
+#endif
 	for(int i=1; i<argc-1; ++i)
 	{
-		if(strcmp(argv[i], "--latex") == 0)
+		if(strcmp(argv[i], "--help") == 0)
+		{
+			showUsage();
+		}
+		else if(strcmp(argv[i], "--latex") == 0)
 		{
 			outputLatex = true;
 		}
@@ -94,19 +131,79 @@ int main(int argc, char * argv[])
 		{
 			outputPoses = true;
 		}
+		else if(strcmp(argv[i], "--loop") == 0)
+		{
+			outputLoopAccuracy = true;
+		}
+		else if(strcmp(argv[i],"--report") == 0)
+		{
+			outputReport = true;
+		}
+		else if(strcmp(argv[i],"--stats") == 0)
+		{
+			showAvailableStats = true;
+		}
+		else if(strcmp(argv[i],"--invert") == 0)
+		{
+			invertFigures = true;
+		}
+		else if(strcmp(argv[i],"--ids") == 0)
+		{
+			useIds = true;
+		}
+#ifdef WITH_QT
+		else if(strcmp(argv[i],"--start") == 0)
+		{
+			++i;
+			if(i<argc-1)
+			{
+				startId = atoi(argv[i]);
+				printf("Figures will be plotted from id=%d (--start)\n", startId);
+			}
+			else
+			{
+				printf("Missing id for \"--start\" option.\n");
+				showUsage();
+			}
+		}
 		else
 		{
-			std::string figureTitle = argv[i];
-			printf("Plot %s\n", figureTitle.c_str());
-			UPlot * fig = new UPlot();
-			fig->setTitle(figureTitle.c_str());
-			fig->setXLabel("Time (s)");
-			figures.insert(std::make_pair(figureTitle, fig));
+
+			statsToShow.push_back(argv[i]);
 		}
+#endif
 	}
 
 	std::string path = argv[argc-1];
 	path = uReplaceChar(path, '~', UDirectory::homeDir());
+
+#ifdef WITH_QT
+	if(!UDirectory::exists(path) && UFile::getExtension(path).compare("db") == 0)
+	{
+		invertFigures = !invertFigures;
+	}
+	if(!invertFigures)
+	{
+		for(size_t i=0; i<statsToShow.size(); ++i)
+		{
+			std::string figureTitle = statsToShow[i];
+			printf("Plot %s\n", figureTitle.c_str());
+			UPlot * fig = new UPlot();
+			fig->resize(QSize(640,480));
+			fig->setWindowTitle(figureTitle.c_str());
+			if(useIds)
+			{
+				fig->setXLabel("Node ID");
+			}
+			else
+			{
+				fig->setXLabel("Time (s)");
+			}
+			figures.insert(std::make_pair(figureTitle, fig));
+		}
+		statsToShow.clear();
+	}
+#endif
 
 	std::string fileName;
 	std::list<std::string> paths;
@@ -183,6 +280,7 @@ int main(int argc, char * argv[])
 					driver->getAllNodeIds(ids);
 					std::map<int, std::pair<std::map<std::string, float>, double> > stats = driver->getAllStatistics();
 					std::map<int, Transform> odomPoses, gtPoses;
+					std::map<int, double> odomStamps;
 					std::vector<float> cameraTime;
 					cameraTime.reserve(ids.size());
 					std::vector<float> odomTime;
@@ -193,12 +291,71 @@ int main(int argc, char * argv[])
 					float maxRMSE = -1;
 					float maxOdomRAM = -1;
 					float maxMapRAM = -1;
+#ifdef WITH_QT
+					if(currentPathIsDatabase && showAvailableStats)
+					{
+						std::map<std::string, int> availableStats;
+						for(std::set<int>::iterator iter=ids.begin(); iter!=ids.end(); ++iter)
+						{
+							if(stats.find(*iter) != stats.end())
+							{
+								for(std::map<std::string, float>::iterator jter=stats.at(*iter).first.begin(); jter!=stats.at(*iter).first.end(); ++jter)
+								{
+									if(availableStats.find(jter->first) != availableStats.end())
+									{
+										++availableStats.at(jter->first);
+									}
+									else
+									{
+										availableStats.insert(std::make_pair(jter->first, 1));
+									}
+								}
+							}
+						}
+						printf("Showing available statistics in \"%s\":\n", filePath.c_str());
+						for(std::map<std::string, int>::iterator iter=availableStats.begin(); iter!=availableStats.end(); ++iter)
+						{
+							printf("%s (%d)\n", iter->first.c_str(), iter->second);
+						}
+						printf("\n");
+						exit(1);
+					}
+
 					std::map<std::string, UPlotCurve*> curves;
 					std::map<std::string, double> firstStamps;
-					for(std::map<std::string, UPlot*>::iterator iter=figures.begin(); iter!=figures.end(); ++iter)
+					if(statsToShow.empty())
 					{
-						curves.insert(std::make_pair(iter->first, iter->second->addCurve(filePath.c_str())));
+						for(std::map<std::string, UPlot*>::iterator iter=figures.begin(); iter!=figures.end(); ++iter)
+						{
+							curves.insert(std::make_pair(iter->first, iter->second->addCurve(filePath.c_str())));
+						}
 					}
+					else
+					{
+						UPlot * fig = new UPlot();
+						fig->setWindowTitle(filePath.c_str());
+						if(useIds)
+						{
+							fig->setXLabel("Node ID");
+						}
+						else
+						{
+							fig->setXLabel("Time (s)");
+						}
+						if(!figures.insert(std::make_pair(filePath.c_str(), fig)).second)
+						{
+							delete fig;
+							printf("Figure %s already added!\n", filePath.c_str());
+						}
+						else
+						{
+							for(size_t i=0; i<statsToShow.size(); ++i)
+							{
+								curves.insert(std::make_pair(statsToShow[i], fig->addCurve(statsToShow[i].c_str())));
+							}
+						}
+					}
+#endif
 
 					for(std::set<int>::iterator iter=ids.begin(); iter!=ids.end(); ++iter)
 					{
@@ -212,6 +369,7 @@ int main(int argc, char * argv[])
 						if(driver->getNodeInfo(*iter, p, m, w, l, s, gt, v, gps, sensors))
 						{
 							odomPoses.insert(std::make_pair(*iter, p));
+							odomStamps.insert(std::make_pair(*iter, s));
 							if(!gt.isNull())
 							{
 								gtPoses.insert(std::make_pair(*iter, gt));
@@ -235,17 +393,21 @@ int main(int argc, char * argv[])
 								{
 									odomTime.push_back(stat.at(std::string("Odometry/TotalTime/ms")));
 								}
+								else if(uContains(stat, std::string("Odometry/TimeEstimation/ms")))
+								{
+									odomTime.push_back(stat.at(std::string("Odometry/TimeEstimation/ms")));
+								}
 
 								if(uContains(stat, std::string("RtabmapROS/TotalTime/ms")))
 								{
-									if(w>=0 || stat.at("RtabmapROS/TotalTime/ms") > 10.0f)
+									if(w>=0)
 									{
 										slamTime.push_back(stat.at("RtabmapROS/TotalTime/ms"));
 									}
 								}
 								else if(uContains(stat, Statistics::kTimingTotal()))
 								{
-									if(w>=0 || stat.at(Statistics::kTimingTotal()) > 10.0f)
+									if(w>=0)
 									{
 										slamTime.push_back(stat.at(Statistics::kTimingTotal()));
 									}
@@ -268,19 +430,25 @@ int main(int argc, char * argv[])
 									}
 								}
 
+#ifdef WITH_QT
 								for(std::map<std::string, UPlotCurve*>::iterator jter=curves.begin(); jter!=curves.end(); ++jter)
 								{
-									if(uContains(stat, jter->first))
+									if(uContains(stat, jter->first) && *iter >= startId)
 									{
 										if(!uContains(firstStamps, jter->first))
 										{
 											firstStamps.insert(std::make_pair(jter->first, s));
 										}
 										float x = s - firstStamps.at(jter->first);
+										if(useIds)
+										{
+											x = *iter;
+										}
 										float y = stat.at(jter->first);
 										jter->second->addValue(x,y);
 									}
 								}
+#endif
 							}
 						}
 					}
@@ -295,7 +463,8 @@ int main(int argc, char * argv[])
 						{
 							links.insert(*jter);
 						}
-						if(jter->second.type() == Link::kGlobalClosure &&
+						if( jter->second.type() != Link::kNeighbor &&
+							jter->second.type() != Link::kNeighborMerged &&
 							graph::findLink(loopClosureLinks, jter->second.from(), jter->second.to()) == loopClosureLinks.end())
 						{
 							loopClosureLinks.insert(*jter);
@@ -311,6 +480,9 @@ int main(int argc, char * argv[])
 					float kitti_r_err = 0.0f;
 					float relative_t_err = 0.0f;
 					float relative_r_err = 0.0f;
+					float loop_t_err = 0.0f;
+					float loop_r_err = 0.0f;
+
 					if(ids.size())
 					{
 						std::map<int, Transform> posesOut;
@@ -493,54 +665,121 @@ int main(int argc, char * argv[])
 								std::string dir = UDirectory::getDir(filePath);
 								std::string dbName = UFile::getName(filePath);
 								dbName = dbName.substr(0, dbName.size()-3); // remove db
-								std::string path = dir+UDirectory::separator()+dbName+"_poses.txt";
-								if(!graph::exportPoses(path, outputKittiError?2:0, poses))
+								std::string path = dir+UDirectory::separator()+dbName+"_slam.txt";
+								std::multimap<int, Link> dummyLinks;
+								std::map<int, double> stamps;
+								if(!outputKittiError)
+								{
+									for(std::map<int, Transform>::iterator iter=poses.begin(); iter!=poses.end(); ++iter)
+									{
+										UASSERT(odomStamps.find(iter->first) != odomStamps.end());
+										stamps.insert(*odomStamps.find(iter->first));
+									}
+								}
+								if(!graph::exportPoses(path, outputKittiError?2:10, poses, dummyLinks, stamps))
 								{
 									printf("Could not export the poses to \"%s\"!?!\n", path.c_str());
 								}
+
+								//export odom
+								path = dir+UDirectory::separator()+dbName+"_odom.txt";
+								stamps.clear();
+								if(!outputKittiError)
+								{
+									for(std::map<int, Transform>::iterator iter=odomPoses.begin(); iter!=odomPoses.end(); ++iter)
+									{
+										UASSERT(odomStamps.find(iter->first) != odomStamps.end());
+										stamps.insert(*odomStamps.find(iter->first));
+									}
+								}
+								if(!graph::exportPoses(path, outputKittiError?2:10, odomPoses, dummyLinks, stamps))
+								{
+									printf("Could not export the ground truth to \"%s\"!?!\n", path.c_str());
+								}
+
+								//export ground truth
 								if(groundTruth.size())
 								{
-									// For missing ground truth poses, set them to null
-									std::vector<int> validIndices(poses.size(), 1);
-									int i=0;
-									for(std::map<int, Transform>::iterator iter=poses.begin(); iter!=poses.end(); ++iter, ++i)
+									path = dir+UDirectory::separator()+dbName+"_gt.txt";
+									stamps.clear();
+									if(!outputKittiError)
 									{
-										if(groundTruth.find(iter->first) == groundTruth.end())
+										for(std::map<int, Transform>::iterator iter=groundTruth.begin(); iter!=groundTruth.end(); ++iter)
 										{
-											groundTruth.insert(std::make_pair(iter->first, Transform()));
-											validIndices[i] = 0;
+											UASSERT(odomStamps.find(iter->first) != odomStamps.end());
+											stamps.insert(*odomStamps.find(iter->first));
 										}
 									}
-									path = dir+UDirectory::separator()+dbName+"_gt.txt";
-									if(!graph::exportPoses(path, outputKittiError?2:0, groundTruth))
+									if(!graph::exportPoses(path, outputKittiError?2:10, groundTruth, dummyLinks, stamps))
 									{
 										printf("Could not export the ground truth to \"%s\"!?!\n", path.c_str());
 									}
-									else
+								}
+							}
+
+							if (outputReport)
+							{
+								bool fillHeader = false;
+								std::ifstream f("report.csv");
+    							if(!f.good())
+								{
+									fillHeader = true;
+								}
+
+								std::ofstream myfile;
+								myfile.open("report.csv", std::fstream::in | std::fstream::out | std::fstream::app);
+								if(fillHeader)
+								{
+									myfile 	<< "Rosbag name"<<";"<<"error linear (m)"<<";"<<"error linear max (m)"<<";"<<"error linear odom (m)"<<";"
+											<<"error angular"<<";"
+											<<"Slam avg (hz)"<<";"<<"Slam max (hz)"<<";"
+											<<"Odom avg (hz)"<<";"<<"Odom max (hz)"<<std::endl;
+								}
+
+								myfile 	<<fileName.c_str()<<";"
+										<<bestRMSE<< ";"
+										<<maxRMSE<<";"
+										<<bestVoRMSE<<";"
+										<<bestRMSEAng<<";"
+										<<(1/(uMean(slamTime)/1000.0))<<";"
+										<<(1/(uMax(slamTime)/1000.0))<<";"
+										<<(1/(uMean(odomTime)/1000.0))<<";"
+										<<(1/(uMax(odomTime)/1000.0))<<";"<<std::endl;
+								myfile.close();
+							}
+
+							if(outputLoopAccuracy && !groundTruth.empty() && !linksOut.empty())
+							{
+								float sumDist = 0.0f;
+								float sumAngle = 0.0f;
+								int count = 0;
+								for(std::multimap<int, Link>::iterator iter=loopClosureLinks.begin(); iter!=loopClosureLinks.end(); ++iter)
+								{
+									if(	groundTruth.find(iter->second.from())!=groundTruth.end() &&
+										groundTruth.find(iter->second.to())!=groundTruth.end())
 									{
-										// save valid indices
-										path = dir+UDirectory::separator()+dbName+"_indices.txt";
-										FILE * file = 0;
-	#ifdef _MSC_VER
-										fopen_s(&file, path.c_str(), "w");
-	#else
-										file = fopen(path.c_str(), "w");
-	#endif
-										if(file)
-										{
-											// VERTEX3 id x y z phi theta psi
-											for(unsigned int k=0; k<validIndices.size(); ++k)
-											{
-												fprintf(file, "%d\n", validIndices[k]);
-											}
-											fclose(file);
-										}
+										Transform gtLink = groundTruth.at(iter->second.from()).inverse()*groundTruth.at(iter->second.to());
+										const Transform & t = iter->second.transform();
+										Transform scaledLink(
+												t.r11(), t.r12(), t.r13(), t.x()*bestScale,
+												t.r21(), t.r22(), t.r23(), t.y()*bestScale,
+												t.r31(), t.r32(), t.r33(), t.z()*bestScale);
+										Transform diff = gtLink.inverse()*scaledLink;
+										sumDist += diff.getNorm();
+										sumAngle += diff.getAngle();
+										++count;
 									}
+								}
+								if(count>0)
+								{
+									loop_t_err = sumDist/float(count);
+									loop_r_err = sumAngle/float(count);
+									loop_r_err *= 180/CV_PI; // Rotation error (deg)
 								}
 							}
 						}
 					}
-					printf("   %s (%d, s=%.3f):\terror lin=%.3fm (max=%.3fm, odom=%.3fm) ang=%.1fdeg%s%s, slam: avg=%dms (max=%dms) loops=%d, odom: avg=%dms (max=%dms), camera: avg=%dms, %smap=%dMB\n",
+					printf("   %s (%d, s=%.3f):\terror lin=%.3fm (max=%.3fm, odom=%.3fm) ang=%.1fdeg%s%s, slam: avg=%dms (max=%dms) loops=%d%s, odom: avg=%dms (max=%dms), camera: avg=%dms, %smap=%dMB\n",
 							fileName.c_str(),
 							(int)ids.size(),
 							bestScale,
@@ -552,6 +791,7 @@ int main(int argc, char * argv[])
 							!outputRelativeError?"":uFormat(", Relative: t_err=%.3fm r_err=%.2f deg", relative_t_err, relative_r_err).c_str(),
 							(int)uMean(slamTime), (int)uMax(slamTime),
 							(int)loopClosureLinks.size(),
+							!outputLoopAccuracy?"":uFormat(" (t_err=%.3fm r_err=%.2f deg)", loop_t_err, loop_r_err).c_str(),
 							(int)uMean(odomTime), (int)uMax(odomTime),
 							(int)uMean(cameraTime),
 							maxOdomRAM!=-1.0f?uFormat("RAM odom=%dMB ", (int)maxOdomRAM).c_str():"",
@@ -680,10 +920,11 @@ int main(int argc, char * argv[])
 			}
 		}
 
+
 		printf("\\end{tabular}\n");
 		printf("\\end{table*}\n----------------\n");
 	}
-
+#ifdef WITH_QT
 	if(figures.size())
 	{
 		for(std::map<std::string, UPlot*>::iterator iter=figures.begin(); iter!=figures.end(); ++iter)
@@ -692,5 +933,6 @@ int main(int argc, char * argv[])
 		}
 		return app.exec();
 	}
+#endif
 	return 0;
 }

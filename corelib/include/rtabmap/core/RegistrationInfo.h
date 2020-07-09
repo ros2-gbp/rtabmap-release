@@ -37,11 +37,15 @@ public:
 	RegistrationInfo() :
 		totalTime(0.0),
 		inliers(0),
+		inliersMeanDistance(0.0f),
+		inliersDistribution(0.0f),
 		matches(0),
 		icpInliersRatio(0),
 		icpTranslation(0.0f),
 		icpRotation(0.0f),
-		icpStructuralComplexity(0.0f)
+		icpStructuralComplexity(0.0f),
+		icpStructuralDistribution(0.0f),
+		icpCorrespondences(0)
 
 	{
 	}
@@ -53,11 +57,15 @@ public:
 		output.covariance = covariance.clone();
 		output.rejectedMsg = rejectedMsg;
 		output.inliers = inliers;
+		output.inliersMeanDistance = inliersMeanDistance;
+		output.inliersDistribution = inliersDistribution;
 		output.matches = matches;
 		output.icpInliersRatio = icpInliersRatio;
 		output.icpTranslation = icpTranslation;
 		output.icpRotation = icpRotation;
 		output.icpStructuralComplexity = icpStructuralComplexity;
+		output.icpStructuralDistribution = icpStructuralDistribution;
+		output.icpCorrespondences = icpCorrespondences;
 		return output;
 	}
 
@@ -67,6 +75,8 @@ public:
 
 	// RegistrationVis
 	int inliers;
+	float inliersMeanDistance;
+	float inliersDistribution;
 	std::vector<int> inliersIDs;
 	int matches;
 	std::vector<int> matchesIDs;
@@ -77,6 +87,8 @@ public:
 	float icpTranslation;
 	float icpRotation;
 	float icpStructuralComplexity;
+	float icpStructuralDistribution;
+	int   icpCorrespondences;
 };
 
 }

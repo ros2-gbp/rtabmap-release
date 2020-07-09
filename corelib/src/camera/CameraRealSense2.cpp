@@ -28,6 +28,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap/utilite/UTimer.h>
 #include <rtabmap/utilite/UThreadC.h>
 #include <rtabmap/utilite/UConversion.h>
+#include <rtabmap/utilite/UEventsManager.h>
 #include <opencv2/imgproc/types_c.h>
 
 #ifdef RTABMAP_REALSENSE2
@@ -35,6 +36,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <librealsense2/rsutil.h>
 #include <librealsense2/hpp/rs_processing.hpp>
 #include <librealsense2/rs_advanced_mode.hpp>
+#include <fstream>
 #endif
 
 namespace rtabmap
@@ -57,20 +59,25 @@ CameraRealSense2::CameraRealSense2(
 #ifdef RTABMAP_REALSENSE2
     ,
 	ctx_(new rs2::context),
-	dev_(new rs2::device),
+	dev_(2, 0),
 	deviceId_(device),
 	syncer_(new rs2::syncer),
 	depth_scale_meters_(1.0f),
 	depthIntrinsics_(new rs2_intrinsics),
 	rgbIntrinsics_(new rs2_intrinsics),
 	depthToRGBExtrinsics_(new rs2_extrinsics),
+	lastImuStamp_(0.0),
+	clockSyncWarningShown_(false),
 	emitterEnabled_(true),
-	irDepth_(false),
+	ir_(false),
+	irDepth_(true),
 	rectifyImages_(true),
 	odometryProvided_(false),
 	cameraWidth_(640),
 	cameraHeight_(480),
-	cameraFps_(30)
+	cameraFps_(30),
+	publishInterIMU_(false),
+	dualMode_(false)
 #endif
 {
 	UDEBUG("");
@@ -79,99 +86,53 @@ CameraRealSense2::CameraRealSense2(
 CameraRealSense2::~CameraRealSense2()
 {
 #ifdef RTABMAP_REALSENSE2
-	for(rs2::sensor _sensor : dev_->query_sensors())
+	try
 	{
-		try
+		for(size_t i=0; i<dev_.size(); ++i)
 		{
-			_sensor.stop();
-			_sensor.close();
-		}
-		catch(const rs2::wrong_api_call_sequence_error & error)
-		{
-			UINFO("%s", error.what());
+			if(dev_[i])
+			{
+				for(rs2::sensor _sensor : dev_[i]->query_sensors())
+				{
+					try
+					{
+						_sensor.stop();
+						_sensor.close();
+					}
+					catch(const rs2::error & error)
+					{
+						UWARN("%s", error.what());
+					}
+				}
+				delete dev_[i];
+			}
 		}
 	}
-	delete ctx_;
-	delete dev_;
-	delete syncer_;
+	catch(const rs2::error & error)
+	{
+		UINFO("%s", error.what());
+	}
+	try {
+		delete ctx_;
+	}
+	catch(const rs2::error & error)
+	{
+		UWARN("%s", error.what());
+	}
+	try {
+		delete syncer_;
+	}
+	catch(const rs2::error & error)
+	{
+		UWARN("%s", error.what());
+	}
 	delete depthIntrinsics_;
 	delete rgbIntrinsics_;
 	delete depthToRGBExtrinsics_;
 #endif
-	UDEBUG("");
 }
 
 #ifdef RTABMAP_REALSENSE2
-void alignFrame(const rs2_intrinsics& from_intrin,
-                                   const rs2_intrinsics& other_intrin,
-                                   rs2::frame from_image,
-                                   uint32_t output_image_bytes_per_pixel,
-                                   const rs2_extrinsics& from_to_other,
-								   cv::Mat & registeredDepth,
-								   float depth_scale_meters)
-{
-    static const auto meter_to_mm = 0.001f;
-    uint8_t* p_out_frame = registeredDepth.data;
-    auto from_vid_frame = from_image.as<rs2::video_frame>();
-    auto from_bytes_per_pixel = from_vid_frame.get_bytes_per_pixel();
-
-    static const auto blank_color = 0x00;
-    UASSERT(registeredDepth.total()*registeredDepth.channels()*registeredDepth.depth() == other_intrin.height * other_intrin.width * output_image_bytes_per_pixel);
-    memset(p_out_frame, blank_color, other_intrin.height * other_intrin.width * output_image_bytes_per_pixel);
-
-    auto p_from_frame = reinterpret_cast<const uint8_t*>(from_image.get_data());
-    auto from_stream_type = from_image.get_profile().stream_type();
-    float depth_units = ((from_stream_type == RS2_STREAM_DEPTH)? depth_scale_meters:1.f);
-    UASSERT(from_stream_type == RS2_STREAM_DEPTH);
-    UASSERT_MSG(depth_units > 0.0f, uFormat("depth_scale_meters=%f", depth_scale_meters).c_str());
-#pragma omp parallel for schedule(dynamic)
-    for (int from_y = 0; from_y < from_intrin.height; ++from_y)
-    {
-        int from_pixel_index = from_y * from_intrin.width;
-        for (int from_x = 0; from_x < from_intrin.width; ++from_x, ++from_pixel_index)
-        {
-            // Skip over depth pixels with the value of zero
-            float depth = (from_stream_type == RS2_STREAM_DEPTH)?(depth_units * ((const uint16_t*)p_from_frame)[from_pixel_index]): 1.f;
-            if (depth)
-            {
-                // Map the top-left corner of the depth pixel onto the other image
-                float from_pixel[2] = { from_x - 0.5f, from_y - 0.5f }, from_point[3], other_point[3], other_pixel[2];
-                rs2_deproject_pixel_to_point(from_point, &from_intrin, from_pixel, depth);
-                rs2_transform_point_to_point(other_point, &from_to_other, from_point);
-                rs2_project_point_to_pixel(other_pixel, &other_intrin, other_point);
-                const int other_x0 = static_cast<int>(other_pixel[0] + 0.5f);
-                const int other_y0 = static_cast<int>(other_pixel[1] + 0.5f);
-
-                // Map the bottom-right corner of the depth pixel onto the other image
-                from_pixel[0] = from_x + 0.5f; from_pixel[1] = from_y + 0.5f;
-                rs2_deproject_pixel_to_point(from_point, &from_intrin, from_pixel, depth);
-                rs2_transform_point_to_point(other_point, &from_to_other, from_point);
-                rs2_project_point_to_pixel(other_pixel, &other_intrin, other_point);
-                const int other_x1 = static_cast<int>(other_pixel[0] + 0.5f);
-                const int other_y1 = static_cast<int>(other_pixel[1] + 0.5f);
-
-                if (other_x0 < 0 || other_y0 < 0 || other_x1 >= other_intrin.width || other_y1 >= other_intrin.height)
-                    continue;
-
-                for (int y = other_y0; y <= other_y1; ++y)
-                {
-                    for (int x = other_x0; x <= other_x1; ++x)
-                    {
-                        int out_pixel_index = y * other_intrin.width + x;
-                        //Tranfer n-bit pixel to n-bit pixel
-                        for (int i = 0; i < from_bytes_per_pixel; i++)
-                        {
-                            const auto out_offset = out_pixel_index * output_image_bytes_per_pixel + i;
-                            const auto from_offset = from_pixel_index * output_image_bytes_per_pixel + i;
-                            p_out_frame[out_offset] = p_from_frame[from_offset] * (depth_units / meter_to_mm);
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 void CameraRealSense2::imu_callback(rs2::frame frame)
 {
 	auto stream = frame.get_profile().stream_type();
@@ -186,7 +147,7 @@ void CameraRealSense2::imu_callback(rs2::frame frame)
 	if(stream == RS2_STREAM_GYRO)
 	{
 		gyroBuffer_.insert(gyroBuffer_.end(), std::make_pair(frame.get_timestamp(), crnt_reading));
-		if(gyroBuffer_.size() > 10)
+		if(gyroBuffer_.size() > 1000)
 		{
 			gyroBuffer_.erase(gyroBuffer_.begin());
 		}
@@ -194,36 +155,37 @@ void CameraRealSense2::imu_callback(rs2::frame frame)
 	else
 	{
 		accBuffer_.insert(accBuffer_.end(), std::make_pair(frame.get_timestamp(), crnt_reading));
-		if(accBuffer_.size() > 10)
+		if(accBuffer_.size() > 1000)
 		{
 			accBuffer_.erase(accBuffer_.begin());
 		}
 	}
 }
 
+// See https://github.com/IntelRealSense/realsense-ros/blob/2a45f09003c98a5bdf39ee89df032bdb9c9bcd2d/realsense2_camera/src/base_realsense_node.cpp#L1397-L1404
 Transform CameraRealSense2::realsense2PoseRotation_ = Transform(
 		0, 0,-1,0,
 		-1, 0, 0,0,
 		 0, 1, 0,0);
-Transform CameraRealSense2::realsense2PoseRotationInv_ = realsense2PoseRotation_.inverse();
 
 void CameraRealSense2::pose_callback(rs2::frame frame)
 {
 	rs2_pose pose = frame.as<rs2::pose_frame>().get_pose_data();
-	Transform poseT(
-			pose.translation.x,
-			pose.translation.y,
-			pose.translation.z,
-			pose.rotation.x,
-			pose.rotation.y,
-			pose.rotation.z,
-			pose.rotation.w);
-	poseT = realsense2PoseRotation_ * poseT * realsense2PoseRotationInv_;
+	// See https://github.com/IntelRealSense/realsense-ros/blob/2a45f09003c98a5bdf39ee89df032bdb9c9bcd2d/realsense2_camera/src/base_realsense_node.cpp#L1397-L1404
+	Transform poseT = Transform(
+				-pose.translation.z,
+				-pose.translation.x,
+				pose.translation.y,
+				-pose.rotation.z,
+				-pose.rotation.x,
+				pose.rotation.y,
+				pose.rotation.w);
+
 	UDEBUG("POSE callback! %f %s (confidence=%d)", frame.get_timestamp(), poseT.prettyPrint().c_str(), (int)pose.tracker_confidence);
 
 	UScopeMutex sm(poseMutex_);
 	poseBuffer_.insert(poseBuffer_.end(), std::make_pair(frame.get_timestamp(), std::make_pair(poseT, pose.tracker_confidence)));
-	if(poseBuffer_.size() > 10)
+	if(poseBuffer_.size() > 1000)
 	{
 		poseBuffer_.erase(poseBuffer_.begin());
 	}
@@ -241,15 +203,18 @@ void CameraRealSense2::multiple_message_callback(rs2::frame frame)
     {
         case RS2_STREAM_GYRO:
         case RS2_STREAM_ACCEL:
+        	//UWARN("IMU : Domain=%d time=%f host=%f", frame.get_frame_timestamp_domain(), frame.get_timestamp()/1000.0, UTimer::now());
             imu_callback(frame);
             break;
         case RS2_STREAM_POSE:
+        	//UWARN("POSE : Domain=%d time=%f host=%f", frame.get_frame_timestamp_domain(), frame.get_timestamp()/1000.0, UTimer::now());
         	if(odometryProvided_)
         	{
         		pose_callback(frame);
         	}
             break;
         default:
+        	//UWARN("IMG : Domain=%d time=%f host=%f", frame.get_frame_timestamp_domain(), frame.get_timestamp()/1000.0, UTimer::now());
             frame_callback(frame);
     }
 }
@@ -258,7 +223,8 @@ void CameraRealSense2::getPoseAndIMU(
 		const double & stamp,
 		Transform & pose,
 		unsigned int & poseConfidence,
-		IMU & imu) const
+		IMU & imu,
+		int maxWaitTimeMs) const
 {
 	pose.setNull();
 	imu = IMU();
@@ -268,14 +234,12 @@ void CameraRealSense2::getPoseAndIMU(
 		return;
 	}
 
-	int maxWaitTime = 30;
-
 	// Interpolate pose
 	if(!poseBuffer_.empty())
 	{
 		poseMutex_.lock();
 		int waitTry = 0;
-		while(poseBuffer_.rbegin()->first < stamp && waitTry < maxWaitTime)
+		while(maxWaitTimeMs>0 && poseBuffer_.rbegin()->first < stamp && waitTry < maxWaitTimeMs)
 		{
 			poseMutex_.unlock();
 			++waitTry;
@@ -284,7 +248,10 @@ void CameraRealSense2::getPoseAndIMU(
 		}
 		if(poseBuffer_.rbegin()->first < stamp)
 		{
-			UWARN("Could not find poses to interpolate at time %f after waiting %d ms (last is %f)...", stamp, maxWaitTime, poseBuffer_.rbegin()->first);
+			if(maxWaitTimeMs > 0)
+			{
+				UWARN("Could not find poses to interpolate at time %f after waiting %d ms (last is %f)...", stamp, maxWaitTimeMs, poseBuffer_.rbegin()->first);
+			}
 		}
 		else
 		{
@@ -308,9 +275,13 @@ void CameraRealSense2::getPoseAndIMU(
 				pose = iterA->second.first.interpolate((stamp-iterA->first) / (iterB->first-iterA->first), iterB->second.first);
 				poseConfidence = iterA->second.second;
 			}
+			else if(stamp < iterA->first)
+			{
+				UWARN("Could not find poses to interpolate at image time %f (earliest is %f). Are sensors synchronized?", stamp, iterA->first);
+			}
 			else
 			{
-				UWARN("Could not find poses to interpolate at time %f", stamp);
+				UWARN("Could not find poses to interpolate at image time %f (between %f and %f), Are sensors synchronized?", stamp, iterA->first, iterB->first);
 			}
 		}
 		poseMutex_.unlock();
@@ -321,7 +292,7 @@ void CameraRealSense2::getPoseAndIMU(
 	{
 		imuMutex_.lock();
 		int waitTry = 0;
-		while(accBuffer_.rbegin()->first < stamp && waitTry < maxWaitTime)
+		while(maxWaitTimeMs > 0 && accBuffer_.rbegin()->first < stamp && waitTry < maxWaitTimeMs)
 		{
 			imuMutex_.unlock();
 			++waitTry;
@@ -330,7 +301,10 @@ void CameraRealSense2::getPoseAndIMU(
 		}
 		if(accBuffer_.rbegin()->first < stamp)
 		{
-			UWARN("Could not find acc data to interpolate at time %f after waiting %d ms (last is %f)...", stamp, maxWaitTime, accBuffer_.rbegin()->first);
+			if(maxWaitTimeMs>0)
+			{
+				UWARN("Could not find acc data to interpolate at time %f after waiting %d ms (last is %f)...", stamp, maxWaitTimeMs, accBuffer_.rbegin()->first);
+			}
 			imuMutex_.unlock();
 			return;
 		}
@@ -361,7 +335,14 @@ void CameraRealSense2::getPoseAndIMU(
 			}
 			else
 			{
-				UWARN("Could not find acc data to interpolate at time %f", stamp);
+				if(stamp < iterA->first)
+				{
+					UWARN("Could not find acc data to interpolate at image time %f (earliest is %f). Are sensors synchronized?", stamp, iterA->first);
+				}
+				else
+				{
+					UWARN("Could not find acc data to interpolate at image time %f (between %f and %f). Are sensors synchronized?", stamp, iterA->first, iterB->first);
+				}
 				imuMutex_.unlock();
 				return;
 			}
@@ -374,7 +355,7 @@ void CameraRealSense2::getPoseAndIMU(
 	{
 		imuMutex_.lock();
 		int waitTry = 0;
-		while(gyroBuffer_.rbegin()->first < stamp && waitTry < maxWaitTime)
+		while(maxWaitTimeMs>0 && gyroBuffer_.rbegin()->first < stamp && waitTry < maxWaitTimeMs)
 		{
 			imuMutex_.unlock();
 			++waitTry;
@@ -383,7 +364,10 @@ void CameraRealSense2::getPoseAndIMU(
 		}
 		if(gyroBuffer_.rbegin()->first < stamp)
 		{
-			UWARN("Could not find gyro data to interpolate at time %f after waiting %d ms (last is %f)...", stamp, maxWaitTime, gyroBuffer_.rbegin()->first);
+			if(maxWaitTimeMs>0)
+			{
+				UWARN("Could not find gyro data to interpolate at time %f after waiting %d ms (last is %f)...", stamp, maxWaitTimeMs, gyroBuffer_.rbegin()->first);
+			}
 			imuMutex_.unlock();
 			return;
 		}
@@ -414,7 +398,14 @@ void CameraRealSense2::getPoseAndIMU(
 			}
 			else
 			{
-				UWARN("Could not find gyro data to interpolate at time %f", stamp);
+				if(stamp < iterA->first)
+				{
+					UWARN("Could not find gyro data to interpolate at image time %f (earliest is %f). Are sensors synchronized?", stamp, iterA->first);
+				}
+				else
+				{
+					UWARN("Could not find gyro data to interpolate at image time %f (between %f and %f). Are sensors synchronized?", stamp, iterA->first, iterB->first);
+				}
 				imuMutex_.unlock();
 				return;
 			}
@@ -433,6 +424,13 @@ bool CameraRealSense2::init(const std::string & calibrationFolder, const std::st
 
 	UINFO("setupDevice...");
 
+	for(size_t i=0; i<dev_.size(); ++i)
+	{
+		delete dev_[i];
+		dev_[i] = 0;
+	}
+	clockSyncWarningShown_ = false;
+
 	auto list = ctx_->query_devices();
 	if (0 == list.size())
 	{
@@ -450,45 +448,105 @@ bool CameraRealSense2::init(const std::string & calibrationFolder, const std::st
 		ss << std::hex << pid_str;
 		ss >> pid;
 		UINFO("Device with serial number %s was found with product ID=%d.", sn, (int)pid);
-		if (deviceId_.empty() || deviceId_ == sn)
+		if(dualMode_ && pid == 0x0B37)
 		{
-			*dev_ = dev;
+			// Dual setup: device[0] = D400, device[1] = T265
+			// T265
+			dev_[1] = new rs2::device();
+			*dev_[1] = dev;
+		}
+		else if (!found && (deviceId_.empty() || deviceId_ == sn))
+		{
+			dev_[0] = new rs2::device();
+			*dev_[0] = dev;
 			found=true;
-			break;
 		}
 	}
 
 	if (!found)
 	{
-		UERROR("The requested device %s is NOT found!", deviceId_.c_str());
+		if(dualMode_ && dev_[1]!=0)
+		{
+			UERROR("Dual setup is enabled, but a D400 camera is not detected!");
+			delete dev_[1];
+			dev_[1] = 0;
+		}
+		else
+		{
+			UERROR("The requested device \"%s\" is NOT found!", deviceId_.c_str());
+		}
 		return false;
+	}
+	else if(dualMode_ && dev_[1] == 0)
+	{
+		UERROR("Dual setup is enabled, but a T265 camera is not detected!");
+		delete dev_[0];
+		dev_[0] = 0;
+		return false;
+	}
+
+	if (!jsonConfig_.empty())
+	{
+		if (dev_[0]->is<rs400::advanced_mode>())
+		{
+			std::stringstream ss;
+			std::ifstream in(jsonConfig_);
+			if (in.is_open())
+			{
+				ss << in.rdbuf();
+				std::string json_file_content = ss.str();
+
+				auto adv = dev_[0]->as<rs400::advanced_mode>();
+				adv.load_json(json_file_content);
+				UINFO("JSON file is loaded! (%s)", jsonConfig_.c_str());
+			}
+			else
+			{
+				UWARN("JSON file provided doesn't exist! (%s)", jsonConfig_.c_str());
+			}
+		}
+		else
+		{
+			UWARN("A json config file is provided (%s), but device does not support advanced settings!", jsonConfig_.c_str());
+		}
 	}
 
 	ctx_->set_devices_changed_callback([this](rs2::event_information& info)
 	{
-		if (info.was_removed(*dev_))
+		for(size_t i=0; i<dev_.size(); ++i)
 		{
-			UERROR("The device has been disconnected!");
+			if(dev_[i])
+			{
+				if (info.was_removed(*dev_[i]))
+				{
+					UERROR("The device has been disconnected!");
+				}
+			}
 		}
 	});
 
 
-	auto camera_name = dev_->get_info(RS2_CAMERA_INFO_NAME);
+	auto camera_name = dev_[0]->get_info(RS2_CAMERA_INFO_NAME);
 	UINFO("Device Name: %s", camera_name);
 
-	auto sn = dev_->get_info(RS2_CAMERA_INFO_SERIAL_NUMBER);
+	auto sn = dev_[0]->get_info(RS2_CAMERA_INFO_SERIAL_NUMBER);
 	UINFO("Device Serial No: %s", sn);
 
-	auto fw_ver = dev_->get_info(RS2_CAMERA_INFO_FIRMWARE_VERSION);
+	auto fw_ver = dev_[0]->get_info(RS2_CAMERA_INFO_FIRMWARE_VERSION);
 	UINFO("Device FW version: %s", fw_ver);
 
-	auto pid = dev_->get_info(RS2_CAMERA_INFO_PRODUCT_ID);
+	auto pid = dev_[0]->get_info(RS2_CAMERA_INFO_PRODUCT_ID);
 	UINFO("Device Product ID: 0x%s", pid);
 
-	auto dev_sensors = dev_->query_sensors();
+	auto dev_sensors = dev_[0]->query_sensors();
+	if(dualMode_)
+	{
+		auto dev_sensors2 = dev_[1]->query_sensors();
+		dev_sensors.insert(dev_sensors.end(), dev_sensors2.begin(), dev_sensors2.end());
+	}
 
 	UINFO("Device Sensors: ");
-	std::vector<rs2::sensor> sensors(2); //0=rgb 1=depth
+	std::vector<rs2::sensor> sensors(2); //0=rgb 1=depth 2=(pose in dualMode_)
 	bool stereo = false;
 	for(auto&& elem : dev_sensors)
 	{
@@ -497,18 +555,13 @@ bool CameraRealSense2::init(const std::string & calibrationFolder, const std::st
 		{
 			sensors[1] = elem;
 			sensors[1].set_option(rs2_option::RS2_OPTION_EMITTER_ENABLED, emitterEnabled_);
-			if(irDepth_)
-			{
-				sensors[0] = elem;
-			}
 		}
 		else if ("Coded-Light Depth Sensor" == module_name)
 		{
-			UINFO("Found \"%s\"", module_name.c_str());
 		}
 		else if ("RGB Camera" == module_name)
 		{
-			if(!irDepth_)
+			if(!ir_)
 			{
 				sensors[0] = elem;
 			}
@@ -518,14 +571,26 @@ bool CameraRealSense2::init(const std::string & calibrationFolder, const std::st
 		}
 		else if ("Motion Module" == module_name)
 		{
-			sensors.resize(3);
-			sensors[2] = elem;
+			if(!dualMode_)
+			{
+				sensors.resize(3);
+				sensors[2] = elem;
+			}
 		}
 		else if ("Tracking Module" == module_name)
 		{
-			sensors.resize(1);
-			sensors[0] = elem;
-			stereo = true;
+			if(dualMode_)
+			{
+				sensors.resize(3);
+			}
+			else
+			{
+				sensors.resize(1);
+				stereo = true;
+			}
+			sensors.back() = elem;
+			sensors.back().set_option(rs2_option::RS2_OPTION_ENABLE_POSE_JUMPING, 0);
+			sensors.back().set_option(rs2_option::RS2_OPTION_ENABLE_RELOCALIZATION, 0);
 		}
 		else
 		{
@@ -543,6 +608,10 @@ bool CameraRealSense2::init(const std::string & calibrationFolder, const std::st
 	std::vector<std::vector<rs2::stream_profile> > profilesPerSensor(sensors.size());
 	 for (unsigned int i=0; i<sensors.size(); ++i)
 	 {
+		if(i==0 && ir_ && !stereo)
+		{
+			continue;
+		}
 		UINFO("Sensor %d \"%s\"", (int)i, sensors[i].get_info(RS2_CAMERA_INFO_NAME));
 		auto profiles = sensors[i].get_stream_profiles();
 		bool added = false;
@@ -552,11 +621,12 @@ bool CameraRealSense2::init(const std::string & calibrationFolder, const std::st
 			for (auto& profile : profiles)
 			{
 				auto video_profile = profile.as<rs2::video_stream_profile>();
-				UINFO("%s %d %d %d", rs2_format_to_string(
+				UINFO("%s %d %d %d %d", rs2_format_to_string(
 						video_profile.format()),
 						video_profile.width(),
 						video_profile.height(),
-						video_profile.fps());
+						video_profile.fps(),
+						video_profile.stream_index());
 			}
 		}
 		int pi = 0;
@@ -566,64 +636,91 @@ bool CameraRealSense2::init(const std::string & calibrationFolder, const std::st
 			if(!stereo)
 			{
 				//D400 series:
-				if (video_profile.format() == (i==1?RS2_FORMAT_Z16:irDepth_?RS2_FORMAT_Y8:RS2_FORMAT_RGB8) &&
-					video_profile.width()  == cameraWidth_ &&
+				if (video_profile.width()  == cameraWidth_ &&
 					video_profile.height() == cameraHeight_ &&
 					video_profile.fps()    == cameraFps_)
 				{
-					profilesPerSensor[irDepth_?1:i].push_back(profile);
 					auto intrinsic = video_profile.get_intrinsics();
-					if(i==1)
+
+					// rgb or ir left
+					if((!ir_ && video_profile.format() == RS2_FORMAT_RGB8) ||
+					  (ir_ && video_profile.format() == RS2_FORMAT_Y8 && video_profile.stream_index() == 1))
 					{
-						depthBuffer_ = cv::Mat(cv::Size(cameraWidth_, cameraHeight_), CV_16UC1, cv::Scalar(0));
-						depthStreamProfile = profile;
-						*depthIntrinsics_ = intrinsic;
-					}
-					else
-					{
-						rgbBuffer_ = cv::Mat(cv::Size(cameraWidth_, cameraHeight_), irDepth_?CV_8UC1:CV_8UC3, irDepth_?cv::Scalar(0):cv::Scalar(0, 0, 0));
+						if(!profilesPerSensor[i].empty())
+						{
+							// IR right already there, push ir left front
+							profilesPerSensor[i].push_back(profilesPerSensor[i].back());
+							profilesPerSensor[i].front() = profile;
+						}
+						else
+						{
+							profilesPerSensor[i].push_back(profile);
+						}
+						rgbBuffer_ = cv::Mat(cv::Size(cameraWidth_, cameraHeight_), video_profile.format() == RS2_FORMAT_Y8?CV_8UC1:CV_8UC3, ir_?cv::Scalar(0):cv::Scalar(0, 0, 0));
 						model_ = CameraModel(camera_name, intrinsic.fx, intrinsic.fy, intrinsic.ppx, intrinsic.ppy, this->getLocalTransform(), 0, cv::Size(intrinsic.width, intrinsic.height));
 						rgbStreamProfile = profile;
 						*rgbIntrinsics_ = intrinsic;
+						added = true;
+						if(video_profile.format() == RS2_FORMAT_RGB8 || profilesPerSensor[i].size()==2)
+						{
+							break;
+						}
 					}
-					added = true;
-					break;
+					// depth or ir right
+					else if(((!ir_ || irDepth_) && video_profile.format() == RS2_FORMAT_Z16) ||
+						   (ir_ && !irDepth_ && video_profile.format() == RS2_FORMAT_Y8 && video_profile.stream_index() == 2))
+					{
+						profilesPerSensor[i].push_back(profile);
+						depthBuffer_ = cv::Mat(cv::Size(cameraWidth_, cameraHeight_), video_profile.format() == RS2_FORMAT_Y8?CV_8UC1:CV_16UC1, cv::Scalar(0));
+						depthStreamProfile = profile;
+						*depthIntrinsics_ = intrinsic;
+						added = true;
+						if(!ir_ || irDepth_ || profilesPerSensor[i].size()==2)
+						{
+							break;
+						}
+					}
 				}
-				else if(video_profile.format() == RS2_FORMAT_MOTION_XYZ32F)
+				else if(video_profile.format() == RS2_FORMAT_MOTION_XYZ32F || video_profile.format() == RS2_FORMAT_6DOF)
 				{
 					//D435i:
 					//MOTION_XYZ32F 0 0 200
 					//MOTION_XYZ32F 0 0 400
 					//MOTION_XYZ32F 0 0 63
 					//MOTION_XYZ32F 0 0 250
+					// or dualMode_ T265:
+					//MOTION_XYZ32F 0 0 200
+					//MOTION_XYZ32F 0 0 62
+					//6DOF 0 0 200
 					profilesPerSensor[i].push_back(profile);
 					added = true;
 				}
 			}
-			else if(stereo)
+			else if(stereo || dualMode_)
 			{
 				//T265:
-				if(video_profile.format() == RS2_FORMAT_Y8 &&
+				if(!dualMode_ &&
+					video_profile.format() == RS2_FORMAT_Y8 &&
 					video_profile.width()  == 848 &&
 					video_profile.height() == 800 &&
 					video_profile.fps()    == 30)
 				{
 					UASSERT(i<2);
-					profilesPerSensor[0].push_back(profile);
+					profilesPerSensor[i].push_back(profile);
 					auto intrinsic = video_profile.get_intrinsics();
 					if(pi==0)
-					{
-						// RIGHT FISHEYE
-						depthBuffer_ = cv::Mat(cv::Size(848, 800), CV_8UC1, cv::Scalar(0));
-						depthStreamProfile = profile;
-						*depthIntrinsics_ = intrinsic;
-					}
-					else
 					{
 						// LEFT FISHEYE
 						rgbBuffer_ = cv::Mat(cv::Size(848, 800), CV_8UC1, cv::Scalar(0));
 						rgbStreamProfile = profile;
 						*rgbIntrinsics_ = intrinsic;
+					}
+					else
+					{
+						// RIGHT FISHEYE
+						depthBuffer_ = cv::Mat(cv::Size(848, 800), CV_8UC1, cv::Scalar(0));
+						depthStreamProfile = profile;
+						*depthIntrinsics_ = intrinsic;
 					}
 					added = true;
 				}
@@ -632,7 +729,7 @@ bool CameraRealSense2::init(const std::string & calibrationFolder, const std::st
 					//MOTION_XYZ32F 0 0 200
 					//MOTION_XYZ32F 0 0 62
 					//6DOF 0 0 200
-					profilesPerSensor[0].push_back(profile);
+					profilesPerSensor[i].push_back(profile);
 					added = true;
 				}
 			}
@@ -646,11 +743,12 @@ bool CameraRealSense2::init(const std::string & calibrationFolder, const std::st
 			for (auto& profile : profiles)
 			{
 				auto video_profile = profile.as<rs2::video_stream_profile>();
-				UERROR("%s %d %d %d", rs2_format_to_string(
+				UERROR("%s %d %d %d %d", rs2_format_to_string(
 						video_profile.format()),
 						video_profile.width(),
 						video_profile.height(),
-						video_profile.fps());
+						video_profile.fps(),
+						video_profile.stream_index());
 			}
 			return false;
 		}
@@ -665,19 +763,84 @@ bool CameraRealSense2::init(const std::string & calibrationFolder, const std::st
 		 }
 		 *depthToRGBExtrinsics_ = depthStreamProfile.get_extrinsics_to(rgbStreamProfile);
 
-		 if(profilesPerSensor.size() == 3 && !profilesPerSensor[2].empty() && !profilesPerSensor[0].empty())
+		 if(dualMode_)
 		 {
-			 rs2_extrinsics leftToIMU = profilesPerSensor[0][0].get_extrinsics_to(profilesPerSensor[2][0]);
-			 Transform leftToIMUT(
-					 leftToIMU.rotation[0], leftToIMU.rotation[1], leftToIMU.rotation[2], leftToIMU.translation[0],
-					 leftToIMU.rotation[3], leftToIMU.rotation[4], leftToIMU.rotation[5], leftToIMU.translation[1],
-					 leftToIMU.rotation[6], leftToIMU.rotation[7], leftToIMU.rotation[8], leftToIMU.translation[2]);
-			 UINFO("leftToIMU = %s", leftToIMUT.prettyPrint().c_str());
-			 imuLocalTransform_ = this->getLocalTransform() * leftToIMUT;
-			 UINFO("imu local transform = %s", imuLocalTransform_.prettyPrint().c_str());
+			 Transform opticalTransform(0, 0, 1, 0, -1, 0, 0, 0, 0, -1, 0, 0);
+			 UINFO("Set base to pose");
+			 this->setLocalTransform(this->getLocalTransform()*opticalTransform.inverse());
+			 UINFO("poseToLeftIR = %s", dualExtrinsics_.prettyPrint().c_str());
+			 Transform baseToCam = this->getLocalTransform()*dualExtrinsics_*opticalTransform;
+			 if(!ir_)
+			 {
+				 Transform leftIRToRGB(
+						 depthToRGBExtrinsics_->rotation[0], depthToRGBExtrinsics_->rotation[1], depthToRGBExtrinsics_->rotation[2], depthToRGBExtrinsics_->translation[0],
+						 depthToRGBExtrinsics_->rotation[3], depthToRGBExtrinsics_->rotation[4], depthToRGBExtrinsics_->rotation[5], depthToRGBExtrinsics_->translation[1],
+						 depthToRGBExtrinsics_->rotation[6], depthToRGBExtrinsics_->rotation[7], depthToRGBExtrinsics_->rotation[8], depthToRGBExtrinsics_->translation[2]);
+				 leftIRToRGB = leftIRToRGB.inverse();
+				 UINFO("leftIRToRGB = %s", leftIRToRGB.prettyPrint().c_str());
+				 baseToCam *= leftIRToRGB;
+			 }
+			 UASSERT(profilesPerSensor.size()>=2);
+			 UASSERT(profilesPerSensor.back().size() == 3);
+			 rs2_extrinsics poseToIMU = profilesPerSensor.back()[0].get_extrinsics_to(profilesPerSensor.back()[2]);
+
+			 Transform poseToIMUT(
+					 poseToIMU.rotation[0], poseToIMU.rotation[1], poseToIMU.rotation[2], poseToIMU.translation[0],
+					 poseToIMU.rotation[3], poseToIMU.rotation[4], poseToIMU.rotation[5], poseToIMU.translation[1],
+					 poseToIMU.rotation[6], poseToIMU.rotation[7], poseToIMU.rotation[8], poseToIMU.translation[2]);
+			 poseToIMUT = realsense2PoseRotation_ * poseToIMUT;
+			 UINFO("poseToIMU = %s", poseToIMUT.prettyPrint().c_str());
+
+			 UINFO("BaseToCam = %s", baseToCam.prettyPrint().c_str());
+			 model_.setLocalTransform(baseToCam);
+			 imuLocalTransform_ = this->getLocalTransform() * poseToIMUT;
+		 }
+
+		 if(ir_ && !irDepth_ && profilesPerSensor.size() >= 2 && profilesPerSensor[1].size() >= 2)
+		 {
+			 rs2_extrinsics leftToRight = profilesPerSensor[1][1].get_extrinsics_to(profilesPerSensor[1][0]);
+			 Transform leftToRightT(
+					 leftToRight.rotation[0], leftToRight.rotation[1], leftToRight.rotation[2], leftToRight.translation[0],
+					 leftToRight.rotation[3], leftToRight.rotation[4], leftToRight.rotation[5], leftToRight.translation[1],
+					 leftToRight.rotation[6], leftToRight.rotation[7], leftToRight.rotation[8], leftToRight.translation[2]);
+
+			 UINFO("left to right transform = %s", leftToRightT.prettyPrint().c_str());
+
+			 // Create stereo camera model from left and right ir of D435
+			 stereoModel_ = StereoCameraModel(model_.fx(), model_.fy(), model_.cx(), model_.cy(), leftToRightT.x(), model_.localTransform(), model_.imageSize());
+			 UINFO("Stereo parameters: fx=%f cx=%f cy=%f baseline=%f",
+						stereoModel_.left().fx(),
+						stereoModel_.left().cx(),
+						stereoModel_.left().cy(),
+						stereoModel_.baseline());
+		 }
+
+		 if(!dualMode_ && profilesPerSensor.size() == 3)
+		 {
+			 if(!profilesPerSensor[2].empty() && !profilesPerSensor[0].empty())
+			 {
+				 rs2_extrinsics leftToIMU = profilesPerSensor[2][0].get_extrinsics_to(profilesPerSensor[0][0]);
+				 Transform leftToIMUT(
+						 leftToIMU.rotation[0], leftToIMU.rotation[1], leftToIMU.rotation[2], leftToIMU.translation[0],
+						 leftToIMU.rotation[3], leftToIMU.rotation[4], leftToIMU.rotation[5], leftToIMU.translation[1],
+						 leftToIMU.rotation[6], leftToIMU.rotation[7], leftToIMU.rotation[8], leftToIMU.translation[2]);
+				 imuLocalTransform_ = this->getLocalTransform() * leftToIMUT;
+				 UINFO("imu local transform = %s", imuLocalTransform_.prettyPrint().c_str());
+			 }
+			 else if(!profilesPerSensor[2].empty() && !profilesPerSensor[1].empty())
+			 {
+				 rs2_extrinsics leftToIMU = profilesPerSensor[2][0].get_extrinsics_to(profilesPerSensor[1][0]);
+				 Transform leftToIMUT(
+						 leftToIMU.rotation[0], leftToIMU.rotation[1], leftToIMU.rotation[2], leftToIMU.translation[0],
+						 leftToIMU.rotation[3], leftToIMU.rotation[4], leftToIMU.rotation[5], leftToIMU.translation[1],
+						 leftToIMU.rotation[6], leftToIMU.rotation[7], leftToIMU.rotation[8], leftToIMU.translation[2]);
+
+				 imuLocalTransform_ = this->getLocalTransform() * leftToIMUT;
+				 UINFO("imu local transform = %s", imuLocalTransform_.prettyPrint().c_str());
+			 }
 		 }
 	 }
-	 else
+	 else // T265
 	 {
 
 		// look for calibration files
@@ -704,19 +867,16 @@ bool CameraRealSense2::init(const std::string & calibrationFolder, const std::st
 		}
 
 		// Get extrinsics with pose as the base frame:
-		// 0=Right fisheye
-		// 1=Left fisheye
+		// 0=Left fisheye
+		// 1=Right fisheye
 		// 2=GYRO
 		// 3=ACC
 		// 4=POSE
 		UASSERT(profilesPerSensor[0].size() == 5);
 		if(odometryProvided_)
 		{
-			rs2_extrinsics poseToLeft = profilesPerSensor[0][4].get_extrinsics_to(profilesPerSensor[0][1]);
-			rs2_extrinsics poseToIMU = profilesPerSensor[0][4].get_extrinsics_to(profilesPerSensor[0][2]);
-			Transform realsense2_pose_rotation(0, 0,-1,0,
-								-1, 0, 0,0,
-								 0, 1, 0,0);
+			rs2_extrinsics poseToLeft = profilesPerSensor[0][0].get_extrinsics_to(profilesPerSensor[0][4]);
+			rs2_extrinsics poseToIMU = profilesPerSensor[0][2].get_extrinsics_to(profilesPerSensor[0][4]);
 			Transform poseToLeftT(
 					poseToLeft.rotation[0], poseToLeft.rotation[1], poseToLeft.rotation[2], poseToLeft.translation[0],
 					poseToLeft.rotation[3], poseToLeft.rotation[4], poseToLeft.rotation[5], poseToLeft.translation[1],
@@ -731,22 +891,16 @@ bool CameraRealSense2::init(const std::string & calibrationFolder, const std::st
 			poseToIMUT = realsense2PoseRotation_ * poseToIMUT;
 			UINFO("poseToIMU = %s", poseToIMUT.prettyPrint().c_str());
 
-			if(this->getLocalTransform().rotation().r13() == 1.0f &&
-			   this->getLocalTransform().rotation().r21() == -1.0f &&
-			   this->getLocalTransform().rotation().r32() == -1.0f)
-			{
-				UWARN("Detected optical rotation in local transform, removing it for convenience to match realsense2 poses.");
-				Transform opticalTransform(0, 0, 1, 0, -1, 0, 0, 0, 0, -1, 0, 0);
-				this->setLocalTransform(this->getLocalTransform()*opticalTransform.inverse());
-			}
-
+			UINFO("Set base to pose");
+			Transform opticalTransform(0, 0, 1, 0, -1, 0, 0, 0, 0, -1, 0, 0);
+			this->setLocalTransform(this->getLocalTransform() * opticalTransform.inverse());
 			stereoModel_.setLocalTransform(this->getLocalTransform()*poseToLeftT);
-			imuLocalTransform_ = poseToIMUT;
+			imuLocalTransform_ = this->getLocalTransform()* poseToIMUT;
 		}
 		else
 		{
 			// Set imu transform based on the left camera instead of pose
-			 rs2_extrinsics leftToIMU = profilesPerSensor[0][1].get_extrinsics_to(profilesPerSensor[0][2]);
+			 rs2_extrinsics leftToIMU = profilesPerSensor[0][2].get_extrinsics_to(profilesPerSensor[0][0]);
 			 Transform leftToIMUT(
 					 leftToIMU.rotation[0], leftToIMU.rotation[1], leftToIMU.rotation[2], leftToIMU.translation[0],
 					 leftToIMU.rotation[3], leftToIMU.rotation[4], leftToIMU.rotation[5], leftToIMU.translation[1],
@@ -803,10 +957,12 @@ bool CameraRealSense2::isCalibrated() const
 std::string CameraRealSense2::getSerial() const
 {
 #ifdef RTABMAP_REALSENSE2
-	return dev_->get_info(RS2_CAMERA_INFO_SERIAL_NUMBER);
-#else
-	return "NA";
+	if(dev_[0])
+	{
+		return dev_[0]->get_info(RS2_CAMERA_INFO_SERIAL_NUMBER);
+	}
 #endif
+	return "NA";
 }
 
 bool CameraRealSense2::odomProvided() const
@@ -825,10 +981,11 @@ void CameraRealSense2::setEmitterEnabled(bool enabled)
 #endif
 }
 
-void CameraRealSense2::setIRDepthFormat(bool enabled)
+void CameraRealSense2::setIRFormat(bool enabled, bool useDepthInsteadOfRightImage)
 {
 #ifdef RTABMAP_REALSENSE2
-	irDepth_ = enabled;
+	ir_ = enabled;
+	irDepth_ = useDepthInsteadOfRightImage;
 #endif
 }
 
@@ -838,6 +995,33 @@ void CameraRealSense2::setResolution(int width, int height, int fps)
 	cameraWidth_ = width;
 	cameraHeight_ = height;
 	cameraFps_ = fps;
+#endif
+}
+
+void CameraRealSense2::publishInterIMU(bool enabled)
+{
+#ifdef RTABMAP_REALSENSE2
+	publishInterIMU_ = enabled;
+#endif
+}
+
+void CameraRealSense2::setDualMode(bool enabled, const Transform & extrinsics)
+{
+#ifdef RTABMAP_REALSENSE2
+	UASSERT(!enabled || !extrinsics.isNull());
+	dualMode_ = enabled;
+	dualExtrinsics_ =  extrinsics;
+	if(dualMode_)
+	{
+		odometryProvided_ = true;
+	}
+#endif
+}
+
+void CameraRealSense2::setJsonConfig(const std::string & json)
+{
+#ifdef RTABMAP_REALSENSE2
+	jsonConfig_ = json;
 #endif
 }
 
@@ -851,6 +1035,11 @@ void CameraRealSense2::setImagesRectified(bool enabled)
 void CameraRealSense2::setOdomProvided(bool enabled)
 {
 #ifdef RTABMAP_REALSENSE2
+	if(dualMode_ && !enabled)
+	{
+		UERROR("Odometry is disabled but dual mode was enabled, disabling dual mode.");
+		dualMode_ = false;
+	}
 	odometryProvided_ = enabled;
 #endif
 }
@@ -870,7 +1059,7 @@ SensorData CameraRealSense2::captureImage(CameraInfo * info)
 		}
 		if (frameset.size() == 2)
 		{
-			double stamp = UTimer::now();
+			double now = UTimer::now();
 			UDEBUG("Frameset arrived.");
 			bool is_rgb_arrived = false;
 			bool is_depth_arrived = false;
@@ -878,14 +1067,36 @@ SensorData CameraRealSense2::captureImage(CameraInfo * info)
 			bool is_right_fisheye_arrived = false;
 			rs2::frame rgb_frame;
 			rs2::frame depth_frame;
+			double stamp = frameset.get_timestamp();
 			for (auto it = frameset.begin(); it != frameset.end(); ++it)
 			{
 				auto f = (*it);
+				if(stamp > f.get_timestamp())
+				{
+					stamp = f.get_timestamp();
+				}
 				auto stream_type = f.get_profile().stream_type();
 				if (stream_type == RS2_STREAM_COLOR || stream_type == RS2_STREAM_INFRARED)
 				{
-					rgb_frame = f;
-					is_rgb_arrived = true;
+					if(ir_ && !irDepth_)
+					{
+						//stereo D435
+						if(!is_depth_arrived)
+						{
+							depth_frame = f; // right image
+							is_depth_arrived = true;
+						}
+						else
+						{
+							rgb_frame = f; // left image
+							is_rgb_arrived = true;
+						}
+					}
+					else
+					{
+						rgb_frame = f;
+						is_rgb_arrived = true;
+					}
 				}
 				else if (stream_type == RS2_STREAM_DEPTH)
 				{
@@ -907,20 +1118,35 @@ SensorData CameraRealSense2::captureImage(CameraInfo * info)
 				}
 			}
 
+			stamp /= 1000.0; // put in seconds
+			if(stamp - now > 1000000000.0)
+			{
+				if(!clockSyncWarningShown_)
+				{
+					UWARN("Clocks are not sync with host computer! Detected stamps in far "
+							"future %f, thus using host time instead (%f)! This message "
+							"will only appear once. "
+							"See https://github.com/IntelRealSense/librealsense/issues/4505 "
+							"for more info", stamp, now);
+					clockSyncWarningShown_ = true;
+				}
+				stamp = now;
+			}
+
 			if(is_rgb_arrived && is_depth_arrived)
 			{
 				auto from_image_frame = depth_frame.as<rs2::video_frame>();
 				cv::Mat depth;
-				if(irDepth_)
+				if(ir_)
 				{
 					depth = cv::Mat(depthBuffer_.size(), depthBuffer_.type(), (void*)depth_frame.get_data()).clone();
 				}
 				else
 				{
-					depth = cv::Mat(depthBuffer_.size(), depthBuffer_.type());
-					alignFrame(*depthIntrinsics_, *rgbIntrinsics_,
-							depth_frame, from_image_frame.get_bytes_per_pixel(),
-							*depthToRGBExtrinsics_, depth, depth_scale_meters_);
+					rs2::align align(rgb_frame.get_profile().stream_type());
+					rs2::frameset processed = frameset.apply_filter(align);
+					rs2::depth_frame aligned_depth_frame = processed.get_depth_frame();
+					depth = cv::Mat(depthBuffer_.size(), depthBuffer_.type(), (void*)aligned_depth_frame.get_data()).clone();
 				}
 
 				cv::Mat rgb = cv::Mat(rgbBuffer_.size(), rgbBuffer_.type(), (void*)rgb_frame.get_data());
@@ -934,7 +1160,15 @@ SensorData CameraRealSense2::captureImage(CameraInfo * info)
 					bgr = rgb.clone();
 				}
 
-				data = SensorData(bgr, depth, model_, this->getNextSeqID(), stamp);
+				if(ir_ && !irDepth_)
+				{
+					//stereo D435
+					data = SensorData(bgr, depth, stereoModel_, this->getNextSeqID(), stamp);
+				}
+				else
+				{
+					data = SensorData(bgr, depth, model_, this->getNextSeqID(), stamp);
+				}
 			}
 			else if(is_left_fisheye_arrived && is_right_fisheye_arrived)
 			{
@@ -965,17 +1199,62 @@ SensorData CameraRealSense2::captureImage(CameraInfo * info)
 
 			IMU imu;
 			unsigned int confidence = 0;
-			getPoseAndIMU(frameset.get_timestamp(), info->odomPose, confidence, imu);
+			double imuStamp = stamp*1000.0;
+			UASSERT(info!=0);
+			getPoseAndIMU(imuStamp, info->odomPose, confidence, imu);
 
 			if(odometryProvided_ && !info->odomPose.isNull())
 			{
+				// Transform in base frame (local transform should contain base to pose transform)
+				info->odomPose = this->getLocalTransform() * info->odomPose * this->getLocalTransform().inverse();
+
 				info->odomCovariance = cv::Mat::eye(6,6,CV_64FC1) * 0.0001;
 				info->odomCovariance.rowRange(0,3) *= pow(10, 3-(int)confidence);
 				info->odomCovariance.rowRange(3,6) *= pow(10, 1-(int)confidence);
 			}
-			if(!imu.empty())
+			if(!imu.empty() && !publishInterIMU_)
 			{
 				data.setIMU(imu);
+			}
+			else if(publishInterIMU_ && !gyroBuffer_.empty())
+			{
+				if(lastImuStamp_ > 0.0)
+				{
+					UASSERT(imuStamp > lastImuStamp_);
+					imuMutex_.lock();
+					std::map<double, cv::Vec3f>::iterator iterA = gyroBuffer_.upper_bound(lastImuStamp_);
+					std::map<double, cv::Vec3f>::iterator iterB = gyroBuffer_.lower_bound(imuStamp);
+					if(iterA != gyroBuffer_.end())
+					{
+						++iterA;
+					}
+					if(iterB != gyroBuffer_.end())
+					{
+						++iterB;
+					}
+					if(iterA != iterB)
+					{
+						int pub = 0;
+						for(;iterA != iterB;++iterA)
+						{
+							Transform tmp;
+							IMU imuTmp;
+							getPoseAndIMU(iterA->first, tmp, confidence, imuTmp);
+							if(!imuTmp.empty())
+							{
+								UEventsManager::post(new IMUEvent(imuTmp, iterA->first/1000.0));
+								pub++;
+							}
+							else
+							{
+								break;
+							}
+						}
+						UDEBUG("inter imu published=%d, %f -> %f", pub, lastImuStamp_, imuStamp);
+					}
+					imuMutex_.unlock();
+				}
+				lastImuStamp_ = imuStamp;
 			}
 		}
 		else

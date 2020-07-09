@@ -48,18 +48,20 @@ namespace rtabmap {
 		public: \
 			Dummy##PREFIX##NAME() {if(!_defaultDataInitialized)_defaultData.insert(std::pair<std::string, float>(#PREFIX "/" #NAME "/" #UNIT, 0.0f));} \
 		}; \
-		Dummy##PREFIX##NAME dummy##PREFIX##NAME;
+		Dummy##PREFIX##NAME dummy##PREFIX##NAME
 
 class RTABMAP_EXP Statistics
 {
 	RTABMAP_STATS(Loop, RejectedHypothesis,);
 	RTABMAP_STATS(Loop, Accepted_hypothesis_id,);
+	RTABMAP_STATS(Loop, Suppressed_hypothesis_id,);
 	RTABMAP_STATS(Loop, Highest_hypothesis_id,);
 	RTABMAP_STATS(Loop, Highest_hypothesis_value,);
 	RTABMAP_STATS(Loop, Vp_hypothesis,);
 	RTABMAP_STATS(Loop, Reactivate_id,);
 	RTABMAP_STATS(Loop, Hypothesis_ratio,);
 	RTABMAP_STATS(Loop, Hypothesis_reactivated,);
+	RTABMAP_STATS(Loop, Visual_words,);
 	RTABMAP_STATS(Loop, Visual_inliers,);
 	RTABMAP_STATS(Loop, Visual_matches,);
 	RTABMAP_STATS(Loop, Last_id,);
@@ -71,6 +73,33 @@ class RTABMAP_EXP Statistics
 	RTABMAP_STATS(Loop, Angular_variance,);
 	RTABMAP_STATS(Loop, Landmark_detected,);
 	RTABMAP_STATS(Loop, Landmark_detected_node_ref,);
+	RTABMAP_STATS(Loop, Visual_inliers_mean_dist,m);
+	RTABMAP_STATS(Loop, Visual_inliers_distribution,);
+	//Odom correction
+	RTABMAP_STATS(Loop, Odom_correction_norm, m);
+	RTABMAP_STATS(Loop, Odom_correction_angle, deg);
+	RTABMAP_STATS(Loop, Odom_correction_x, m);
+	RTABMAP_STATS(Loop, Odom_correction_y, m);
+	RTABMAP_STATS(Loop, Odom_correction_z, m);
+	RTABMAP_STATS(Loop, Odom_correction_roll, deg);
+	RTABMAP_STATS(Loop, Odom_correction_pitch, deg);
+	RTABMAP_STATS(Loop, Odom_correction_yaw, deg);
+	// Map to Odom
+	RTABMAP_STATS(Loop, MapToOdom_norm, m);
+	RTABMAP_STATS(Loop, MapToOdom_angle, deg);
+	RTABMAP_STATS(Loop, MapToOdom_x, m);
+	RTABMAP_STATS(Loop, MapToOdom_y, m);
+	RTABMAP_STATS(Loop, MapToOdom_z, m);
+	RTABMAP_STATS(Loop, MapToOdom_roll, deg);
+	RTABMAP_STATS(Loop, MapToOdom_pitch, deg);
+	RTABMAP_STATS(Loop, MapToOdom_yaw, deg);
+	// Map to Base
+	RTABMAP_STATS(Loop, MapToBase_x, m);
+	RTABMAP_STATS(Loop, MapToBase_y, m);
+	RTABMAP_STATS(Loop, MapToBase_z, m);
+	RTABMAP_STATS(Loop, MapToBase_roll, deg);
+	RTABMAP_STATS(Loop, MapToBase_pitch, deg);
+	RTABMAP_STATS(Loop, MapToBase_yaw, deg);
 
 	RTABMAP_STATS(Proximity, Time_detections,);
 	RTABMAP_STATS(Proximity, Space_last_detection_id,);
@@ -150,6 +179,7 @@ class RTABMAP_EXP Statistics
 	RTABMAP_STATS(TimingMem, Markers_detection, ms);
 
 	RTABMAP_STATS(Keypoint, Dictionary_size, words);
+	RTABMAP_STATS(Keypoint, Current_frame, words);
 	RTABMAP_STATS(Keypoint, Indexed_words, words);
 	RTABMAP_STATS(Keypoint, Index_memory_usage, KB);
 
@@ -165,6 +195,8 @@ class RTABMAP_EXP Statistics
 	RTABMAP_STATS(Gt, Rotational_std, deg);
 	RTABMAP_STATS(Gt, Rotational_min, deg);
 	RTABMAP_STATS(Gt, Rotational_max, deg);
+	RTABMAP_STATS(Gt, Localization_linear_error, m);
+	RTABMAP_STATS(Gt, Localization_angular_error, deg);
 
 public:
 	static const std::map<std::string, float> & defaultData();
