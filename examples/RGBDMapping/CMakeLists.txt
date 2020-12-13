@@ -38,7 +38,7 @@ else()
 endif()
 
 if(POLICY CMP0020)
-	cmake_policy(SET CMP0020 OLD)
+	cmake_policy(SET CMP0020 NEW)
 endif()
 
 SET(INCLUDE_DIRS
@@ -65,6 +65,14 @@ IF(realsense2_FOUND)
 		${realsense2_INCLUDE_DIRS}
 	)
 ENDIF(realsense2_FOUND)
+
+# Hack as CameraK4A.h needs k4a include dir
+IF(k4a_FOUND)
+	SET(INCLUDE_DIRS
+		${INCLUDE_DIRS}
+		${k4a_INCLUDE_DIRS}
+	)
+ENDIF(k4a_FOUND)
 
 INCLUDE_DIRECTORIES(${INCLUDE_DIRS})
 
