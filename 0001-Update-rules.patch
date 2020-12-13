@@ -1,6 +1,6 @@
-From f5dfbfb3fdde2a757bab21cca3172b6e64915510 Mon Sep 17 00:00:00 2001
+From 9b3f60962f8c73bf183bfab4313c575fc52d0b15 Mon Sep 17 00:00:00 2001
 From: matlabbe <matlabbe@gmail.com>
-Date: Mon, 1 Jun 2020 22:34:51 -0400
+Date: Sat, 12 Dec 2020 19:32:50 -0500
 Subject: [PATCH] Update rules
 
 ---
@@ -8,12 +8,12 @@ Subject: [PATCH] Update rules
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/debian/rules b/debian/rules
-index 79ba57b..2e3a47e 100755
+index 135d451..f508d71 100755
 --- a/debian/rules
 +++ b/debian/rules
-@@ -48,7 +48,7 @@ override_dh_shlibdeps:
- 	# in the install tree that was dropped by catkin, and source it.  It will
- 	# set things like CMAKE_PREFIX_PATH, PKG_CONFIG_PATH, and PYTHONPATH.
+@@ -50,7 +50,7 @@ override_dh_shlibdeps:
+ 	# in the install tree and source it.  It will set things like
+ 	# CMAKE_PREFIX_PATH, PKG_CONFIG_PATH, and PYTHONPATH.
  	if [ -f "/opt/ros/noetic/setup.sh" ]; then . "/opt/ros/noetic/setup.sh"; fi && \
 -	dh_shlibdeps -l$(CURDIR)/debian/ros-noetic-rtabmap//opt/ros/noetic/lib/
 +	dh_shlibdeps -l$(CURDIR)/debian/ros-noetic-rtabmap//opt/ros/noetic/lib/:$(CURDIR)/debian/ros-noetic-rtabmap//opt/ros/noetic/lib/x86_64-linux-gnu/:$(CURDIR)/debian/ros-noetic-rtabmap//opt/ros/noetic/lib/i386-linux-gnu/:$(CURDIR)/debian/ros-noetic-rtabmap//opt/ros/noetic/lib/arm-linux-gnueabihf/:$(CURDIR)/debian/ros-noetic-rtabmap//opt/ros/noetic/lib/aarch64-linux-gnu/
