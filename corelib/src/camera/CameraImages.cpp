@@ -29,6 +29,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap/utilite/UConversion.h>
 #include <rtabmap/utilite/UDirectory.h>
 #include <rtabmap/utilite/UStl.h>
+#include <rtabmap/utilite/UFile.h>
 #include <rtabmap/utilite/UThreadC.h>
 #include <rtabmap/core/util3d.h>
 #include <rtabmap/core/util3d_filtering.h>
@@ -58,6 +59,7 @@ CameraImages::CameraImages() :
 		_depthFromScanFillHoles(1),
 		_depthFromScanFillHolesFromBorder(false),
 		_filenamesAreTimestamps(false),
+		_hasConfigForEachFrame(false),
 		_syncImageRateWithStamps(true),
 		_odometryFormat(0),
 		_groundTruthFormat(0),
@@ -87,6 +89,7 @@ CameraImages::CameraImages(const std::string & path,
 	_depthFromScanFillHoles(1),
 	_depthFromScanFillHolesFromBorder(false),
 	_filenamesAreTimestamps(false),
+	_hasConfigForEachFrame(false),
 	_syncImageRateWithStamps(true),
 	_odometryFormat(0),
 	_groundTruthFormat(0),
@@ -111,6 +114,9 @@ bool CameraImages::init(const std::string & calibrationFolder, const std::string
 	_countScan = 0;
 	_captureDelay = 0.0;
 	_framesPublished=0;
+	_model = cameraModel();
+	_models.clear();
+	covariances_.clear();
 
 	UDEBUG("");
 	if(_dir)
@@ -213,7 +219,108 @@ bool CameraImages::init(const std::string & calibrationFolder, const std::string
 	groundTruth_.clear();
 	if(success)
 	{
-		if(_filenamesAreTimestamps)
+		if(_hasConfigForEachFrame)
+		{
+#if CV_MAJOR_VERSION < 3 || (CV_MAJOR_VERSION == 3 && CV_MAJOR_VERSION < 2)
+			UDirectory dirJson(_path, "yaml xml");
+#else
+			UDirectory dirJson(_path, "yaml xml json");
+#endif
+			if(dirJson.getFileNames().size() == _dir->getFileNames().size())
+			{
+				bool modelsWarned = false;
+				bool firstFrame = true;
+				for(std::list<std::string>::const_iterator iter=dirJson.getFileNames().begin(); iter!=dirJson.getFileNames().end() && success; ++iter)
+				{
+					// Assuming 3DScannerApp(iOS) format (only this one supported...)
+					std::string filePath = _path+"/"+*iter;
+					cv::FileStorage fs(filePath, 0);
+					cv::FileNode poseNode = fs["cameraPoseARFrame"];
+					cv::FileNode timeNode = fs["time"];
+					cv::FileNode intrinsicsNode = fs["intrinsics"];
+					if(poseNode.isNone() || poseNode.size() != 16)
+					{
+						UERROR("Failed reading \"cameraPoseARFrame\" parameter, it should have 16 values (file=%s)", filePath.c_str());
+						success = false;
+						break;
+					}
+					else if(timeNode.isNone() || !timeNode.isReal())
+					{
+						UERROR("Failed reading \"time\" parameter (file=%s)", filePath.c_str());
+						success = false;
+						break;
+					}
+					else if(intrinsicsNode.isNone() || intrinsicsNode.size()!=9)
+					{
+						UERROR("Failed reading \"intrinsics\" parameter (file=%s)", filePath.c_str());
+						success = false;
+						break;
+					}
+					else
+					{
+						_stamps.push_back((double)timeNode);
+						if(_model.isValidForProjection() && !modelsWarned)
+						{
+							UWARN("Camera model loaded for each frame is overridden by "
+									"general calibration file provided. Remove general calibration "
+									"file to use camera model of each frame. This warning will "
+									"be shown only one time.");
+							modelsWarned = true;
+						}
+						else
+						{
+							_models.push_back(CameraModel(
+									(double)intrinsicsNode[0], //fx
+									(double)intrinsicsNode[4], //fy
+									(double)intrinsicsNode[2], //cx
+									(double)intrinsicsNode[5], //cy
+									CameraModel::opticalRotation()));
+						}
+						// we need to rotate from opengl world to rtabmap world
+						Transform pose(
+								(float)poseNode[0], (float)poseNode[1], (float)poseNode[2], (float)poseNode[3],
+								(float)poseNode[4], (float)poseNode[5], (float)poseNode[6], (float)poseNode[7],
+								(float)poseNode[8], (float)poseNode[9], (float)poseNode[10], (float)poseNode[11]);
+						pose =  Transform::rtabmap_T_opengl() * pose * Transform::opengl_T_rtabmap();
+						odometry_.push_back(pose);
+						// linear cov = 0.0001
+						cv::Mat covariance = cv::Mat::eye(6,6,CV_64FC1) * (firstFrame?9999.0:0.0001);
+						if(!firstFrame)
+						{
+							// angular cov = 0.000001
+							covariance.at<double>(3,3) *= 0.01;
+							covariance.at<double>(4,4) *= 0.01;
+							covariance.at<double>(5,5) *= 0.01;
+						}
+						firstFrame = false;
+						covariances_.push_back(covariance);
+					}
+				}
+				if(!success)
+				{
+					odometry_.clear();
+					_stamps.clear();
+					_models.clear();
+					covariances_.clear();
+				}
+			}
+			else
+			{
+				std::string opencv32warn;
+#if CV_MAJOR_VERSION < 3 || (CV_MAJOR_VERSION == 3 && CV_MAJOR_VERSION < 2)
+				opencv32warn = " RTAB-Map is currently built with OpenCV < 3.2, only xml and yaml files are supported (not json).";
+#endif
+				UERROR("Parameter \"Config for each frame\" is true, but the "
+						"number of config files (%d) is not equal to number "
+						"of images (%d) in this directory \"%s\".%s",
+						(int)dirJson.getFileNames().size(),
+						(int)_dir->getFileNames().size(),
+						_path.c_str(),
+						opencv32warn.c_str());
+				success = false;
+			}
+		}
+		else if(_filenamesAreTimestamps)
 		{
 			const std::list<std::string> & filenames = _dir->getFileNames();
 			for(std::list<std::string>::const_iterator iter=filenames.begin(); iter!=filenames.end(); ++iter)
@@ -316,7 +423,7 @@ bool CameraImages::init(const std::string & calibrationFolder, const std::string
 			}
 		}
 
-		if(success && _odometryPath.size())
+		if(success && _odometryPath.size() && odometry_.empty())
 		{
 			success = readPoses(odometry_, _stamps, _odometryPath, _odometryFormat, _maxPoseTimeDiff);
 		}
@@ -332,7 +439,12 @@ bool CameraImages::init(const std::string & calibrationFolder, const std::string
 	return success;
 }
 
-bool CameraImages::readPoses(std::list<Transform> & outputPoses, std::list<double> & inOutStamps, const std::string & filePath, int format, double maxTimeDiff) const
+bool CameraImages::readPoses(
+		std::list<Transform> & outputPoses,
+		std::list<double> & inOutStamps,
+		const std::string & filePath,
+		int format,
+		double maxTimeDiff) const
 {
 	outputPoses.clear();
 	std::map<int, Transform> poses;
@@ -436,6 +548,11 @@ bool CameraImages::readPoses(std::list<Transform> & outputPoses, std::list<doubl
 			UERROR("With Karlsruhe format, timestamps (%d) and poses (%d) should match!", (int)stamps.size(), (int)poses.size());
 			return false;
 		}
+		else if(!outputPoses.empty() && inOutStamps.empty() && stamps.empty())
+		{
+			UERROR("Timestamps are empty (poses=%d)! Forgot the set a timestamp file?", (int)outputPoses.size());
+			return false;
+		}
 	}
 	UASSERT_MSG(outputPoses.size() == inOutStamps.size(), uFormat("%d vs %d", (int)outputPoses.size(), (int)inOutStamps.size()).c_str());
 	return true;
@@ -443,7 +560,7 @@ bool CameraImages::readPoses(std::list<Transform> & outputPoses, std::list<doubl
 
 bool CameraImages::isCalibrated() const
 {
-	return _model.isValidForProjection();
+	return _model.isValidForProjection() || (_models.size() && _models.front().isValidForProjection());
 }
 
 std::string CameraImages::getSerial() const
@@ -506,8 +623,10 @@ SensorData CameraImages::captureImage(CameraInfo * info)
 	LaserScan scan(cv::Mat(), _scanMaxPts, 0, LaserScan::kUnknown, _scanLocalTransform);
 	double stamp = UTimer::now();
 	Transform odometryPose;
+	cv::Mat covariance;
 	Transform groundTruthPose;
 	cv::Mat depthFromScan;
+	CameraModel model = _model;
 	UDEBUG("");
 	if(_dir->isValid())
 	{
@@ -553,16 +672,26 @@ SensorData CameraImages::captureImage(CameraInfo * info)
 				{
 					_captureDelay = _stamps.front() - stamp;
 				}
-				if(odometry_.size())
+			}
+			if(odometry_.size())
+			{
+				odometryPose = odometry_.front();
+				odometry_.pop_front();
+				if(covariances_.size())
 				{
-					odometryPose = odometry_.front();
-					odometry_.pop_front();
+					covariance = covariances_.front();
+					covariances_.pop_front();
 				}
-				if(groundTruth_.size())
-				{
-					groundTruthPose = groundTruth_.front();
-					groundTruth_.pop_front();
-				}
+			}
+			if(groundTruth_.size())
+			{
+				groundTruthPose = groundTruth_.front();
+				groundTruth_.pop_front();
+			}
+			if(_models.size() && !model.isValidForProjection())
+			{
+				model = _models.front();
+				_models.pop_front();
 			}
 		}
 		else
@@ -580,16 +709,26 @@ SensorData CameraImages::captureImage(CameraInfo * info)
 					{
 						_captureDelay = _stamps.front() - stamp;
 					}
-					if(odometry_.size())
+				}
+				if(odometry_.size())
+				{
+					odometryPose = odometry_.front();
+					odometry_.pop_front();
+					if(covariances_.size())
 					{
-						odometryPose = odometry_.front();
-						odometry_.pop_front();
+						covariance = covariances_.front();
+						covariances_.pop_front();
 					}
-					if(groundTruth_.size())
-					{
-						groundTruthPose = groundTruth_.front();
-						groundTruth_.pop_front();
-					}
+				}
+				if(groundTruth_.size())
+				{
+					groundTruthPose = groundTruth_.front();
+					groundTruth_.pop_front();
+				}
+				if(_models.size() && !model.isValidForProjection())
+				{
+					model = _models.front();
+					_models.pop_front();
 				}
 
 				while(_count++ < _startAt && (fileName = _dir->getNextFileName()).size())
@@ -603,16 +742,26 @@ SensorData CameraImages::captureImage(CameraInfo * info)
 						{
 							_captureDelay = _stamps.front() - stamp;
 						}
-						if(odometry_.size())
+					}
+					if(odometry_.size())
+					{
+						odometryPose = odometry_.front();
+						odometry_.pop_front();
+						if(covariances_.size())
 						{
-							odometryPose = odometry_.front();
-							odometry_.pop_front();
+							covariance = covariances_.front();
+							covariances_.pop_front();
 						}
-						if(groundTruth_.size())
-						{
-							groundTruthPose = groundTruth_.front();
-							groundTruth_.pop_front();
-						}
+					}
+					if(groundTruth_.size())
+					{
+						groundTruthPose = groundTruth_.front();
+						groundTruth_.pop_front();
+					}
+					if(_models.size() && !model.isValidForProjection())
+					{
+						model = _models.front();
+						_models.pop_front();
 					}
 				}
 			}
@@ -693,12 +842,11 @@ SensorData CameraImages::captureImage(CameraInfo * info)
 							UWARN("Error debayering images: \"%s\". Please set bayer mode to -1 if images are not bayered!", e.what());
 						}
 					}
-
 				}
 
-				if(!img.empty() && _model.isValidForRectification() && _rectifyImages)
+				if(!img.empty() && model.isValidForRectification() && _rectifyImages)
 				{
-					img = _model.rectifyImage(img);
+					img = model.rectifyImage(img);
 				}
 			}
 
@@ -711,7 +859,7 @@ SensorData CameraImages::captureImage(CameraInfo * info)
 				if(_depthFromScan && !img.empty())
 				{
 					UDEBUG("Computing depth from scan...");
-					if(!_model.isValidForProjection())
+					if(!model.isValidForProjection())
 					{
 						UWARN("Depth from laser scan: Camera model should be valid.");
 					}
@@ -722,7 +870,7 @@ SensorData CameraImages::captureImage(CameraInfo * info)
 					else
 					{
 						pcl::PointCloud<pcl::PointXYZ>::Ptr cloud = util3d::laserScanToPointCloud(scan, scan.localTransform());
-						depthFromScan = util3d::projectCloudToCamera(img.size(), _model.K(), cloud, _model.localTransform());
+						depthFromScan = util3d::projectCloudToCamera(img.size(), model.K(), cloud, model.localTransform());
 						if(_depthFromScanFillHoles!=0)
 						{
 							util3d::fillProjectedCloudHoles(depthFromScan, _depthFromScanFillHoles>0, _depthFromScanFillHolesFromBorder);
@@ -737,18 +885,18 @@ SensorData CameraImages::captureImage(CameraInfo * info)
 		UWARN("Directory is not set, camera must be initialized.");
 	}
 
-	if(_model.imageHeight() == 0 || _model.imageWidth() == 0)
+	if(model.imageHeight() == 0 || model.imageWidth() == 0)
 	{
-		_model.setImageSize(img.size());
+		model.setImageSize(img.size());
 	}
 
-	SensorData data(scan, _isDepth?cv::Mat():img, _isDepth?img:depthFromScan, _model, this->getNextSeqID(), stamp);
+	SensorData data(scan, _isDepth?cv::Mat():img, _isDepth?img:depthFromScan, model, this->getNextSeqID(), stamp);
 	data.setGroundTruth(groundTruthPose);
 
 	if(info && !odometryPose.isNull())
 	{
 		info->odomPose = odometryPose;
-		info->odomCovariance = cv::Mat::eye(6,6,CV_64FC1); // Note that with TORO and g2o file formats, we could get the covariance
+		info->odomCovariance = covariance.empty()?cv::Mat::eye(6,6,CV_64FC1):covariance; // Note that with TORO and g2o file formats, we could get the covariance
 	}
 
 	return data;

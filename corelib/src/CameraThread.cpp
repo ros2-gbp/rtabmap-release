@@ -74,7 +74,6 @@ CameraThread::CameraThread(Camera * camera, const ParametersMap & parameters) :
 
 CameraThread::~CameraThread()
 {
-	UDEBUG("");
 	join(true);
 	delete _camera;
 	delete _distortionModel;
@@ -130,6 +129,39 @@ void CameraThread::disableIMUFiltering()
 	_imuFilter = 0;
 }
 
+void CameraThread::setScanParameters(
+	bool fromDepth,
+	int downsampleStep,
+	float rangeMin,
+	float rangeMax,
+	float voxelSize,
+	int normalsK,
+	int normalsRadius,
+	bool forceGroundNormalsUp)
+{
+	setScanParameters(fromDepth, downsampleStep, rangeMin, rangeMax, voxelSize, normalsK, normalsRadius, forceGroundNormalsUp?0.8f:0.0f);
+}
+
+void CameraThread::setScanParameters(
+			bool fromDepth,
+			int downsampleStep, // decimation of the depth image in case the scan is from depth image
+			float rangeMin,
+			float rangeMax,
+			float voxelSize,
+			int normalsK,
+			int normalsRadius,
+			float groundNormalsUp)
+{
+	_scanFromDepth = fromDepth;
+	_scanDownsampleStep=downsampleStep;
+	_scanRangeMin = rangeMin;
+	_scanRangeMax = rangeMax;
+	_scanVoxelSize = voxelSize;
+	_scanNormalsK = normalsK;
+	_scanNormalsRadius = normalsRadius;
+	_scanForceGroundNormalsUp = groundNormalsUp;
+}
+
 void CameraThread::mainLoopBegin()
 {
 	ULogger::registerCurrentThread("Camera");
@@ -139,7 +171,6 @@ void CameraThread::mainLoopBegin()
 void CameraThread::mainLoop()
 {
 	UTimer totalTime;
-	UDEBUG("");
 	CameraInfo info;
 	SensorData data = _camera->takeImage(&info);
 
@@ -161,7 +192,6 @@ void CameraThread::mainLoop()
 
 void CameraThread::mainLoopKill()
 {
-	UDEBUG("");
 	if(dynamic_cast<CameraFreenect2*>(_camera) != 0)
 	{
 		int i=20;
@@ -240,7 +270,26 @@ void CameraThread::postUpdate(SensorData * dataPtr, CameraInfo * info) const
 		else
 		{
 			cv::Mat image = util2d::decimate(data.imageRaw(), _imageDecimation);
-			cv::Mat depthOrRight = util2d::decimate(data.depthOrRightRaw(), _imageDecimation);
+
+			int depthDecimation = _imageDecimation;
+			if(data.depthOrRightRaw().rows <= image.rows || data.depthOrRightRaw().cols <= image.cols)
+			{
+				depthDecimation = 1;
+			}
+			else
+			{
+				depthDecimation = 2;
+				while(data.depthOrRightRaw().rows / depthDecimation > image.rows ||
+					  data.depthOrRightRaw().cols / depthDecimation > image.cols ||
+					  data.depthOrRightRaw().rows % depthDecimation != 0 ||
+					  data.depthOrRightRaw().cols % depthDecimation != 0)
+				{
+					++depthDecimation;
+				}
+				UDEBUG("depthDecimation=%d", depthDecimation);
+			}
+			cv::Mat depthOrRight = util2d::decimate(data.depthOrRightRaw(), depthDecimation);
+
 			std::vector<CameraModel> models = data.cameraModels();
 			for(unsigned int i=0; i<models.size(); ++i)
 			{
