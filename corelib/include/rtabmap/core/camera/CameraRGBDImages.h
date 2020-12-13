@@ -44,12 +44,10 @@ public:
 			const std::string & pathDepthImages,
 			float depthScaleFactor = 1.0f,
 			float imageRate=0.0f,
-			const Transform & localTransform = Transform::getIdentity());
+			const Transform & localTransform = CameraModel::opticalRotation());
 	virtual ~CameraRGBDImages();
 
 	virtual bool init(const std::string & calibrationFolder = ".", const std::string & cameraName = "");
-	virtual bool isCalibrated() const;
-	virtual std::string getSerial() const;
 
 	virtual void setStartIndex(int index) {CameraImages::setStartIndex(index);cameraDepth_.setStartIndex(index);} // negative means last
 	virtual void setMaxFrames(int value) {CameraImages::setMaxFrames(value);cameraDepth_.setMaxFrames(value);}
