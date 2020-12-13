@@ -21,7 +21,7 @@ SET(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake_modules")
 #######################
 SET(RTABMAP_MAJOR_VERSION 0)
 SET(RTABMAP_MINOR_VERSION 20)
-SET(RTABMAP_PATCH_VERSION 0)
+SET(RTABMAP_PATCH_VERSION 7)
 SET(RTABMAP_VERSION
   ${RTABMAP_MAJOR_VERSION}.${RTABMAP_MINOR_VERSION}.${RTABMAP_PATCH_VERSION})
   
@@ -61,7 +61,7 @@ ELSE ()
 ENDIF()
 
 if(POLICY CMP0020)
-    cmake_policy(SET CMP0020 OLD)
+    cmake_policy(SET CMP0020 NEW)
 endif()
 if(POLICY CMP0043)
     cmake_policy(SET CMP0043 OLD)
@@ -427,6 +427,10 @@ ENDIF(WITH_CVSBA)
 IF(WITH_POINTMATCHER)
     find_package(libpointmatcher QUIET)
     IF(libpointmatcher_FOUND)
+       find_package(Boost COMPONENTS thread filesystem system program_options date_time REQUIRED)
+       if (Boost_MINOR_VERSION GREATER 47)
+           find_package(Boost COMPONENTS thread filesystem system program_options date_time chrono timer REQUIRED)
+       endif (Boost_MINOR_VERSION GREATER 47)
        MESSAGE(STATUS "Found libpointmatcher: ${libpointmatcher_INCLUDE_DIRS}")
     ENDIF(libpointmatcher_FOUND)
 ENDIF(WITH_POINTMATCHER)
@@ -471,7 +475,7 @@ ENDIF(WITH_REALSENSE)
 IF(WITH_REALSENSE2)
     IF(WIN32)
         FIND_PACKAGE(RealSense2 QUIET)
-	ELSE()
+    ELSE()
         FIND_PACKAGE(realsense2 QUIET)
     ENDIF()
     IF(realsense2_FOUND)
@@ -515,9 +519,9 @@ IF(WITH_ALICE_VISION)
     IF(AliceVision_FOUND)
         SET(CMAKE_MODULE_PATH "${CMAKE_MODULE_PATH};/usr/local/lib/cmake/modules")
         find_package(Geogram REQUIRED QUIET)
-        # Make sure the two following lines are also commented in AliceVision to avoid Eigen memory alignment error
-        #add_definitions("-DEIGEN_DONT_ALIGN_STATICALLY=1")
-        #add_definitions("-DEIGEN_DONT_VECTORIZE=1")
+        add_definitions("-DRTABMAP_ALICE_VISION_MAJOR=${AliceVision_VERSION_MAJOR}")
+        add_definitions("-DRTABMAP_ALICE_VISION_MINOR=${AliceVision_VERSION_MINOR}")
+        add_definitions("-DRTABMAP_ALICE_VISION_PATCH=${AliceVision_VERSION_PATCH}")
     ENDIF(AliceVision_FOUND)
 ENDIF(WITH_ALICE_VISION)
 
@@ -622,7 +626,8 @@ ELSEIF(G2O_FOUND OR
        okvis_FOUND OR 
        open_chisel_FOUND OR 
        msckf_vio_FOUND OR 
-       vins_FOUND)
+       vins_FOUND OR 
+       libpointmatcher_FOUND)
    #Newest versions require std11
    IF(NOT MSVC)
      include(CheckCXXCompilerFlag)
@@ -688,16 +693,6 @@ ELSEIF(OpenCV_VERSION VERSION_GREATER "3.4.2")
     SET(NONFREE "//")
   ENDIF(${matchres} EQUAL -1)
 ENDIF()
-
-# check if version status is "-dev" (SIFT compatibility issue between 4.3.0 vs 4.3.0-dev)
-FIND_FILE(OpenCV_VERSION_HPP opencv2/core/version.hpp
-  PATHS ${OpenCV_INCLUDE_DIRS}
-  NO_DEFAULT_PATH)
-FILE(READ ${OpenCV_VERSION_HPP} TMPTXT)
-STRING(FIND "${TMPTXT}" "-dev" matchres)
-IF(${matchres} EQUAL -1)
-  SET(OPENCV_DEV "//")
-ENDIF(${matchres} EQUAL -1)
 
 IF(NOT G2O_FOUND)
    SET(G2O "//")
@@ -1219,7 +1214,7 @@ MESSAGE(STATUS "  With OpenChisel           = NO (open_chisel not found)")
 ENDIF()
 
 IF(AliceVision_FOUND)
-MESSAGE(STATUS "  With AliceVision          = YES (License: MPLv2)")
+MESSAGE(STATUS "  With AliceVision ${AliceVision_VERSION}    = YES (License: MPLv2)")
 ELSEIF(NOT WITH_ALICE_VISION)
 MESSAGE(STATUS "  With AliceVision          = NO (WITH_ALICE_VISION=OFF)")
 ELSE()

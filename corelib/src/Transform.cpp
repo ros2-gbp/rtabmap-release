@@ -166,9 +166,30 @@ float Transform::theta() const
 	return yaw;
 }
 
+bool Transform::isInvertible() const
+{
+	bool invertible = false;
+	Eigen::Matrix4f inverse;
+	Eigen::Matrix4f::RealScalar det;
+	toEigen4f().computeInverseAndDetWithCheck(inverse, det, invertible);
+	return invertible;
+}
+
 Transform Transform::inverse() const
 {
-	return fromEigen4f(toEigen4f().inverse());
+	bool invertible = false;
+	Eigen::Matrix4f inverse;
+	Eigen::Matrix4f::RealScalar det;
+	toEigen4f().computeInverseAndDetWithCheck(inverse, det, invertible);
+	UASSERT_MSG(invertible, uFormat("This transform is not invertible! %s \n"
+			"[%f %f %f %f;\n"
+			" %f %f %f %f;\n"
+			" %f %f %f %f;\n"
+			" 0 0 0 1]", prettyPrint().c_str(),
+			r11(), r12(), r13(), o14(),
+			r21(), r22(), r23(), o24(),
+			r31(), r32(), r33(), o34()).c_str());
+	return fromEigen4f(inverse);
 }
 
 Transform Transform::rotation() const
@@ -311,14 +332,9 @@ bool Transform::operator!=(const Transform & t) const
 
 std::ostream& operator<<(std::ostream& os, const Transform& s)
 {
-	for(int i = 0; i < 3; ++i)
-	{
-		for(int j = 0; j < 4; ++j)
-		{
-			os << std::left << std::setw(12) << s.data()[i*4 + j] << " ";
-		}
-		os << std::endl;
-	}
+	os << "[" << s.data()[0] << ", " << s.data()[1] << ", " << s.data()[2] << ", " << s.data()[3] << ";" << std::endl
+	   << " " << s.data()[4] << ", " << s.data()[5] << ", " << s.data()[6] << ", " << s.data()[7] << ";" << std::endl
+	   << " " << s.data()[8] << ", " << s.data()[9] << ", " << s.data()[10]<< ", " << s.data()[11] << "]";
 	return os;
 }
 

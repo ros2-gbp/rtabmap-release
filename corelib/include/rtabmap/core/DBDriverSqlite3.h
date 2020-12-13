@@ -54,7 +54,7 @@ protected:
 	virtual bool connectDatabaseQuery(const std::string & url, bool overwritten = false);
 	virtual void disconnectDatabaseQuery(bool save = true, const std::string & outputUrl = "");
 	virtual bool isConnectedQuery() const;
-	virtual long getMemoryUsedQuery() const; // In bytes
+	virtual unsigned long getMemoryUsedQuery() const; // In bytes
 	virtual bool getDatabaseVersionQuery(std::string & version) const;
 	virtual long getNodesMemoryUsedQuery() const;
 	virtual long getLinksMemoryUsedQuery() const;
@@ -113,7 +113,7 @@ protected:
 	virtual cv::Mat load2DMapQuery(float & xMin, float & yMin, float & cellSize) const;
 	virtual void saveOptimizedMeshQuery(
 			const cv::Mat & cloud,
-			const std::vector<std::vector<std::vector<unsigned int> > > & polygons,
+			const std::vector<std::vector<std::vector<RTABMAP_PCL_INDEX> > > & polygons,
 #if PCL_VERSION_COMPARE(>=, 1, 8, 0)
 			const std::vector<std::vector<Eigen::Vector2f, Eigen::aligned_allocator<Eigen::Vector2f> > > & texCoords,
 #else
@@ -121,7 +121,7 @@ protected:
 #endif
 			const cv::Mat & textures) const;
 	virtual cv::Mat loadOptimizedMeshQuery(
-			std::vector<std::vector<std::vector<unsigned int> > > * polygons,
+			std::vector<std::vector<std::vector<RTABMAP_PCL_INDEX> > > * polygons,
 #if PCL_VERSION_COMPARE(>=, 1, 8, 0)
 			std::vector<std::vector<Eigen::Vector2f, Eigen::aligned_allocator<Eigen::Vector2f> > > * texCoords,
 #else
@@ -189,7 +189,7 @@ protected:
 	std::string _version;
 
 private:
-	long _memoryUsedEstimate;
+	unsigned long _memoryUsedEstimate;
 	bool _dbInMemory;
 	unsigned int _cacheSize;
 	int _journalMode;
