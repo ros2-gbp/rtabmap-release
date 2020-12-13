@@ -102,7 +102,7 @@ public:
 	cv::Mat load2DMap(float & xMin, float & yMin, float & cellSize) const;
 	void saveOptimizedMesh(
 			const cv::Mat & cloud,
-			const std::vector<std::vector<std::vector<unsigned int> > > & polygons = std::vector<std::vector<std::vector<unsigned int> > >(),      // Textures -> polygons -> vertices
+			const std::vector<std::vector<std::vector<RTABMAP_PCL_INDEX> > > & polygons = std::vector<std::vector<std::vector<RTABMAP_PCL_INDEX> > >(),      // Textures -> polygons -> vertices
 #if PCL_VERSION_COMPARE(>=, 1, 8, 0)
 			const std::vector<std::vector<Eigen::Vector2f, Eigen::aligned_allocator<Eigen::Vector2f> > > & texCoords = std::vector<std::vector<Eigen::Vector2f, Eigen::aligned_allocator<Eigen::Vector2f> > >(), // Textures -> uv coords for each vertex of the polygons
 #else
@@ -110,7 +110,7 @@ public:
 #endif
 			const cv::Mat & textures = cv::Mat()) const; // concatenated textures (assuming square textures with all same size)
 	cv::Mat loadOptimizedMesh(
-			std::vector<std::vector<std::vector<unsigned int> > > * polygons = 0,
+			std::vector<std::vector<std::vector<RTABMAP_PCL_INDEX> > > * polygons = 0,
 #if PCL_VERSION_COMPARE(>=, 1, 8, 0)
 			std::vector<std::vector<Eigen::Vector2f, Eigen::aligned_allocator<Eigen::Vector2f> > > * texCoords = 0,
 #else
@@ -199,9 +199,10 @@ public:
 	cv::Mat getImageCompressed(int signatureId) const;
 	SensorData getNodeData(int locationId, bool images, bool scan, bool userData, bool occupancyGrid) const;
 	void getNodeWordsAndGlobalDescriptors(int nodeId,
-			std::multimap<int, cv::KeyPoint> & words,
-			std::multimap<int, cv::Point3f> & words3,
-			std::multimap<int, cv::Mat> & wordsDescriptors,
+			std::multimap<int, int> & words,
+			std::vector<cv::KeyPoint> & wordsKpts,
+			std::vector<cv::Point3f> & words3,
+			cv::Mat & wordsDescriptors,
 			std::vector<GlobalDescriptor> & globalDescriptors) const;
 	void getNodeCalibration(int nodeId,
 			std::vector<CameraModel> & models,
@@ -225,6 +226,7 @@ public:
 	virtual void dumpMemory(std::string directory) const;
 	virtual void dumpSignatures(const char * fileNameSign, bool words3D) const;
 	void dumpDictionary(const char * fileNameRef, const char * fileNameDesc) const;
+	unsigned long getMemoryUsed() const; //Bytes
 
 	void generateGraph(const std::string & fileName, const std::set<int> & ids = std::set<int>());
 

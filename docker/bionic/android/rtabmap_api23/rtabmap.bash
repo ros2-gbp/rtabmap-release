@@ -31,13 +31,13 @@ wget 'https://docs.google.com/uc?authuser=0&id=1s5iPJ7xiridj9Jj--gCy2XiQFniheVm6
 mv TangoSDK_Ikariotikos_Java.jar rtabmap-tango/app/android/libs/.
 
 # ARCore
-wget 'https://docs.google.com/uc?authuser=0&id=1A4gMviyxHCnA19MTMbitOWoSOyoZcCef&export=download' -O arcore.zip
+wget 'https://docs.google.com/uc?authuser=0&id=1VsibeqRYpS5pjmrG-vYTXyiPg8kbIfVN&export=download' -O arcore.zip
 unzip -qq arcore.zip
 rm arcore.zip
-cp -r arcore/include/* $prefix/arm64-v8a/include/.
-cp -r arcore/arm64-v8a/* $prefix/arm64-v8a/lib/.
-cp arcore/*.jar rtabmap-tango/app/android/libs/.
-rm -r arcore
+cp -r arcore1_18/include/* $prefix/arm64-v8a/include/.
+cp -r arcore1_18/arm64-v8a/* $prefix/arm64-v8a/lib/.
+cp arcore1_18/*.jar rtabmap-tango/app/android/libs/.
+rm -r arcore1_18
 
 # AREngine
 wget 'https://docs.google.com/uc?authuser=0&id=1rdaD2Z1QBv-SUeUy0oBmg3C2odfxTHgR&export=download' -O arengine.zip
