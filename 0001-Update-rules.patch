@@ -1,19 +1,19 @@
-From da3c422893a8a8ed269d67aa84e5f769db1d01b8 Mon Sep 17 00:00:00 2001
+From ee95071b0270b066c92b1a3259a08f52b04df2dd Mon Sep 17 00:00:00 2001
 From: matlabbe <matlabbe@gmail.com>
-Date: Fri, 6 May 2016 14:12:08 -0400
-Subject: [PATCH 1/2] Update rules
+Date: Sat, 12 Dec 2020 19:56:11 -0500
+Subject: [PATCH] Update rules
 
 ---
  debian/rules | 2 +-
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/debian/rules b/debian/rules
-index 928c8e7..e5448ca 100755
+index 674d4bf..06c8b1f 100755
 --- a/debian/rules
 +++ b/debian/rules
-@@ -48,7 +48,7 @@ override_dh_shlibdeps:
- 	# in the install tree that was dropped by catkin, and source it.  It will
- 	# set things like CMAKE_PREFIX_PATH, PKG_CONFIG_PATH, and PYTHONPATH.
+@@ -50,7 +50,7 @@ override_dh_shlibdeps:
+ 	# in the install tree and source it.  It will set things like
+ 	# CMAKE_PREFIX_PATH, PKG_CONFIG_PATH, and PYTHONPATH.
  	if [ -f "/opt/ros/kinetic/setup.sh" ]; then . "/opt/ros/kinetic/setup.sh"; fi && \
 -	dh_shlibdeps -l$(CURDIR)/debian/ros-kinetic-rtabmap//opt/ros/kinetic/lib/
 +	dh_shlibdeps -l$(CURDIR)/debian/ros-kinetic-rtabmap//opt/ros/kinetic/lib/:$(CURDIR)/debian/ros-kinetic-rtabmap//opt/ros/kinetic/lib/x86_64-linux-gnu/:$(CURDIR)/debian/ros-kinetic-rtabmap//opt/ros/kinetic/lib/i386-linux-gnu/:$(CURDIR)/debian/ros-kinetic-rtabmap//opt/ros/kinetic/lib/arm-linux-gnueabihf/
