@@ -38,7 +38,6 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define RTABMAP_VERSION_COMPARE(major, minor, patch)  (major>=@PROJECT_VERSION_MAJOR@ || (major==@PROJECT_VERSION_MAJOR@ && minor>=@PROJECT_VERSION_MINOR@) || (major==@PROJECT_VERSION_MAJOR@ && minor==@PROJECT_VERSION_MINOR@ && patch >=@PROJECT_VERSION_PATCH@))
 
 @NONFREE@#define RTABMAP_NONFREE
-@OPENCV_DEV@#define RTABMAP_OPENCV_DEV
 @TORO@#define RTABMAP_TORO
 @G2O@#define RTABMAP_G2O
 @G2O_CPP_CONF@#define RTABMAP_G2O_CPP11
@@ -77,6 +76,17 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 @PYMATCHER@#define RTABMAP_PYMATCHER
 @MADGWICK@#define RTABMAP_MADGWICK
 
+#include <pcl/pcl_config.h>
+
+#if PCL_VERSION_COMPARE(>, 1, 11, 1)
+#include <pcl/types.h>
+#define RTABMAP_PCL_INDEX pcl::index_t
+#elif PCL_VERSION_COMPARE(>=, 1, 10, 0)
+#define RTABMAP_PCL_INDEX std::uint32_t
+#else
+#include <pcl/pcl_macros.h>
+#define RTABMAP_PCL_INDEX pcl::uint32_t
+#endif
 
 #endif /* VERSION_H_ */
 
