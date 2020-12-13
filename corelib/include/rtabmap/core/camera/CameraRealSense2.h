@@ -62,7 +62,7 @@ public:
 	CameraRealSense2(
 		const std::string & deviceId = "",
 		float imageRate = 0,
-		const Transform & localTransform = Transform::getIdentity());
+		const Transform & localTransform = CameraModel::opticalRotation());
 	virtual ~CameraRealSense2();
 
 	virtual bool init(const std::string & calibrationFolder = ".", const std::string & cameraName = "");
@@ -75,6 +75,7 @@ public:
 	void setEmitterEnabled(bool enabled);
 	void setIRFormat(bool enabled, bool useDepthInsteadOfRightImage);
 	void setResolution(int width, int height, int fps = 30);
+	void setGlobalTimeSync(bool enabled);
 	void publishInterIMU(bool enabled);
 	void setDualMode(bool enabled, const Transform & extrinsics);
 	void setJsonConfig(const std::string & json);
@@ -93,7 +94,7 @@ private:
 			Transform & pose,
 			unsigned int & poseConfidence,
 			IMU & imu,
-			int maxWaitTimeMs = 35) const;
+			int maxWaitTimeMs = 35);
 #endif
 
 protected:
@@ -121,6 +122,7 @@ private:
 	UMutex imuMutex_;
 	double lastImuStamp_;
 	bool clockSyncWarningShown_;
+	bool imuGlobalSyncWarningShown_;
 
 	bool emitterEnabled_;
 	bool ir_;
@@ -130,10 +132,13 @@ private:
 	int cameraWidth_;
 	int cameraHeight_;
 	int cameraFps_;
+	bool globalTimeSync_;
 	bool publishInterIMU_;
 	bool dualMode_;
 	Transform dualExtrinsics_;
 	std::string jsonConfig_;
+	bool closing_;
+	bool isL500_;
 
 	static Transform realsense2PoseRotation_;
 	static Transform realsense2PoseRotationInv_;
