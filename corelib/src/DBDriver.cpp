@@ -40,7 +40,6 @@ namespace rtabmap {
 
 DBDriver * DBDriver::create(const ParametersMap & parameters)
 {
-	// well, we only have Sqlite3 database type for now :P
 	return new DBDriverSqlite3(parameters);
 }
 
@@ -59,6 +58,7 @@ DBDriver::~DBDriver()
 
 void DBDriver::parseParameters(const ParametersMap & parameters)
 {
+	Parameters::parse(parameters, Parameters::kDbTargetVersion(), _targetVersion);
 }
 
 void DBDriver::closeConnection(bool save, const std::string & outputUrl)
@@ -107,9 +107,9 @@ bool DBDriver::isConnected() const
 }
 
 // In bytes
-long DBDriver::getMemoryUsed() const
+unsigned long DBDriver::getMemoryUsed() const
 {
-	long bytes;
+	unsigned long bytes;
 	_dbSafeAccessMutex.lock();
 	bytes = getMemoryUsedQuery();
 	_dbSafeAccessMutex.unlock();
@@ -690,6 +690,22 @@ void DBDriver::getNodeData(
 			 (!occupancyGrid || s->sensorData().gridCellSize() != 0.0f))))
 		{
 			data = (SensorData)s->sensorData();
+			if(!images)
+			{
+				data.setRGBDImage(cv::Mat(), cv::Mat(), std::vector<CameraModel>());
+			}
+			if(!scan)
+			{
+				data.setLaserScan(LaserScan());
+			}
+			if(!userData)
+			{
+				data.setUserData(cv::Mat());
+			}
+			if(!occupancyGrid)
+			{
+				data.setOccupancyGrid(cv::Mat(), cv::Mat(), cv::Mat(), 0, cv::Point3f());
+			}
 			found = true;
 		}
 	}
@@ -1193,7 +1209,7 @@ cv::Mat DBDriver::load2DMap(float & xMin, float & yMin, float & cellSize) const
 
 void DBDriver::saveOptimizedMesh(
 			const cv::Mat & cloud,
-			const std::vector<std::vector<std::vector<unsigned int> > > & polygons,
+			const std::vector<std::vector<std::vector<RTABMAP_PCL_INDEX> > > & polygons,
 #if PCL_VERSION_COMPARE(>=, 1, 8, 0)
 			const std::vector<std::vector<Eigen::Vector2f, Eigen::aligned_allocator<Eigen::Vector2f> > > & texCoords,
 #else
@@ -1207,7 +1223,7 @@ void DBDriver::saveOptimizedMesh(
 }
 
 cv::Mat DBDriver::loadOptimizedMesh(
-				std::vector<std::vector<std::vector<unsigned int> > > * polygons,
+				std::vector<std::vector<std::vector<RTABMAP_PCL_INDEX> > > * polygons,
 #if PCL_VERSION_COMPARE(>=, 1, 8, 0)
 				std::vector<std::vector<Eigen::Vector2f, Eigen::aligned_allocator<Eigen::Vector2f> > > * texCoords,
 #else
