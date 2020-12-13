@@ -35,7 +35,7 @@ install:
   # OpenCV
   #- ps: wget 'http://kent.dl.sourceforge.net/project/opencvlibrary/opencv-win/3.3.1/opencv-3.3.1-vc14.exe' -outfile opencv-3.3.1-vc14.exe
   #- cmd: opencv-3.3.1-vc14.exe -o"C:\Program Files" -y
-  - ps: wget 'http://kent.dl.sourceforge.net/project/opencvlibrary/opencv-win/2.4.13/opencv-2.4.13.6-vc14.exe' -outfile opencv-2.4.13.6-vc14.exe
+  - ps: $url = "https://downloads.sourceforge.net/project/opencvlibrary/opencv-win/2.4.13/opencv-2.4.13.6-vc14.exe?r=&ts="+([int64](([datetime]::UtcNow)-(get-date "1/1/1970")).TotalSeconds) ; wget $url -outfile opencv-2.4.13.6-vc14.exe
   - cmd: opencv-2.4.13.6-vc14.exe -o"C:\Program Files" -y
   - ECHO "Installed OpenCV:"
   - ps: "ls \"C:/Program Files/opencv/build\""
@@ -115,6 +115,20 @@ install:
   - cmd: yaml-cpp.exe -o"C:\Program Files" -y
   - ECHO "Installed yaml-cpp:"
   - ps: "ls \"C:/Program Files/yaml-cpp\""
+  # RealSense2
+  - ps: wget 'https://github.com/IntelRealSense/librealsense/releases/download/v2.40.0/Intel.RealSense.SDK-WIN10-2.40.0.2482.exe' -outfile realsense2.exe
+  - cmd: realsense2.exe /VERYSILENT
+  - ECHO "Installed RealSense2:"
+  - ps: "ls \"C:/Program Files (x86)/Intel RealSense SDK 2.0\""
+  - set PATH=%PATH%;C:\Program Files (x86)\Intel RealSense SDK 2.0\bin\x64
+  - set RealSense2_ROOT_DIR=C:\Program Files (x86)\Intel RealSense SDK 2.0
+  # Kinect 4 Azure
+  - ps: wget 'https://download.microsoft.com/download/3/d/6/3d6d9e99-a251-4cf3-8c6a-8e108e960b4b/Azure%20Kinect%20SDK%201.4.1.exe' -outfile azure.exe
+  - cmd: azure.exe /quiet
+  - ECHO "Installed Kinect For Azure:"
+  - ps: "ls \"C:/Program Files/Azure Kinect SDK v1.4.1\""
+  - set PATH=%PATH%;C:\Program Files\Azure Kinect SDK v1.4.1\tools
+  - set K4A_ROOT_DIR=C:\Program Files\Azure Kinect SDK v1.4.1
   
 before_build:
   - cd c:\projects\rtabmap\build

@@ -62,6 +62,9 @@ using namespace aliceVision;
 #include <pcl/surface/vtk_smoothing/vtk_mesh_quadric_decimation.h>
 #endif
 
+#if PCL_VERSION_COMPARE(>, 1, 11, 1)
+#include <pcl/types.h>
+#endif
 #if PCL_VERSION_COMPARE(<, 1, 8, 0)
 #include "pcl18/surface/organized_fast_mesh.h"
 #else
@@ -676,7 +679,8 @@ pcl::TextureMesh::Ptr createTextureMesh(
 		int minClusterSize,
 		const std::vector<float> & roiRatios,
 		const ProgressState * state,
-		std::vector<std::map<int, pcl::PointXY> > * vertexToPixels)
+		std::vector<std::map<int, pcl::PointXY> > * vertexToPixels,
+		bool distanceToCamPolicy)
 {
 	std::map<int, std::vector<CameraModel> > cameraSubModels;
 	for(std::map<int, CameraModel>::const_iterator iter=cameraModels.begin(); iter!=cameraModels.end(); ++iter)
@@ -697,7 +701,8 @@ pcl::TextureMesh::Ptr createTextureMesh(
 			minClusterSize,
 			roiRatios,
 			state,
-			vertexToPixels);
+			vertexToPixels,
+			distanceToCamPolicy);
 }
 
 pcl::TextureMesh::Ptr createTextureMesh(
@@ -711,7 +716,8 @@ pcl::TextureMesh::Ptr createTextureMesh(
 		int minClusterSize,
 		const std::vector<float> & roiRatios,
 		const ProgressState * state,
-		std::vector<std::map<int, pcl::PointXY> > * vertexToPixels)
+		std::vector<std::map<int, pcl::PointXY> > * vertexToPixels,
+		bool distanceToCamPolicy)
 {
 	UASSERT(mesh->polygons.size());
 	pcl::TextureMesh::Ptr textureMesh(new pcl::TextureMesh);
@@ -776,7 +782,7 @@ pcl::TextureMesh::Ptr createTextureMesh(
 		tm.setMaxDepthError(maxDepthError);
 	}
 	tm.setMinClusterSize(minClusterSize);
-	if(tm.textureMeshwithMultipleCameras2(*textureMesh, cameras, state, vertexToPixels))
+	if(tm.textureMeshwithMultipleCameras2(*textureMesh, cameras, state, vertexToPixels, distanceToCamPolicy))
 	{
 		// compute normals for the mesh if not already here
 		bool hasNormals = false;
@@ -1214,18 +1220,18 @@ void concatenateTextureMaterials(pcl::TextureMesh & mesh, const cv::Size & image
 	}
 }
 
-std::vector<std::vector<unsigned int> > convertPolygonsFromPCL(const std::vector<pcl::Vertices> & polygons)
+std::vector<std::vector<RTABMAP_PCL_INDEX> > convertPolygonsFromPCL(const std::vector<pcl::Vertices> & polygons)
 {
-	std::vector<std::vector<unsigned int> > polygonsOut(polygons.size());
+	std::vector<std::vector<RTABMAP_PCL_INDEX> > polygonsOut(polygons.size());
 	for(unsigned int p=0; p<polygons.size(); ++p)
 	{
 		polygonsOut[p] = polygons[p].vertices;
 	}
 	return polygonsOut;
 }
-std::vector<std::vector<std::vector<unsigned int> > > convertPolygonsFromPCL(const std::vector<std::vector<pcl::Vertices> > & tex_polygons)
+std::vector<std::vector<std::vector<RTABMAP_PCL_INDEX> > > convertPolygonsFromPCL(const std::vector<std::vector<pcl::Vertices> > & tex_polygons)
 {
-	std::vector<std::vector<std::vector<unsigned int> > > polygonsOut(tex_polygons.size());
+	std::vector<std::vector<std::vector<RTABMAP_PCL_INDEX> > > polygonsOut(tex_polygons.size());
 	for(unsigned int t=0; t<tex_polygons.size(); ++t)
 	{
 		polygonsOut[t].resize(tex_polygons[t].size());
@@ -1236,7 +1242,7 @@ std::vector<std::vector<std::vector<unsigned int> > > convertPolygonsFromPCL(con
 	}
 	return polygonsOut;
 }
-std::vector<pcl::Vertices> convertPolygonsToPCL(const std::vector<std::vector<unsigned int> > & polygons)
+std::vector<pcl::Vertices> convertPolygonsToPCL(const std::vector<std::vector<RTABMAP_PCL_INDEX> > & polygons)
 {
 	std::vector<pcl::Vertices> polygonsOut(polygons.size());
 	for(unsigned int p=0; p<polygons.size(); ++p)
@@ -1245,7 +1251,7 @@ std::vector<pcl::Vertices> convertPolygonsToPCL(const std::vector<std::vector<un
 	}
 	return polygonsOut;
 }
-std::vector<std::vector<pcl::Vertices> > convertPolygonsToPCL(const std::vector<std::vector<std::vector<unsigned int> > > & tex_polygons)
+std::vector<std::vector<pcl::Vertices> > convertPolygonsToPCL(const std::vector<std::vector<std::vector<RTABMAP_PCL_INDEX> > > & tex_polygons)
 {
 	std::vector<std::vector<pcl::Vertices> > polygonsOut(tex_polygons.size());
 	for(unsigned int t=0; t<tex_polygons.size(); ++t)
@@ -1261,7 +1267,7 @@ std::vector<std::vector<pcl::Vertices> > convertPolygonsToPCL(const std::vector<
 
 pcl::TextureMesh::Ptr assembleTextureMesh(
 		const cv::Mat & cloudMat,
-		const std::vector<std::vector<std::vector<unsigned int> > > & polygons,
+		const std::vector<std::vector<std::vector<RTABMAP_PCL_INDEX> > > & polygons,
 #if PCL_VERSION_COMPARE(>=, 1, 8, 0)
 		const std::vector<std::vector<Eigen::Vector2f, Eigen::aligned_allocator<Eigen::Vector2f> > > & texCoords,
 #else
@@ -1384,7 +1390,7 @@ pcl::TextureMesh::Ptr assembleTextureMesh(
 
 pcl::PolygonMesh::Ptr assemblePolygonMesh(
 		const cv::Mat & cloudMat,
-		const std::vector<std::vector<unsigned int> > & polygons)
+		const std::vector<std::vector<RTABMAP_PCL_INDEX> > & polygons)
 {
 	pcl::PolygonMesh::Ptr polygonMesh(new pcl::PolygonMesh);
 
@@ -1506,7 +1512,7 @@ cv::Mat mergeTextures(
 	cv::Mat globalTextures;
 	if(mesh.tex_materials.size() > 1)
 	{
-		std::vector<std::pair<int, int> > textures(mesh.tex_materials.size(), std::pair<int, int>(-1,-1));
+		std::vector<std::pair<int, int> > textures(mesh.tex_materials.size(), std::pair<int, int>(-1,0));
 		cv::Size imageSize;
 		const int imageType=CV_8UC3;
 
@@ -2194,7 +2200,7 @@ void fixTextureMeshForVisualization(pcl::TextureMesh & textureMesh)
 				for(unsigned int j=0; j<vertices.vertices.size(); ++j)
 				{
 					UASSERT(oi < newCloud->size());
-					UASSERT_MSG(vertices.vertices[j] < originalCloud->size(), uFormat("%d vs %d", vertices.vertices[j], (int)originalCloud->size()).c_str());
+					UASSERT_MSG((size_t)vertices.vertices[j] < originalCloud->size(), uFormat("%d vs %d", vertices.vertices[j], (int)originalCloud->size()).c_str());
 					newCloud->at(oi) = originalCloud->at(vertices.vertices[j]);
 					vertices.vertices[j] = oi; // new vertex index
 					++oi;
@@ -2219,7 +2225,8 @@ bool multiBandTexturing(
 		const std::string & textureFormat,
 		const std::map<int, std::map<int, cv::Vec4d> > & gains,       // optional output of util3d::mergeTextures()
 		const std::map<int, std::map<int, cv::Mat> > & blendingGains, // optional output of util3d::mergeTextures()
-		const std::pair<float, float> & contrastValues)               // optional output of util3d::mergeTextures()
+		const std::pair<float, float> & contrastValues,               // optional output of util3d::mergeTextures()
+		bool gainRGB)
 {
 #ifdef RTABMAP_ALICE_VISION
 	if(ULogger::level() == ULogger::kDebug)
@@ -2245,17 +2252,30 @@ bool multiBandTexturing(
 	UASSERT(vertexToPixels.size() == cloud2.size());
 	UINFO("Input mesh: %d points %d polygons", (int)cloud2.size(), (int)polygons.size());
 	mesh::Texturing texturing;
+#if RTABMAP_ALICE_VISION_MAJOR > 2 || (RTABMAP_ALICE_VISION_MAJOR==2 && RTABMAP_ALICE_VISION_MINOR>=3)
+	texturing.mesh = new mesh::Mesh();
+	texturing.mesh->pts.resize(cloud2.size());
+	texturing.mesh->pointsVisibilities.resize(cloud2.size());
+#else
 	texturing.me = new mesh::Mesh();
 	texturing.me->pts = new StaticVector<Point3d>(cloud2.size());
 	texturing.pointsVisibilities = new mesh::PointsVisibility();
 	texturing.pointsVisibilities->reserve(cloud2.size());
+#endif
 	texturing.texParams.textureSide = 8192;
 	texturing.texParams.downscale = 8192/textureSize;
 
-	std::vector<int> camIndexToId(uKeys(cameraModels));
 	for(size_t i=0;i<cloud2.size();++i)
 	{
 		pcl::PointXYZRGB pt = cloud2.at(i);
+#if RTABMAP_ALICE_VISION_MAJOR > 2 || (RTABMAP_ALICE_VISION_MAJOR==2 && RTABMAP_ALICE_VISION_MINOR>=3)
+		texturing.mesh->pointsVisibilities[i].reserve(vertexToPixels[i].size());
+		for(std::map<int, pcl::PointXY>::const_iterator iter=vertexToPixels[i].begin(); iter!=vertexToPixels[i].end();++iter)
+		{
+			texturing.mesh->pointsVisibilities[i].push_back(iter->first);
+		}
+		texturing.mesh->pts[i] = Point3d(pt.x, pt.y, pt.z);
+#else
 		mesh::PointVisibility* pointVisibility = new mesh::PointVisibility();
 		pointVisibility->reserve(vertexToPixels[i].size());
 		for(std::map<int, pcl::PointXY>::const_iterator iter=vertexToPixels[i].begin(); iter!=vertexToPixels[i].end();++iter)
@@ -2264,13 +2284,24 @@ bool multiBandTexturing(
 		}
 		texturing.pointsVisibilities->push_back(pointVisibility);
 		(*texturing.me->pts)[i] = Point3d(pt.x, pt.y, pt.z);
+#endif
 	}
 
+#if RTABMAP_ALICE_VISION_MAJOR > 2 || (RTABMAP_ALICE_VISION_MAJOR==2 && RTABMAP_ALICE_VISION_MINOR>=3)
+	texturing.mesh->tris.resize(polygons.size());
+	texturing.mesh->trisMtlIds().resize(polygons.size());
+#else
 	texturing.me->tris = new StaticVector<mesh::Mesh::triangle>(polygons.size());
+#endif
 	for(size_t i=0;i<polygons.size();++i)
 	{
 		UASSERT(polygons[i].vertices.size() == 3);
+#if RTABMAP_ALICE_VISION_MAJOR > 2 || (RTABMAP_ALICE_VISION_MAJOR==2 && RTABMAP_ALICE_VISION_MINOR>=3)
+		texturing.mesh->trisMtlIds()[i] = -1;
+		texturing.mesh->tris[i] = mesh::Mesh::triangle(
+#else
 		(*texturing.me->tris)[i] = mesh::Mesh::triangle(
+#endif
 				polygons[i].vertices[0],
 				polygons[i].vertices[1],
 				polygons[i].vertices[2]);
@@ -2278,8 +2309,10 @@ bool multiBandTexturing(
 	UTimer timer;
 	std::string outputDirectory = UDirectory::getDir(outputOBJPath);
 	std::string tmpImageDirectory = outputDirectory+"/rtabmap_tmp_textures";
+	UDirectory::removeDir(tmpImageDirectory);
 	UDirectory::makeDir(tmpImageDirectory);
 	UINFO("Temporary saving images in directory \"%s\"...", tmpImageDirectory.c_str());
+	int viewId = 0;
 	for(std::map<int, Transform>::const_iterator iter = cameraPoses.lower_bound(1); iter!=cameraPoses.end(); ++iter)
 	{
 		int camId = iter->first;
@@ -2335,11 +2368,6 @@ bool multiBandTexturing(
 			UERROR("No camera models found for camera %d. Aborting multiband texturing...", iter->first);
 			return false;
 		}
-		else if(models.size() != 1)
-		{
-			UERROR("Unwrapping not supporting multi-camera yet... ignoring %d. Aborting multiband texturing...", iter->first);
-			return false;
-		}
 		if(image.empty())
 		{
 			UERROR("No image found for camera %d. Aborting multiband texturing...", iter->first);
@@ -2355,60 +2383,73 @@ bool multiBandTexturing(
 			image = image.clone();
 		}
 
-		UASSERT(models.size() == 1);
-		const CameraModel & model = models[0];
-		Transform t = iter->second * model.localTransform();
-		Eigen::Matrix<double, 3, 4> m = (t.inverse()).toEigen3d().matrix().block<3,4>(0, 0);
-		sfmData::CameraPose pose(geometry::Pose3(m), true);
-		sfmData.setAbsolutePose((IndexT)camId, pose);
-		cv::Size imageSize = model.imageSize();
-		if(imageSize.height == 0)
+		for(size_t i=0; i<models.size(); ++i)
 		{
-			// backward compatibility
-			imageSize.height = image.rows;
-			imageSize.width = image.cols;
+			const CameraModel & model = models.at(i);
+			cv::Size imageSize = model.imageSize();
+			if(imageSize.height == 0)
+			{
+				// backward compatibility
+				imageSize.height = image.rows;
+				imageSize.width = image.cols;
+			}
+			UASSERT(image.cols % imageSize.width == 0);
+			cv::Mat imageRoi = image.colRange(i*imageSize.width, (i+1)*imageSize.width);
+			if(gains.find(camId) != gains.end() &&
+			   gains.at(camId).find(i) != gains.at(camId).end())
+			{
+				const cv::Vec4d & g = gains.at(camId).at(i);
+				std::vector<cv::Mat> channels;
+				cv::split(imageRoi, channels);
+
+				// assuming BGR
+				cv::multiply(channels[0], g.val[gainRGB?3:0], channels[0]);
+				cv::multiply(channels[1], g.val[gainRGB?2:0], channels[1]);
+				cv::multiply(channels[2], g.val[gainRGB?1:0], channels[2]);
+
+				cv::Mat output;
+				cv::merge(channels, output);
+				imageRoi = output;
+			}
+
+			if(blendingGains.find(camId) != blendingGains.end() &&
+			   blendingGains.at(camId).find(i) != blendingGains.at(camId).end())
+			{
+				cv::Mat g = blendingGains.at(camId).at(i);
+				cv::Mat dst;
+				cv::blur(g, dst, cv::Size(3,3));
+				cv::Mat gResized;
+				cv::resize(dst, gResized, imageRoi.size(), 0, 0, cv::INTER_LINEAR);
+				cv::Mat output;
+				cv::multiply(imageRoi, gResized, output, 1.0, CV_8UC3);
+				imageRoi = output;
+			}
+
+			Transform t = iter->second * model.localTransform();
+			Eigen::Matrix<double, 3, 4> m = (t.inverse()).toEigen3d().matrix().block<3,4>(0, 0);
+			sfmData::CameraPose pose(geometry::Pose3(m), true);
+			sfmData.setAbsolutePose((IndexT)viewId, pose);
+
+			std::shared_ptr<camera::IntrinsicBase> camPtr = std::make_shared<camera::Pinhole>(
+					imageSize.width, imageSize.height, model.fx(), model.cx(), model.cy());
+			sfmData.intrinsics.insert(std::make_pair((IndexT)viewId, camPtr));
+
+			std::string imagePath = tmpImageDirectory+uFormat("/%d.jpg", viewId);
+
+			cv::imwrite(imagePath, imageRoi);
+
+			std::shared_ptr<sfmData::View> viewPtr = std::make_shared<sfmData::View>(
+					imagePath,
+					(IndexT)viewId,
+					(IndexT)viewId,
+					(IndexT)viewId,
+					imageSize.width,
+					imageSize.height);
+			sfmData.views.insert(std::make_pair((IndexT)viewId, viewPtr));
+			++viewId;
 		}
-		std::shared_ptr<camera::IntrinsicBase> camPtr(new camera::Pinhole(imageSize.width, imageSize.height, model.fx(), model.cx(), model.cy()));
-		sfmData.intrinsics.insert(std::make_pair((IndexT)camId, camPtr));
-
-		std::string imagePath = tmpImageDirectory+uFormat("/%d.jpg", camId);
-
-		if(gains.find(camId) != gains.end())
-		{
-			UASSERT(gains.at(camId).size() == 1);
-			const cv::Vec4d & g = gains.at(camId).begin()->second;
-			std::vector<cv::Mat> channels;
-			cv::split(image, channels);
-
-			// assuming BGR
-			cv::multiply(channels[0], g.val[3], channels[0]);
-			cv::multiply(channels[1], g.val[2], channels[1]);
-			cv::multiply(channels[2], g.val[1], channels[2]);
-
-			cv::merge(channels, image);
-		}
-		if(blendingGains.find(camId) != blendingGains.end())
-		{
-			UASSERT(blendingGains.at(camId).size() == 1);
-			cv::Mat g = blendingGains.at(camId).begin()->second;
-			cv::Mat dst;
-			cv::blur(g, dst, cv::Size(3,3));
-			cv::Mat gResized;
-			cv::resize(dst, gResized, image.size(), 0, 0, cv::INTER_LINEAR);
-			cv::multiply(image, gResized, image, 1.0, CV_8UC3);
-		}
-		cv::imwrite(imagePath, image);
-
-		sfmData.views.insert(std::make_pair((IndexT)camId,
-				new sfmData::View(
-						imagePath,
-						(IndexT)camId,
-						(IndexT)camId,
-						(IndexT)camId,
-						imageSize.width,
-						imageSize.height)));
 	}
-	UINFO("Temporary saving images in directory \"%s\"... done. %fs", tmpImageDirectory.c_str(), timer.ticks());
+	UINFO("Temporary saving images in directory \"%s\"... done (%d images). %fs", tmpImageDirectory.c_str(), viewId, (int)cameraPoses.size(), timer.ticks());
 
 	mvsUtils::MultiViewParams mp(sfmData);
 
@@ -2455,6 +2496,7 @@ bool multiBandTexturing(
 			{
 				UASSERT(img.channels() == 3);
 				// Re-use same contrast values with all images
+				UINFO("Apply contrast values %f %f", contrastValues.first, contrastValues.second);
 				img.convertTo(img, -1, contrastValues.first, contrastValues.second);
 			}
 			std::string newName = *iter;
@@ -2478,6 +2520,10 @@ bool multiBandTexturing(
 	fo.write(mtlStr.c_str(), mtlStr.size());
 	fo.close();
 	UINFO("Rename/convert textures... done. %fs", timer.ticks());
+
+#if RTABMAP_ALICE_VISION_MAJOR > 2 || (RTABMAP_ALICE_VISION_MAJOR==2 && RTABMAP_ALICE_VISION_MINOR>=3)
+	sfmData.clear();
+#endif
 
 	return true;
 #else
@@ -2972,7 +3018,7 @@ float computeNormalsComplexity(
 			{
 				*pcaEigenValues = pca_analysis.eigenvalues;
 			}
-
+			UASSERT((is2d && pca_analysis.eigenvalues.total()>=2) || (!is2d && pca_analysis.eigenvalues.total()>=3));
 			// Get last eigen value, scale between 0 and 1: 0=low complexity, 1=high complexity
 			return pca_analysis.eigenvalues.at<float>(0, is2d?1:2)*(is2d?2.0f:3.0f);
 		}
@@ -3061,6 +3107,62 @@ float computeNormalsComplexity(
 	for (unsigned int i = 0; i < normals.size(); ++i)
 	{
 		const pcl::Normal & pt = normals.at(i);
+		cv::Point3f n(pt.normal_x, pt.normal_y, pt.normal_z);
+		if(doTransform)
+		{
+			n = util3d::transformPoint(n, tn);
+		}
+		if(uIsFinite(pt.normal_x) && uIsFinite(pt.normal_y) && uIsFinite(pt.normal_z))
+		{
+			float * ptr = data_normals.ptr<float>(oi++, 0);
+			ptr[0] = n.x;
+			ptr[1] = n.y;
+			if(!is2d)
+			{
+				ptr[2] = n.z;
+			}
+		}
+	}
+	if(oi>1)
+	{
+		cv::PCA pca_analysis(cv::Mat(data_normals, cv::Range(0, oi*2)), cv::Mat(), CV_PCA_DATA_AS_ROW);
+
+		if(pcaEigenVectors)
+		{
+			*pcaEigenVectors = pca_analysis.eigenvectors;
+		}
+		if(pcaEigenValues)
+		{
+			*pcaEigenValues = pca_analysis.eigenvalues;
+		}
+
+		// Get last eigen value, scale between 0 and 1: 0=low complexity, 1=high complexity
+		return pca_analysis.eigenvalues.at<float>(0, is2d?1:2)*(is2d?2.0f:3.0f);
+	}
+	return 0.0f;
+}
+
+float computeNormalsComplexity(
+		const pcl::PointCloud<pcl::PointXYZINormal> & cloud,
+		const Transform & t,
+		bool is2d,
+		cv::Mat * pcaEigenVectors,
+		cv::Mat * pcaEigenValues)
+{
+	 //Construct a buffer used by the pca analysis
+	int sz = static_cast<int>(cloud.size()*2);
+	cv::Mat data_normals = cv::Mat::zeros(sz, is2d?2:3, CV_32FC1);
+	int oi = 0;
+	bool doTransform = false;
+	Transform tn;
+	if(!t.isIdentity())
+	{
+		tn = t.rotation();
+		doTransform = true;
+	}
+	for (unsigned int i = 0; i < cloud.size(); ++i)
+	{
+		const pcl::PointXYZINormal & pt = cloud.at(i);
 		cv::Point3f n(pt.normal_x, pt.normal_y, pt.normal_z);
 		if(doTransform)
 		{
@@ -3256,12 +3358,20 @@ LaserScan adjustNormalsToViewPoint(
 		const Eigen::Vector3f & viewpoint,
 		bool forceGroundNormalsUp)
 {
+	return adjustNormalsToViewPoint(scan, viewpoint, forceGroundNormalsUp?0.8f:0.0f);
+}
+LaserScan adjustNormalsToViewPoint(
+		const LaserScan & scan,
+		const Eigen::Vector3f & viewpoint,
+		float groundNormalsUp)
+{
 	if(scan.size() && !scan.is2d() && scan.hasNormals())
 	{
 		int nx = scan.getNormalsOffset();
 		int ny = nx+1;
 		int nz = ny+1;
 		cv::Mat output = scan.data().clone();
+		#pragma omp parallel for
 		for(int i=0; i<scan.size(); ++i)
 		{
 			float * ptr = output.ptr<float>(0, i);
@@ -3272,7 +3382,7 @@ LaserScan adjustNormalsToViewPoint(
 
 				float result = v.dot(n);
 				if(result < 0
-				 || (forceGroundNormalsUp && ptr[nz] < -0.8 && ptr[2] < viewpoint[3])) // some far velodyne rays on road can have normals toward ground
+				 || (groundNormalsUp>0.0f && ptr[nz] < -groundNormalsUp && ptr[2] < viewpoint[3])) // some far velodyne rays on road can have normals toward ground
 				{
 					//reverse normal
 					ptr[nx] *= -1.0f;
@@ -3293,10 +3403,11 @@ LaserScan adjustNormalsToViewPoint(
 	return scan;
 }
 
-void adjustNormalsToViewPoint(
-		pcl::PointCloud<pcl::PointNormal>::Ptr & cloud,
+template<typename PointNormalT>
+void adjustNormalsToViewPointImpl(
+		typename pcl::PointCloud<PointNormalT>::Ptr & cloud,
 		const Eigen::Vector3f & viewpoint,
-		bool forceGroundNormalsUp)
+		float groundNormalsUp)
 {
 	for(unsigned int i=0; i<cloud->size(); ++i)
 	{
@@ -3308,7 +3419,7 @@ void adjustNormalsToViewPoint(
 
 			float result = v.dot(n);
 			if(result < 0
-			 || (forceGroundNormalsUp && normal.z < -0.8 && cloud->points[i].z < viewpoint[3])) // some far velodyne rays on road can have normals toward ground
+				|| (groundNormalsUp>0.0f && normal.z < -groundNormalsUp && cloud->points[i].z < viewpoint[3])) // some far velodyne rays on road can have normals toward ground
 			{
 				//reverse normal
 				cloud->points[i].normal_x *= -1.0f;
@@ -3320,29 +3431,48 @@ void adjustNormalsToViewPoint(
 }
 
 void adjustNormalsToViewPoint(
+		pcl::PointCloud<pcl::PointNormal>::Ptr & cloud,
+		const Eigen::Vector3f & viewpoint,
+		bool forceGroundNormalsUp)
+{
+	adjustNormalsToViewPoint(cloud, viewpoint, forceGroundNormalsUp?0.8f:0.0f);
+}
+void adjustNormalsToViewPoint(
+		pcl::PointCloud<pcl::PointNormal>::Ptr & cloud,
+		const Eigen::Vector3f & viewpoint,
+		float groundNormalsUp)
+{
+	adjustNormalsToViewPointImpl<pcl::PointNormal>(cloud, viewpoint, groundNormalsUp);
+}
+
+void adjustNormalsToViewPoint(
 		pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr & cloud,
 		const Eigen::Vector3f & viewpoint,
 		bool forceGroundNormalsUp)
 {
-	for(unsigned int i=0; i<cloud->size(); ++i)
-	{
-		pcl::PointXYZ normal(cloud->points[i].normal_x, cloud->points[i].normal_y, cloud->points[i].normal_z);
-		if(pcl::isFinite(normal))
-		{
-			Eigen::Vector3f v = viewpoint - cloud->points[i].getVector3fMap();
-			Eigen::Vector3f n(normal.x, normal.y, normal.z);
+	adjustNormalsToViewPoint(cloud, viewpoint, forceGroundNormalsUp?0.8f:0.0f);
+}
+void adjustNormalsToViewPoint(
+		pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr & cloud,
+		const Eigen::Vector3f & viewpoint,
+		float groundNormalsUp)
+{
+	adjustNormalsToViewPointImpl<pcl::PointXYZRGBNormal>(cloud, viewpoint, groundNormalsUp);
+}
 
-			float result = v.dot(n);
-			if(result < 0
-				|| (forceGroundNormalsUp && normal.z < -0.8 && cloud->points[i].z < viewpoint[3])) // some far velodyne rays on road can have normals toward ground
-			{
-				//reverse normal
-				cloud->points[i].normal_x *= -1.0f;
-				cloud->points[i].normal_y *= -1.0f;
-				cloud->points[i].normal_z *= -1.0f;
-			}
-		}
-	}
+void adjustNormalsToViewPoint(
+		pcl::PointCloud<pcl::PointXYZINormal>::Ptr & cloud,
+		const Eigen::Vector3f & viewpoint,
+		bool forceGroundNormalsUp)
+{
+	adjustNormalsToViewPoint(cloud, viewpoint, forceGroundNormalsUp?0.8f:0.0f);
+}
+void adjustNormalsToViewPoint(
+		pcl::PointCloud<pcl::PointXYZINormal>::Ptr & cloud,
+		const Eigen::Vector3f & viewpoint,
+		float groundNormalsUp)
+{
+	adjustNormalsToViewPointImpl<pcl::PointXYZINormal>(cloud, viewpoint, groundNormalsUp);
 }
 
 void adjustNormalsToViewPoints(
