@@ -303,6 +303,7 @@ void ExportCloudsDialog::saveSettings(QSettings & settings, const QString & grou
 	settings.setValue("binary", _ui->checkBox_binary->isChecked());
 	settings.setValue("normals_k", _ui->spinBox_normalKSearch->value());
 	settings.setValue("normals_radius", _ui->doubleSpinBox_normalRadiusSearch->value());
+	settings.setValue("intensity_colormap", _ui->comboBox_intensityColormap->currentIndex());
 
 	settings.setValue("regenerate", _ui->checkBox_regenerate->isChecked());
 	settings.setValue("regenerate_decimation", _ui->spinBox_decimation->value());
@@ -371,6 +372,7 @@ void ExportCloudsDialog::saveSettings(QSettings & settings, const QString & grou
 	settings.setValue("mesh_textureMaxAngle", _ui->doubleSpinBox_meshingTextureMaxAngle->value());
 	settings.setValue("mesh_textureMinCluster", _ui->spinBox_mesh_minTextureClusterSize->value());
 	settings.setValue("mesh_textureRoiRatios", _ui->lineEdit_meshingTextureRoiRatios->text());
+	settings.setValue("mesh_textureDistanceToCamPolicy", _ui->checkBox_distanceToCamPolicy->isChecked());
 	settings.setValue("mesh_textureCameraFiltering", _ui->checkBox_cameraFilter->isChecked());
 	settings.setValue("mesh_textureCameraFilteringRadius", _ui->doubleSpinBox_cameraFilterRadius->value());
 	settings.setValue("mesh_textureCameraFilteringAngle", _ui->doubleSpinBox_cameraFilterAngle->value());
@@ -439,6 +441,7 @@ void ExportCloudsDialog::loadSettings(QSettings & settings, const QString & grou
 	_ui->checkBox_binary->setChecked(settings.value("binary", _ui->checkBox_binary->isChecked()).toBool());
 	_ui->spinBox_normalKSearch->setValue(settings.value("normals_k", _ui->spinBox_normalKSearch->value()).toInt());
 	_ui->doubleSpinBox_normalRadiusSearch->setValue(settings.value("normals_radius", _ui->doubleSpinBox_normalRadiusSearch->value()).toDouble());
+	_ui->comboBox_intensityColormap->setCurrentIndex(settings.value("intensity_colormap", _ui->comboBox_intensityColormap->currentIndex()).toInt());
 
 	_ui->checkBox_regenerate->setChecked(settings.value("regenerate", _ui->checkBox_regenerate->isChecked()).toBool());
 	_ui->spinBox_decimation->setValue(settings.value("regenerate_decimation", _ui->spinBox_decimation->value()).toInt());
@@ -510,6 +513,7 @@ void ExportCloudsDialog::loadSettings(QSettings & settings, const QString & grou
 	_ui->doubleSpinBox_meshingTextureMaxAngle->setValue(settings.value("mesh_textureMaxAngle", _ui->doubleSpinBox_meshingTextureMaxAngle->value()).toDouble());
 	_ui->spinBox_mesh_minTextureClusterSize->setValue(settings.value("mesh_textureMinCluster", _ui->spinBox_mesh_minTextureClusterSize->value()).toDouble());
 	_ui->lineEdit_meshingTextureRoiRatios->setText(settings.value("mesh_textureRoiRatios", _ui->lineEdit_meshingTextureRoiRatios->text()).toString());
+	_ui->checkBox_distanceToCamPolicy->setChecked(settings.value("mesh_textureDistanceToCamPolicy", _ui->checkBox_distanceToCamPolicy->isChecked()).toBool());
 	_ui->checkBox_cameraFilter->setChecked(settings.value("mesh_textureCameraFiltering", _ui->checkBox_cameraFilter->isChecked()).toBool());
 	_ui->doubleSpinBox_cameraFilterRadius->setValue(settings.value("mesh_textureCameraFilteringRadius", _ui->doubleSpinBox_cameraFilterRadius->value()).toDouble());
 	_ui->doubleSpinBox_cameraFilterAngle->setValue(settings.value("mesh_textureCameraFilteringAngle", _ui->doubleSpinBox_cameraFilterAngle->value()).toDouble());
@@ -578,6 +582,7 @@ void ExportCloudsDialog::restoreDefaults()
 	_ui->checkBox_binary->setChecked(true);
 	_ui->spinBox_normalKSearch->setValue(20);
 	_ui->doubleSpinBox_normalRadiusSearch->setValue(0.0);
+	_ui->comboBox_intensityColormap->setCurrentIndex(0);
 
 	_ui->checkBox_regenerate->setChecked(_dbDriver!=0?true:false);
 	_ui->spinBox_decimation->setValue(1);
@@ -646,6 +651,7 @@ void ExportCloudsDialog::restoreDefaults()
 	_ui->doubleSpinBox_meshingTextureMaxAngle->setValue(0.0);
 	_ui->spinBox_mesh_minTextureClusterSize->setValue(50);
 	_ui->lineEdit_meshingTextureRoiRatios->setText("0.0 0.0 0.0 0.0");
+	_ui->checkBox_distanceToCamPolicy->setChecked(false);
 	_ui->checkBox_cameraFilter->setChecked(false);
 	_ui->doubleSpinBox_cameraFilterRadius->setValue(0);
 	_ui->doubleSpinBox_cameraFilterAngle->setValue(30);
@@ -753,6 +759,9 @@ void ExportCloudsDialog::updateReconstructionFlavor()
 			_ui->comboBox_frame->setCurrentIndex(0);
 		}
 	}
+	_ui->comboBox_intensityColormap->setVisible(!_ui->checkBox_fromDepth->isChecked() && !_ui->checkBox_binary->isEnabled());
+	_ui->comboBox_intensityColormap->setEnabled(!_ui->checkBox_fromDepth->isChecked() && !_ui->checkBox_binary->isEnabled());
+	_ui->label_intensityColormap->setVisible(!_ui->checkBox_fromDepth->isChecked() && !_ui->checkBox_binary->isEnabled());
 
 	_ui->checkBox_smoothing->setVisible(_ui->comboBox_pipeline->currentIndex() == 1);
 	_ui->checkBox_smoothing->setEnabled(_ui->comboBox_pipeline->currentIndex() == 1);
@@ -1002,6 +1011,14 @@ void ExportCloudsDialog::viewClouds(
 		viewer->setLighting(false);
 		viewer->setDefaultBackgroundColor(QColor(40, 40, 40, 255));
 		viewer->buildPickingLocator(true);
+		if(_ui->comboBox_intensityColormap->currentIndex()==1)
+		{
+			viewer->setIntensityRedColormap(true);
+		}
+		else if(_ui->comboBox_intensityColormap->currentIndex() == 2)
+		{
+			viewer->setIntensityRainbowColormap(true);
+		}
 
 		QVBoxLayout *layout = new QVBoxLayout();
 		layout->addWidget(viewer);
@@ -2404,7 +2421,7 @@ bool ExportCloudsDialog::getExportedClouds(
 					}
 					else
 					{
-						_progressDialog->appendText(tr("No polygons created for cloud %d!").arg(iter->first), Qt::darkYellow);
+						_progressDialog->appendText(tr("No polygons created for cloud %1!").arg(iter->first), Qt::darkYellow);
 						_progressDialog->setAutoClose(false);
 					}
 
@@ -2600,7 +2617,7 @@ bool ExportCloudsDialog::getExportedClouds(
 
 		// texture mesh
 		UDEBUG("texture mapping=%d", _ui->checkBox_textureMapping->isEnabled() && _ui->checkBox_textureMapping->isChecked()?1:0);
-		if(!has2dScans && _ui->checkBox_textureMapping->isEnabled() && _ui->checkBox_textureMapping->isChecked())
+		if(!has2dScans && !meshes.empty() && _ui->checkBox_textureMapping->isEnabled() && _ui->checkBox_textureMapping->isChecked())
 		{
 			_progressDialog->appendText(tr("Texturing..."));
 			QApplication::processEvents();
@@ -2930,7 +2947,8 @@ bool ExportCloudsDialog::getExportedClouds(
 								_ui->spinBox_mesh_minTextureClusterSize->value(),
 								roiRatios,
 								&texturingState,
-								cameraPoses.size()>1?&textureVertexToPixels:0); // only get vertexToPixels if merged clouds with multi textures
+								cameraPoses.size()>1?&textureVertexToPixels:0, // only get vertexToPixels if merged clouds with multi textures
+								_ui->checkBox_distanceToCamPolicy->isChecked());
 
 						if(_canceled)
 						{
@@ -3204,6 +3222,18 @@ std::map<int, std::pair<pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr, pcl::Indic
 					{
 						UERROR("Cloud %d not found in cache!", iter->first);
 					}
+				}
+				if(!cloud->empty() &&
+				   (_ui->doubleSpinBox_ceilingHeight->value() != 0.0 || _ui->doubleSpinBox_floorHeight->value() != 0.0))
+				{
+					float min = _ui->doubleSpinBox_floorHeight->value();
+					float max = _ui->doubleSpinBox_ceilingHeight->value();
+					indices = util3d::passThrough(
+							util3d::transformPointCloud(cloud, iter->second),
+							indices,
+							"z",
+							min!=0.0f&&min<max?min:std::numeric_limits<float>::lowest(),
+							max!=0.0f?max:std::numeric_limits<float>::max());
 				}
 			}
 			else if(_ui->checkBox_fromDepth->isChecked() && uContains(cachedClouds, iter->first))
