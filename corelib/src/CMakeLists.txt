@@ -33,9 +33,11 @@ SET(SRC_FILES
     camera/CameraStereoImages.cpp
     camera/CameraStereoVideo.cpp
     camera/CameraStereoZed.cpp
+    camera/CameraStereoZedOC.cpp
     camera/CameraStereoTara.cpp
     camera/CameraVideo.cpp
     camera/CameraMyntEye.cpp
+    camera/CameraDepthAI.cpp
     
     EpipolarGeometry.cpp
     VisualWord.cpp
@@ -85,11 +87,12 @@ SET(SRC_FILES
     odometry/OdometryViso2.cpp
     odometry/OdometryDVO.cpp
     odometry/OdometryOkvis.cpp
-    odometry/OdometryORBSLAM2.cpp
+    odometry/OdometryORBSLAM.cpp
     odometry/OdometryLOAM.cpp
     odometry/OdometryMSCKF.cpp
     odometry/OdometryVINS.cpp
     
+    IMU.cpp
     IMUThread.cpp
     IMUFilter.cpp
     imufilter/ComplementaryFilter.cpp
@@ -195,11 +198,13 @@ IF(Python3_FOUND)
 	)
 	SET(SRC_FILES
 		${SRC_FILES}
-		pymatcher/PyMatcher.cpp
+		python/PythonInterface.cpp
+		python/PyMatcher.cpp
+		python/PyDetector.cpp
 	)
 	 SET(INCLUDE_DIRS
 	    ${TORCH_INCLUDE_DIRS}
-	    ${CMAKE_CURRENT_SOURCE_DIR}/pymatcher
+	    ${CMAKE_CURRENT_SOURCE_DIR}/python
 		${INCLUDE_DIRS}
 	)
 ENDIF(Python3_FOUND)
@@ -335,6 +340,14 @@ IF(mynteye_FOUND)
 	)
 ENDIF(mynteye_FOUND)
 
+IF(depthai_FOUND)
+	SET(LIBRARIES
+		${LIBRARIES}
+		depthai::depthai-core
+		depthai::depthai-opencv
+	)
+ENDIF(depthai_FOUND)
+
 IF(WITH_TORO)
 	SET(SRC_FILES
     	${SRC_FILES}
@@ -348,14 +361,29 @@ IF(WITH_TORO)
 ENDIF(WITH_TORO)
 
 IF(G2O_FOUND)
-	SET(INCLUDE_DIRS 
+	IF(g2o_FOUND)
+	  SET(LIBRARIES
+             ${LIBRARIES}
+	     g2o::core
+	     g2o::solver_cholmod
+	     g2o::solver_eigen
+	     g2o::solver_pcg
+	     g2o::solver_csparse
+	     g2o::csparse_extension
+	     g2o::types_slam2d
+	     g2o::types_slam3d
+	     g2o::types_sba
+	  )
+	ELSE()
+	  SET(INCLUDE_DIRS 
 		${INCLUDE_DIRS} 
 		${G2O_INCLUDE_DIRS}
-	)
-	SET(LIBRARIES
+	  )
+	  SET(LIBRARIES
 		${LIBRARIES}
 		${G2O_LIBRARIES}
-	)
+	  )
+	ENDIF()
 	SET(SRC_FILES
     		${SRC_FILES}
 		optimizer/g2o/edge_se3_xyzprior.cpp
@@ -405,6 +433,13 @@ IF(libpointmatcher_FOUND)
 	)
 ENDIF(libpointmatcher_FOUND)
 
+IF(CCCoreLib_FOUND)
+	SET(LIBRARIES
+		${LIBRARIES}
+		CCCoreLib::CCCoreLib
+	)
+ENDIF(CCCoreLib_FOUND)
+
 IF(FastCV_FOUND)
 	SET(INCLUDE_DIRS 
 		${INCLUDE_DIRS} 
@@ -415,6 +450,25 @@ IF(FastCV_FOUND)
 		${FastCV_LIBRARIES}
 	)
 ENDIF(FastCV_FOUND)
+
+IF(PDAL_FOUND)
+	SET(INCLUDE_DIRS
+		${INCLUDE_DIRS}
+		${PDAL_INCLUDE_DIRS}
+	)
+	SET(LIBRARIES
+		${LIBRARIES}
+		${PDAL_LIBRARIES}
+	)
+	SET(SRC_FILES
+		${SRC_FILES}
+		PDALWriter.cpp
+	)
+	IF(PDAL_VERSION VERSION_LESS "1.7")
+	    add_definitions("-DRTABMAP_PDAL_16")
+	ENDIF(PDAL_VERSION VERSION_LESS "1.7")
+ENDIF(PDAL_FOUND)
+
 
 IF(loam_velodyne_FOUND)
 	SET(INCLUDE_DIRS 
@@ -447,6 +501,19 @@ IF(ZED_FOUND)
 		)
 	ENDIF(CUDA_FOUND)
 ENDIF(ZED_FOUND)
+
+IF(ZEDOC_FOUND)
+	SET(INCLUDE_DIRS
+		${INCLUDE_DIRS}
+		${ZEDOC_INCLUDE_DIRS}
+		${HIDAPI_INCLUDE_DIRS}
+	)
+	SET(LIBRARIES
+		${LIBRARIES}
+		${ZEDOC_LIBRARIES}
+		${HIDAPI_LIBRARIES}
+	)
+ENDIF(ZEDOC_FOUND)
 
 IF(octomap_FOUND)
     SET(INCLUDE_DIRS
@@ -542,16 +609,16 @@ IF(vins_FOUND)
 	)
 ENDIF(vins_FOUND)
 
-IF(ORB_SLAM2_FOUND)
+IF(ORB_SLAM_FOUND)
     SET(INCLUDE_DIRS
-        ${ORB_SLAM2_INCLUDE_DIRS} #before so that g2o includes are taken from ORB_SLAM2 directory before the official g2o one
+        ${ORB_SLAM_INCLUDE_DIRS} #before so that g2o includes are taken from ORB_SLAM directory before the official g2o one
 		${INCLUDE_DIRS}
 	)
 	SET(LIBRARIES
-	    ${ORB_SLAM2_LIBRARIES}
+	    ${ORB_SLAM_LIBRARIES}
 		${LIBRARIES}
 	)
-ENDIF(ORB_SLAM2_FOUND)
+ENDIF(ORB_SLAM_FOUND)
 
 IF(GTSAM_FOUND)
 	# Make sure GTSAM is built with system Eigen, not the included one in its package
@@ -608,8 +675,8 @@ foreach(arg ${RESOURCES})
    set(RESOURCES_HEADERS "${RESOURCES_HEADERS}" "${CMAKE_CURRENT_BINARY_DIR}/${output}.h")
 endforeach(arg ${RESOURCES})
 
-MESSAGE(STATUS "RESOURCES = ${RESOURCES}")
-MESSAGE(STATUS "RESOURCES_HEADERS = ${RESOURCES_HEADERS}")
+#MESSAGE(STATUS "RESOURCES = ${RESOURCES}")
+#MESSAGE(STATUS "RESOURCES_HEADERS = ${RESOURCES_HEADERS}")
 
 IF(ANDROID)
 
