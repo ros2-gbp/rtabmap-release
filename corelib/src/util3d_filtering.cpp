@@ -226,7 +226,7 @@ LaserScan commonFiltering(
 					{
 						if(scan.hasNormals())
 						{
-							UWARN("Voxel filter i applied, but normal parameters are not set and input scan has normals. The returned scan has no normals.");
+							UWARN("Voxel filter is applied, but normal parameters are not set and input scan has normals. The returned scan has no normals.");
 						}
 						if(scan.is2d())
 						{
@@ -746,6 +746,14 @@ pcl::IndicesPtr cropBox(const pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr & clo
 {
 	return cropBoxImpl<pcl::PointXYZRGBNormal>(cloud, indices, min, max, transform, negative);
 }
+pcl::IndicesPtr cropBox(const pcl::PointCloud<pcl::PointXYZI>::Ptr & cloud, const pcl::IndicesPtr & indices, const Eigen::Vector4f & min, const Eigen::Vector4f & max, const Transform & transform, bool negative)
+{
+	return cropBoxImpl<pcl::PointXYZI>(cloud, indices, min, max, transform, negative);
+}
+pcl::IndicesPtr cropBox(const pcl::PointCloud<pcl::PointXYZINormal>::Ptr & cloud, const pcl::IndicesPtr & indices, const Eigen::Vector4f & min, const Eigen::Vector4f & max, const Transform & transform, bool negative)
+{
+	return cropBoxImpl<pcl::PointXYZINormal>(cloud, indices, min, max, transform, negative);
+}
 
 template<typename PointT>
 typename pcl::PointCloud<PointT>::Ptr cropBoxImpl(
@@ -781,6 +789,10 @@ pcl::PointCloud<pcl::PointNormal>::Ptr cropBox(const pcl::PointCloud<pcl::PointN
 pcl::PointCloud<pcl::PointXYZRGB>::Ptr cropBox(const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cloud, const Eigen::Vector4f & min, const Eigen::Vector4f & max, const Transform & transform, bool negative)
 {
 	return cropBoxImpl<pcl::PointXYZRGB>(cloud, min, max, transform, negative);
+}
+pcl::PointCloud<pcl::PointXYZI>::Ptr cropBox(const pcl::PointCloud<pcl::PointXYZI>::Ptr & cloud, const Eigen::Vector4f & min, const Eigen::Vector4f & max, const Transform & transform, bool negative)
+{
+	return cropBoxImpl<pcl::PointXYZI>(cloud, min, max, transform, negative);
 }
 pcl::PointCloud<pcl::PointXYZINormal>::Ptr cropBox(const pcl::PointCloud<pcl::PointXYZINormal>::Ptr & cloud, const Eigen::Vector4f & min, const Eigen::Vector4f & max, const Transform & transform, bool negative)
 {
@@ -887,6 +899,52 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr removeNaNFromPointCloud(const pcl::PointC
 pcl::PointCloud<pcl::PointXYZI>::Ptr removeNaNFromPointCloud(const pcl::PointCloud<pcl::PointXYZI>::Ptr & cloud)
 {
 	return removeNaNFromPointCloudImpl<pcl::PointXYZI>(cloud);
+}
+
+pcl::PCLPointCloud2::Ptr RTABMAP_EXP removeNaNFromPointCloud(const pcl::PCLPointCloud2::Ptr & cloud)
+{
+	pcl::PCLPointCloud2::Ptr output(new pcl::PCLPointCloud2);
+	output->fields = cloud->fields;
+	output->header = cloud->header;
+	output->height = 1;
+	output->point_step = cloud->point_step;
+	output->is_dense = true;
+	output->data.resize(cloud->row_step*cloud->height);
+
+	bool is3D = false;
+	for(size_t i=0; i<cloud->fields.size(); ++i)
+	{
+		if(cloud->fields[i].name.compare("z") == 0)
+		{
+			is3D = true;
+			break;
+		}
+	}
+
+	std::uint8_t* output_data = reinterpret_cast<std::uint8_t*>(&output->data[0]);
+
+	size_t oi = 0;
+	for (size_t row = 0; row < cloud->height; ++row)
+	{
+		const std::uint8_t* row_data = &cloud->data[row * cloud->row_step];
+		for (size_t col = 0; col < cloud->width; ++col)
+		{
+			const std::uint8_t* msg_data = row_data + col * cloud->point_step;
+			const float * x = (const float*)&msg_data[0];
+			const float * y = (const float*)&msg_data[4];
+			const float * z = (const float*)&msg_data[is3D?8:4];
+			if(uIsFinite(*x) && uIsFinite(*y) && uIsFinite(*z))
+			{
+				memcpy (output_data, msg_data, cloud->point_step);
+				output_data += cloud->point_step;
+				++oi;
+			}
+		}
+	}
+	output->width = oi;
+	output->row_step = output->width*output->point_step;
+	output->data.resize(output->row_step);
+	return output;
 }
 
 template<typename PointT>
@@ -998,6 +1056,14 @@ pcl::IndicesPtr radiusFiltering(const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & c
 pcl::IndicesPtr radiusFiltering(const pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr & cloud, const pcl::IndicesPtr & indices, float radiusSearch, int minNeighborsInRadius)
 {
 	return radiusFilteringImpl<pcl::PointXYZRGBNormal>(cloud, indices, radiusSearch, minNeighborsInRadius);
+}
+pcl::IndicesPtr radiusFiltering(const pcl::PointCloud<pcl::PointXYZI>::Ptr & cloud, const pcl::IndicesPtr & indices, float radiusSearch, int minNeighborsInRadius)
+{
+	return radiusFilteringImpl<pcl::PointXYZI>(cloud, indices, radiusSearch, minNeighborsInRadius);
+}
+pcl::IndicesPtr radiusFiltering(const pcl::PointCloud<pcl::PointXYZINormal>::Ptr & cloud, const pcl::IndicesPtr & indices, float radiusSearch, int minNeighborsInRadius)
+{
+	return radiusFilteringImpl<pcl::PointXYZINormal>(cloud, indices, radiusSearch, minNeighborsInRadius);
 }
 
 pcl::PointCloud<pcl::PointXYZRGB>::Ptr subtractFiltering(
@@ -1616,6 +1682,16 @@ pcl::IndicesPtr normalFiltering(
 {
 	return normalFilteringImpl<pcl::PointXYZRGB>(cloud, indices, angleMax, normal, normalKSearch, viewpoint);
 }
+pcl::IndicesPtr normalFiltering(
+		const pcl::PointCloud<pcl::PointXYZI>::Ptr & cloud,
+		const pcl::IndicesPtr & indices,
+		float angleMax,
+		const Eigen::Vector4f & normal,
+		int normalKSearch,
+		const Eigen::Vector4f & viewpoint)
+{
+	return normalFilteringImpl<pcl::PointXYZI>(cloud, indices, angleMax, normal, normalKSearch, viewpoint);
+}
 
 template<typename PointT>
 pcl::IndicesPtr normalFilteringImpl(
@@ -1680,6 +1756,16 @@ pcl::IndicesPtr normalFiltering(
 		const Eigen::Vector4f & viewpoint)
 {
 	return normalFilteringImpl<pcl::PointXYZRGBNormal>(cloud, indices, angleMax, normal);
+}
+pcl::IndicesPtr normalFiltering(
+		const pcl::PointCloud<pcl::PointXYZINormal>::Ptr & cloud,
+		const pcl::IndicesPtr & indices,
+		float angleMax,
+		const Eigen::Vector4f & normal,
+		int normalKSearch,
+		const Eigen::Vector4f & viewpoint)
+{
+	return normalFilteringImpl<pcl::PointXYZINormal>(cloud, indices, angleMax, normal);
 }
 
 std::vector<pcl::IndicesPtr> extractClusters(
@@ -1794,6 +1880,26 @@ std::vector<pcl::IndicesPtr> extractClusters(
 {
 	return extractClustersImpl<pcl::PointXYZRGBNormal>(cloud, indices, clusterTolerance, minClusterSize, maxClusterSize, biggestClusterIndex);
 }
+std::vector<pcl::IndicesPtr> extractClusters(
+		const pcl::PointCloud<pcl::PointXYZI>::Ptr & cloud,
+		const pcl::IndicesPtr & indices,
+		float clusterTolerance,
+		int minClusterSize,
+		int maxClusterSize,
+		int * biggestClusterIndex)
+{
+	return extractClustersImpl<pcl::PointXYZI>(cloud, indices, clusterTolerance, minClusterSize, maxClusterSize, biggestClusterIndex);
+}
+std::vector<pcl::IndicesPtr> extractClusters(
+		const pcl::PointCloud<pcl::PointXYZINormal>::Ptr & cloud,
+		const pcl::IndicesPtr & indices,
+		float clusterTolerance,
+		int minClusterSize,
+		int maxClusterSize,
+		int * biggestClusterIndex)
+{
+	return extractClustersImpl<pcl::PointXYZINormal>(cloud, indices, clusterTolerance, minClusterSize, maxClusterSize, biggestClusterIndex);
+}
 
 template<typename PointT>
 pcl::IndicesPtr extractIndicesImpl(
@@ -1825,6 +1931,14 @@ pcl::IndicesPtr extractIndices(const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & cl
 pcl::IndicesPtr extractIndices(const pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr & cloud, const pcl::IndicesPtr & indices, bool negative)
 {
 	return extractIndicesImpl<pcl::PointXYZRGBNormal>(cloud, indices, negative);
+}
+pcl::IndicesPtr extractIndices(const pcl::PointCloud<pcl::PointXYZI>::Ptr & cloud, const pcl::IndicesPtr & indices, bool negative)
+{
+	return extractIndicesImpl<pcl::PointXYZI>(cloud, indices, negative);
+}
+pcl::IndicesPtr extractIndices(const pcl::PointCloud<pcl::PointXYZINormal>::Ptr & cloud, const pcl::IndicesPtr & indices, bool negative)
+{
+	return extractIndicesImpl<pcl::PointXYZINormal>(cloud, indices, negative);
 }
 
 template<typename PointT>

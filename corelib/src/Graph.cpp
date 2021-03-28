@@ -125,6 +125,12 @@ bool exportPoses(
 					// Format: stamp x y z qx qy qz qw
 					Eigen::Quaternionf q = pose.getQuaternionf();
 
+					if(iter == poses.begin())
+					{
+						// header
+						fprintf(fout, "# timestamp x y z qx qy qz qw\n");
+					}
+
 					UASSERT(uContains(stamps, iter->first));
 					fprintf(fout, "%f %f %f %f %f %f %f %f\n",
 							stamps.at(iter->first),
@@ -2326,6 +2332,33 @@ std::list<std::map<int, Transform> > getPaths(
 
 	}
 	return paths;
+}
+
+void computeMinMax(const std::map<int, Transform> & poses,
+		cv::Vec3f & min,
+		cv::Vec3f & max)
+{
+	if(!poses.empty())
+	{
+		min[0] = max[0] = poses.begin()->second.x();
+		min[1] = max[1] = poses.begin()->second.y();
+		min[2] = max[2] = poses.begin()->second.z();
+		for(std::map<int, Transform>::const_iterator iter=poses.begin(); iter!=poses.end(); ++iter)
+		{
+			if(min[0] > iter->second.x())
+				min[0] = iter->second.x();
+			if(max[0] < iter->second.x())
+				max[0] = iter->second.x();
+			if(min[1] > iter->second.y())
+				min[1] = iter->second.y();
+			if(max[1] < iter->second.y())
+				max[1] = iter->second.y();
+			if(min[2] > iter->second.z())
+				min[2] = iter->second.z();
+			if(max[2] < iter->second.z())
+				max[2] = iter->second.z();
+		}
+	}
 }
 
 } /* namespace graph */
