@@ -175,13 +175,16 @@ protected Q_SLOTS:
 	void selectK4A();
 	void selectRealSense();
 	void selectRealSense2();
+	void selectRealSense2L515();
 	void selectRealSense2Stereo();
 	void selectStereoDC1394();
 	void selectStereoFlyCapture2();
 	void selectStereoZed();
+	void selectStereoZedOC();
 	void selectStereoTara();
 	void selectStereoUsb();
 	void selectMyntEyeS();
+	void selectDepthAI();
 	void dumpTheMemory();
 	void dumpThePrediction();
 	void sendGoal();
