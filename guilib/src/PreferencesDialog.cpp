@@ -192,6 +192,9 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 #ifndef RTABMAP_VINS
 	_ui->odom_strategy->setItemData(9, 0, Qt::UserRole - 1);
 #endif
+#ifndef RTABMAP_OPENVINS
+	_ui->odom_strategy->setItemData(10, 0, Qt::UserRole - 1);
+#endif
 
 #if CV_MAJOR_VERSION < 3
 	_ui->stereosgbm_mode->setItemData(2, 0, Qt::UserRole - 1);
@@ -4315,10 +4318,24 @@ void PreferencesDialog::setParameter(const std::string & key, const std::string 
 		}
 		else if(combo)
 		{
-			int valueInt = QString(value.c_str()).toInt(&ok);
+			//backward compatibility
+			std::string valueCpy = value;
+			if(key.compare(Parameters::kIcpStrategy()) == 0)
+			{
+				if(value.compare("true") == 0)
+				{
+					valueCpy =  "1";
+				}
+				else if(value.compare("false") == 0)
+				{
+					valueCpy =  "0";
+				}
+			}
+
+			int valueInt = QString(valueCpy.c_str()).toInt(&ok);
 			if(!ok)
 			{
-				UERROR("Conversion failed from \"%s\" for parameter %s", value.c_str(), key.c_str());
+				UERROR("Conversion failed from \"%s\" for parameter %s", valueCpy.c_str(), key.c_str());
 			}
 			else
 			{
@@ -6371,7 +6388,8 @@ void PreferencesDialog::testOdometry()
 	{
 		if(this->getOdomStrategy() != Odometry::kTypeOkvis &&
 		   this->getOdomStrategy() != Odometry::kTypeMSCKF &&
-		   this->getOdomStrategy() != Odometry::kTypeVINS)
+		   this->getOdomStrategy() != Odometry::kTypeVINS &&
+		   this->getOdomStrategy() != Odometry::kTypeOpenVINS)
 		{
 			QMessageBox::warning(this, tr("Source IMU Path"),
 					tr("IMU path is set but odometry chosen doesn't support IMU, ignoring IMU..."), QMessageBox::Ok);
