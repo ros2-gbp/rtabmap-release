@@ -155,6 +155,7 @@ protected Q_SLOTS:
 	void exportPosesRaw();
 	void exportPosesRGBDSLAM();
 	void exportPosesRGBDSLAMMotionCapture();
+	void exportPosesRGBDSLAMID();
 	void exportPosesKITTI();
 	void exportPosesTORO();
 	void exportPosesG2O();
@@ -341,6 +342,7 @@ private:
 	QStringList _waypoints;
 	int _waypointsIndex;
 	std::vector<CameraModel> _rectCameraModels;
+	std::vector<CameraModel> _rectCameraModelsOdom;
 
 	QMap<int, Signature> _cachedSignatures;
 	long _cachedMemoryUsage;
