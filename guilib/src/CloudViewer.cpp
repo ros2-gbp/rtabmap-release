@@ -136,14 +136,11 @@ CloudViewer::CloudViewer(QWidget *parent, CloudViewerInteractorStyle * style) :
 		_frontfaceCulling(false),
 		_renderingRate(5.0),
 		_octomapActor(0),
-		_intensityAbsMax(0.0f),
+		_intensityAbsMax(100.0f),
 		_coordinateFrameScale(1.0)
 {
 	UDEBUG("");
 	this->setMinimumSize(200, 200);
-#if VTK_MAJOR_VERSION >= 8
-	vtkObject::GlobalWarningDisplayOff();
-#endif
 	
 	int argc = 0;
 	UASSERT(style!=0);
@@ -524,7 +521,16 @@ void CloudViewer::loadSettings(QSettings & settings, const QString & group)
 		settings.endGroup();
 	}
 
+	this->refreshView();
+}
+
+void CloudViewer::refreshView()
+{
+#if VTK_MAJOR_VERSION > 8
+	this->renderWindow()->Render();
+#else
 	this->update();
+#endif
 }
 
 bool CloudViewer::updateCloudPose(
@@ -2291,7 +2297,7 @@ void CloudViewer::clearTrajectory()
 {
 	_trajectory->clear();
 	_visualizer->removeShape("trajectory");
-	this->update();
+	this->refreshView();
 }
 
 bool CloudViewer::isCameraAxisShown() const
@@ -2309,7 +2315,7 @@ void CloudViewer::setCameraAxisShown(bool shown)
 	{
 		this->addOrUpdateCoordinate("reference", Transform::getIdentity(), 0.2);
 	}
-	this->update();
+	this->refreshView();
 	_aShowCameraAxis->setChecked(shown);
 }
 
@@ -2358,7 +2364,7 @@ void CloudViewer::setFrustumShown(bool shown)
 				this->removeLine(*iter);
 			}
 		}
-		this->update();
+		this->refreshView();
 	}
 	_aShowFrustum->setChecked(shown);
 }
@@ -2378,7 +2384,7 @@ void CloudViewer::setFrustumColor(QColor value)
 	{
 		_visualizer->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_COLOR, value.redF(), value.greenF(), value.blueF(), iter.key());
 	}
-	this->update();
+	this->refreshView();
 	_frustumColor = value;
 }
 
@@ -2607,7 +2613,7 @@ void CloudViewer::setBackfaceCulling(bool enabled, bool frontfaceCulling)
 		}
 	}
 #endif
-	this->update();
+	this->refreshView();
 }
 
 void CloudViewer::setPolygonPicking(bool enabled)
@@ -2672,7 +2678,7 @@ void CloudViewer::setEDLShading(bool on)
 		glrenderer->SetPass(NULL);
 	}
 
-	this->update();
+	this->refreshView();
 #else
 	if(on)
 	{
@@ -2700,7 +2706,7 @@ void CloudViewer::setLighting(bool on)
 		}
 	}
 #endif
-	this->update();
+	this->refreshView();
 }
 
 void CloudViewer::setShading(bool on)
@@ -2722,7 +2728,7 @@ void CloudViewer::setShading(bool on)
 		}
 	}
 #endif
-	this->update();
+	this->refreshView();
 }
 
 void CloudViewer::setEdgeVisibility(bool visible)
@@ -2744,7 +2750,7 @@ void CloudViewer::setEdgeVisibility(bool visible)
 		}
 	}
 #endif
-	this->update();
+	this->refreshView();
 }
 
 void CloudViewer::setInteractorLayer(int layer)
@@ -3167,7 +3173,7 @@ void CloudViewer::setCameraOrtho(bool enabled)
 	if(interactor)
 	{
 		interactor->setOrthoMode(enabled);
-		this->update();
+		this->refreshView();
 	}
 	_aCameraOrtho->setChecked(enabled);
 }
@@ -3727,7 +3733,7 @@ void CloudViewer::handleAction(QAction * a)
 			this->removeGrid();
 		}
 
-		this->update();
+		this->refreshView();
 	}
 	else if(a == _aSetGridCellCount)
 	{
@@ -3750,7 +3756,7 @@ void CloudViewer::handleAction(QAction * a)
 	else if(a == _aShowNormals)
 	{
 		this->setNormalsShown(_aShowNormals->isChecked());
-		this->update();
+		this->refreshView();
 	}
 	else if(a == _aSetNormalsStep)
 	{
@@ -3794,7 +3800,7 @@ void CloudViewer::handleAction(QAction * a)
 		if(color.isValid())
 		{
 			this->setDefaultBackgroundColor(color);
-			this->update();
+			this->refreshView();
 		}
 	}
 	else if(a == _aSetRenderingRate)
@@ -3810,7 +3816,7 @@ void CloudViewer::handleAction(QAction * a)
 	{
 		if(_aLockViewZ->isChecked())
 		{
-			this->update();
+			this->refreshView();
 		}
 	}
 	else if(a == _aCameraOrtho)
