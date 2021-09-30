@@ -62,12 +62,13 @@ void showUsage()
 			"    --las                 Export cloud in LAS instead of PLY (PDAL dependency required).\n"
 			"    --mesh                Create a mesh.\n"
 			"    --texture             Create a mesh with texture.\n"
-			"    --texture_size  #     Texture size (default 4096).\n"
-			"    --texture_count #     Maximum textures generated (default 1).\n"
+			"    --texture_size  #     Texture size 1024, 2048, 4096, 8192, 16384 (default 8192).\n"
+			"    --texture_count #     Maximum textures generated (default 1). Ignored by --multiband option (adjust --multiband_contrib instead).\n"
 			"    --texture_range #     Maximum camera range for texturing a polygon (default 0 meters: no limit).\n"
 			"    --texture_depth_error # Maximum depth error between reprojected mesh and depth image to texture a face (-1=disabled, 0=edge length is used, default=0).\n"
 			"    --texture_d2c         Distance to camera policy.\n"
 			"    --cam_projection      Camera projection on assembled cloud and export node ID on each point (in PointSourceId field).\n"
+			"    --cam_projection_keep_all  Keep not colored points from cameras (node ID will be 0 and color will be red).\n"
 			"    --poses               Export optimized poses of the robot frame (e.g., base_link).\n"
 			"    --poses_camera        Export optimized poses of the camera frame (e.g., optical frame).\n"
 			"    --poses_scan          Export optimized poses of the scan frame.\n"
@@ -88,15 +89,23 @@ void showUsage()
 			"    --no_clean            Disable cleaning colorless polygons.\n"
 			"    --low_gain      #     Low brightness gain 0-100 (default 0).\n"
 			"    --high_gain     #     High brightness gain 0-100 (default 10).\n"
-			"    --multiband           Enable multiband texturing (AliceVision dependency required).\n"
+			"    --multiband               Enable multiband texturing (AliceVision dependency required).\n"
+			"    --multiband_downscale #   Downscaling reduce the texture quality but speed up the computation time (default 2).\n"
+			"    --multiband_contrib \"# # # # \"  Number of contributions per frequency band for the multi-band blending, should be 4 values! (default \"1 5 10 0\").\n"
+			"    --multiband_unwrap #      Method to unwrap input mesh: 0=basic (default, >600k faces, fast), 1=ABF (<=300k faces, generate 1 atlas), 2=LSCM (<=600k faces, optimize space).\n"
+			"    --multiband_fillholes     Fill Texture holes with plausible values.\n"
+			"    --multiband_padding #     Texture edge padding size in pixel (0-100) (default 5).\n"
+			"    --multiband_scorethr #    0 to disable filtering based on threshold to relative best score (0.0-1.0). (default 0.1).\n"
+			"    --multiband_anglethr #    0 to disable angle hard threshold filtering (0.0, 180.0) (default 90.0).\n"
+			"    --multiband_forcevisible  Triangle visibility is based on the union of vertices visibility.\n"
 			"    --poisson_depth #     Set Poisson depth for mesh reconstruction.\n"
 			"    --poisson_size  #     Set target polygon size when computing Poisson's depth for mesh reconstruction (default 0.03 m).\n"
-			"    --max_polygons  #     Maximum polygons when creating a mesh (default 500000, set 0 for no limit).\n"
+			"    --max_polygons  #     Maximum polygons when creating a mesh (default 300000, set 0 for no limit).\n"
 			"    --max_range     #     Maximum range of the created clouds (default 4 m, 0 m with --scan).\n"
 			"    --decimation    #     Depth image decimation before creating the clouds (default 4, 1 with --scan).\n"
 			"    --voxel         #     Voxel size of the created clouds (default 0.01 m, 0 m with --scan).\n"
 			"    --noise_radius  #     Noise filtering search radius (default 0, 0=disabled).\n"
-			"    --noise_k       #     Noise filtering minimum neighbors in search radius (default 5, 0=disabled)."
+			"    --noise_k       #     Noise filtering minimum neighbors in search radius (default 5, 0=disabled).\n"
 			"    --color_radius  #     Radius used to colorize polygons (default 0.05 m, 0 m with --scan). Set 0 for nearest color.\n"
 			"    --scan                Use laser scan for the point cloud.\n"
 			"    --save_in_db          Save resulting assembled point cloud or mesh in the database.\n"
@@ -132,24 +141,33 @@ int main(int argc, char * argv[])
 	bool doClean = true;
 	int poissonDepth = 0;
 	float poissonSize = 0.03;
-	int maxPolygons = 500000;
+	int maxPolygons = 300000;
 	int decimation = -1;
 	float maxRange = -1.0f;
 	float voxelSize = -1.0f;
 	float noiseRadius = 0.0f;
 	int noiseMinNeighbors = 5;
-	int textureSize = 4096;
+	int textureSize = 8192;
 	int textureCount = 1;
 	int textureRange = 0;
 	float textureDepthError = 0;
 	bool distanceToCamPolicy = false;
 	bool multiband = false;
+	int multibandDownScale = 2;
+	std::string multibandNbContrib = "1 5 10 0";
+	int multibandUnwrap = 0;
+	bool multibandFillHoles = false;
+	int multibandPadding = 5;
+	double multibandBestScoreThr = 0.1;
+	double multibandAngleHardthr = 90;
+	bool multibandForceVisible = false;
 	float colorRadius = -1.0f;
 	bool cloudFromScan = false;
 	bool saveInDb = false;
 	int lowBrightnessGain = 0;
 	int highBrightnessGain = 10;
 	bool camProjection = false;
+	bool camProjectionKeepAll = false;
 	bool exportPoses = false;
 	bool exportPosesCamera = false;
 	bool exportPosesScan = false;
@@ -267,6 +285,10 @@ int main(int argc, char * argv[])
 		{
 			camProjection = true;
 		}
+		else if(std::strcmp(argv[i], "--cam_projection_keep_all") == 0)
+		{
+			camProjectionKeepAll = true;
+		}
 		else if(std::strcmp(argv[i], "--poses") == 0)
 		{
 			exportPoses = true;
@@ -314,7 +336,7 @@ int main(int argc, char * argv[])
 			if(i<argc-1)
 			{
 				gainValue = uStr2Float(argv[i]);
-				UASSERT(gainValue>0.0f);
+				UASSERT(gainValue>=0.0f);
 			}
 			else
 			{
@@ -336,6 +358,91 @@ int main(int argc, char * argv[])
 #else
 			printf("\"--multiband\" option cannot be used because RTAB-Map is not built with AliceVision support. Ignoring multiband...\n");
 #endif
+		}
+		else if(std::strcmp(argv[i], "--multiband_fillholes") == 0)
+		{
+			multibandFillHoles = true;
+		}
+		else if(std::strcmp(argv[i], "--multiband_downscale") == 0)
+		{
+			++i;
+			if(i<argc-1)
+			{
+				multibandDownScale = uStr2Int(argv[i]);
+			}
+			else
+			{
+				showUsage();
+			}
+		}
+		else if(std::strcmp(argv[i], "--multiband_contrib") == 0)
+		{
+			++i;
+			if(i<argc-1)
+			{
+				if(uSplit(argv[i], ' ').size() != 4)
+				{
+					printf("--multiband_contrib has wrong format! value=\"%s\"\n", argv[i]);
+					showUsage();
+				}
+				multibandNbContrib = argv[i];
+			}
+			else
+			{
+				showUsage();
+			}
+		}
+		else if(std::strcmp(argv[i], "--multiband_unwrap") == 0)
+		{
+			++i;
+			if(i<argc-1)
+			{
+				multibandUnwrap = uStr2Int(argv[i]);
+			}
+			else
+			{
+				showUsage();
+			}
+		}
+		else if(std::strcmp(argv[i], "--multiband_padding") == 0)
+		{
+			++i;
+			if(i<argc-1)
+			{
+				multibandPadding = uStr2Int(argv[i]);
+			}
+			else
+			{
+				showUsage();
+			}
+		}
+		else if(std::strcmp(argv[i], "--multiband_forcevisible") == 0)
+		{
+			multibandForceVisible = true;
+		}
+		else if(std::strcmp(argv[i], "--multiband_scorethr") == 0)
+		{
+			++i;
+			if(i<argc-1)
+			{
+				multibandBestScoreThr = uStr2Float(argv[i]);
+			}
+			else
+			{
+				showUsage();
+			}
+		}
+		else if(std::strcmp(argv[i], "--multiband_anglethr") == 0)
+		{
+			++i;
+			if(i<argc-1)
+			{
+				multibandAngleHardthr = uStr2Float(argv[i]);
+			}
+			else
+			{
+				showUsage();
+			}
 		}
 		else if(std::strcmp(argv[i], "--poisson_depth") == 0)
 		{
@@ -683,17 +790,7 @@ int main(int argc, char * argv[])
 	{
 		printf("Global bundle adjustment...\n");
 		OptimizerG2O g2o(parameters);
-		std::map<int, cv::Point3f> points3DMap;
-		std::map<int, std::map<int, FeatureBA> > wordReferences;
-		g2o.computeBACorrespondences(optimizedPoses, links, nodes, points3DMap, wordReferences, true);
-		std::map<int, rtabmap::CameraModel> cameraSingleModels;
-		for(std::map<int, Transform>::iterator iter=optimizedPoses.lower_bound(1); iter!=optimizedPoses.end(); ++iter)
-		{
-			Signature node = nodes.find(iter->first)->second;
-			UASSERT(node.sensorData().cameraModels().size()==1);
-			cameraSingleModels.insert(std::make_pair(iter->first, node.sensorData().cameraModels().front()));
-		}
-		optimizedPoses = g2o.optimizeBA(optimizedPoses.begin()->first, optimizedPoses, links, cameraSingleModels, points3DMap, wordReferences);
+		optimizedPoses = ((Optimizer*)&g2o)->optimizeBA(optimizedPoses.lower_bound(1)->first, optimizedPoses, links, nodes, true);
 		printf("Global bundle adjustment... done (%fs).\n", timer.ticks());
 	}
 
@@ -969,6 +1066,7 @@ int main(int argc, char * argv[])
 		}
 
 		std::vector<int> pointToCamId;
+		std::vector<float> pointToCamIntensity;
 		if(camProjection && !robotPoses.empty())
 		{
 			printf("Camera projection...\n");
@@ -995,6 +1093,7 @@ int main(int argc, char * argv[])
 						0,
 						std::vector<float>(),
 						distanceToCamPolicy);
+				pointToCamIntensity.resize(pointToPixel.size());
 			}
 
 			// color the cloud
@@ -1007,6 +1106,7 @@ int main(int argc, char * argv[])
 			for(size_t i=0; i<pointToPixel.size(); ++i)
 			{
 				pcl::PointXYZRGBNormal pt;
+				float intensity = 0;
 				if(!cloudToExport->empty())
 				{
 					pt = cloudToExport->at(i);
@@ -1019,6 +1119,7 @@ int main(int argc, char * argv[])
 					pt.normal_x = cloudIToExport->at(i).normal_x;
 					pt.normal_y = cloudIToExport->at(i).normal_y;
 					pt.normal_z = cloudIToExport->at(i).normal_z;
+					intensity = cloudIToExport->at(i).intensity;
 				}
 				int nodeID = pointToPixel[i].first.first;
 				int cameraIndex = pointToPixel[i].first.second;
@@ -1062,7 +1163,23 @@ int main(int argc, char * argv[])
 
 					int exportedId = nodeID;
 					pointToCamId[oi] = exportedId;
+					if(!pointToCamIntensity.empty())
+					{
+						pointToCamIntensity[oi] = intensity;
+					}
 					assembledCloudValidPoints->at(oi++) = pt;
+				}
+				else if(camProjectionKeepAll)
+				{
+					pointToCamId[oi] = 0; // invalid
+					pt.b = 0;
+					pt.g = 0;
+					pt.r = 255;
+					if(!pointToCamIntensity.empty())
+					{
+						pointToCamIntensity[oi] = intensity;
+					}
+					assembledCloudValidPoints->at(oi++) = pt; // red
 				}
 			}
 
@@ -1070,6 +1187,10 @@ int main(int argc, char * argv[])
 			cloudToExport = assembledCloudValidPoints;
 			cloudIToExport->clear();
 			pointToCamId.resize(oi);
+			if(!pointToCamIntensity.empty())
+			{
+				pointToCamIntensity.resize(oi);
+			}
 
 			printf("Camera projection... done! (%fs)\n", timer.ticks());
 		}
@@ -1091,10 +1212,19 @@ int main(int argc, char * argv[])
 				std::string outputPath=outputDirectory+"/"+baseName+"_cloud."+ext;
 				printf("Saving %s... (%d points)\n", outputPath.c_str(), !cloudToExport->empty()?(int)cloudToExport->size():(int)cloudIToExport->size());
 #ifdef RTABMAP_PDAL
-				if(las || !pointToCamId.empty())
+				if(las || !pointToCamId.empty() || !pointToCamIntensity.empty())
 				{
 					if(!cloudToExport->empty())
-						savePDALFile(outputPath, *cloudToExport, pointToCamId, binary);
+					{
+						if(!pointToCamIntensity.empty())
+						{
+							savePDALFile(outputPath, *cloudToExport, pointToCamId, binary, pointToCamIntensity);
+						}
+						else
+						{
+							savePDALFile(outputPath, *cloudToExport, pointToCamId, binary);
+						}
+					}
 					else if(!cloudIToExport->empty())
 						savePDALFile(outputPath, *cloudIToExport, pointToCamId, binary);
 				}
@@ -1103,8 +1233,16 @@ int main(int argc, char * argv[])
 				{
 					if(!pointToCamId.empty())
 					{
-						printf("Option --cam_projection is enabled but rtabmap is not built "
-								"with PDAL support, so camera IDs won't be exported in the output cloud.\n");
+						if(!pointToCamIntensity.empty())
+						{
+							printf("Option --cam_projection is enabled but rtabmap is not built "
+									"with PDAL support, so camera IDs and lidar intensities won't be exported in the output cloud.\n");
+						}
+						else
+						{
+							printf("Option --cam_projection is enabled but rtabmap is not built "
+									"with PDAL support, so camera IDs won't be exported in the output cloud.\n");
+						}
 					}
 					if(!cloudToExport->empty())
 						pcl::io::savePLYFile(outputPath, *cloudToExport, binary);
@@ -1152,7 +1290,10 @@ int main(int argc, char * argv[])
 
 			if(mesh->polygons.size())
 			{
-				printf("Mesh color transfer...\n");
+				printf("Mesh color transfer (max polygons=%d, color radius=%f, clean=%s)...\n",
+						maxPolygons,
+						colorRadius,
+						doClean?"true":"false");
 				rtabmap::util3d::denseMeshPostProcessing<pcl::PointXYZRGBNormal>(
 						mesh,
 						0.0f,
@@ -1299,7 +1440,16 @@ int main(int argc, char * argv[])
 						{
 							timer.restart();
 							std::string outputPath=outputDirectory+"/"+baseName+"_mesh_multiband.obj";
-							printf("MultiBand texturing... \"%s\"\n", outputPath.c_str());
+							printf("MultiBand texturing (size=%d, downscale=%d, unwrap method=%s, fill holes=%s, padding=%d, best score thr=%f, angle thr=%f, force visible=%s)... \"%s\"\n",
+									textureSize,
+									multibandDownScale,
+									multibandUnwrap==1?"ABF":multibandUnwrap==2?"LSCM":"Basic",
+									multibandFillHoles?"true":"false",
+									multibandPadding,
+									multibandBestScoreThr,
+									multibandAngleHardthr,
+									multibandForceVisible?"false":"true",
+									outputPath.c_str());
 							if(util3d::multiBandTexturing(outputPath,
 									textureMesh->cloud,
 									textureMesh->tex_polygons[0],
@@ -1310,11 +1460,19 @@ int main(int argc, char * argv[])
 									rtabmap.getMemory(),
 									0,
 									textureSize,
+									multibandDownScale,
+									multibandNbContrib,
 									"jpg",
 									gains,
 									blendingGains,
 									contrastValues,
-									doGainCompensationRGB))
+									doGainCompensationRGB,
+									multibandUnwrap,
+									multibandFillHoles,
+									multibandPadding,
+									multibandBestScoreThr,
+									multibandAngleHardthr,
+									multibandForceVisible))
 							{
 								printf("MultiBand texturing...done (%fs).\n", timer.ticks());
 							}

@@ -1757,6 +1757,7 @@ void DatabaseViewer::updateIds()
 	uSleep(100);
 	QApplication::processEvents();
 
+	int lastValidNodeId = 0;
 	for(int i=0; i<ids_.size(); ++i)
 	{
 		idToIndex_.insert(ids_[i], i);
@@ -1772,6 +1773,17 @@ void DatabaseViewer::updateIds()
 		dbDriver_->getNodeInfo(ids_[i], p, mapId, w, l, s, g, v, gps, sensors);
 		mapIds_.insert(std::make_pair(ids_[i], mapId));
 		weights_.insert(std::make_pair(ids_[i], w));
+		if(w>=0)
+		{
+			for(std::multimap<int, Link>::iterator iter=links.find(ids_[i]); iter!=links.end() && iter->first==ids_[i]; ++iter)
+			{
+				// Make compatible with old databases, when "weight=-1" was not yet introduced to identify ignored nodes
+				if(iter->second.type() == Link::kNeighbor || iter->second.type() == Link::kNeighborMerged)
+				{
+					lastValidNodeId = ids_[i];
+				}
+			}
+		}
 		if(wmStates.find(ids_[i]) != wmStates.end())
 		{
 			wmStates_.insert(std::make_pair(ids_[i], wmStates.at(ids_[i])));
@@ -1982,6 +1994,38 @@ void DatabaseViewer::updateIds()
 				ui_->spinBox_optimizationsFrom->setValue(odomPoses_.begin()->first);
 				ui_->label_optimizeFrom->setText(tr("Root [%1, %2]").arg(odomPoses_.begin()->first).arg(odomPoses_.rbegin()->first));
 			}
+		}
+
+		if(lastValidNodeId>0)
+		{
+			// find full connected graph from last node in working memory
+			Optimizer * optimizer = Optimizer::create(ui_->parameters_toolbox->getParameters());
+
+			std::map<int, rtabmap::Transform> posesOut;
+			std::multimap<int, rtabmap::Link> linksOut;
+			UINFO("Get connected graph from %d (%d poses, %d links)", lastValidNodeId, (int)odomPoses_.size(), (int)links_.size());
+			optimizer->getConnectedGraph(
+					lastValidNodeId,
+					odomPoses_,
+					links_,
+					posesOut,
+					linksOut);
+
+			if(!posesOut.empty())
+			{
+				bool optimizeFromGraphEnd = Parameters::defaultRGBDOptimizeFromGraphEnd();
+				Parameters::parse(dbDriver_->getLastParameters(), Parameters::kRGBDOptimizeFromGraphEnd(), optimizeFromGraphEnd);
+				if(optimizeFromGraphEnd)
+				{
+					ui_->spinBox_optimizationsFrom->setValue(posesOut.rbegin()->first);
+				}
+				else
+				{
+					ui_->spinBox_optimizationsFrom->setValue(posesOut.lower_bound(1)->first);
+				}
+			}
+
+			delete optimizer;
 		}
 	}
 
@@ -7511,8 +7555,8 @@ void DatabaseViewer::refineConstraint(int from, int to, bool silent)
 			reextractVisualFeatures ||
 			!silent)
 		{
-			dbDriver_->loadNodeData(fromS, reextractVisualFeatures || !silent, reg->isScanRequired() || !silent, reg->isUserDataRequired() || !silent, !silent);
-			dbDriver_->loadNodeData(toS, reextractVisualFeatures || !silent, reg->isScanRequired() || !silent, reg->isUserDataRequired() || !silent, !silent);
+			dbDriver_->loadNodeData(fromS, reextractVisualFeatures || !silent || (reg->isScanRequired() && ui_->checkBox_icp_from_depth->isChecked()), reg->isScanRequired() || !silent, reg->isUserDataRequired() || !silent, !silent);
+			dbDriver_->loadNodeData(toS, reextractVisualFeatures || !silent || (reg->isScanRequired() && ui_->checkBox_icp_from_depth->isChecked()), reg->isScanRequired() || !silent, reg->isUserDataRequired() || !silent, !silent);
 		
 			if(!silent)
 			{
@@ -7555,10 +7599,27 @@ void DatabaseViewer::refineConstraint(int from, int to, bool silent)
 				fromS->sensorData().setLaserScan(LaserScan(util3d::laserScanFromPointCloud(*util3d::removeNaNFromPointCloud(cloudFrom), Transform()), maxLaserScans, 0));
 				toS->sensorData().setLaserScan(LaserScan(util3d::laserScanFromPointCloud(*util3d::removeNaNFromPointCloud(cloudTo), Transform()), maxLaserScans, 0));
 
-				if(!fromS->sensorData().laserScanCompressed().isEmpty() || !toS->sensorData().laserScanCompressed().isEmpty())
+				if(!fromS->sensorData().laserScanCompressed().isEmpty() && !toS->sensorData().laserScanCompressed().isEmpty())
 				{
 					UWARN("There are laser scans in data, but generate laser scan from "
-						  "depth image option is activated. Ignoring saved laser scans...");
+						  "depth image option is activated (GUI Parameters->Refine). "
+						  "Ignoring saved laser scans...");
+				}
+				else
+				{
+					QString msg = tr("Generating laser scan from depth image is checked "
+							"(GUI Parameters->Refine), but selected nodes don't contain "
+							"depth data. Empty laser scans are generated, so transform "
+							"estimation will likely fail. Uncheck to use laser scans instead "
+							"(if there are some).");
+					if(!silent)
+					{
+
+						QMessageBox::warning(this,
+								tr("Refine a link"),
+								msg);
+					}
+					UWARN(msg.toStdString().c_str());
 				}
 			}
 			else
@@ -7785,9 +7846,9 @@ bool DatabaseViewer::addConstraint(int from, int to, bool silent)
 			!silent)
 		{
 			// Add sensor data to generate features
-			dbDriver_->loadNodeData(fromS, reextractVisualFeatures || !silent, reg->isScanRequired() || !silent, reg->isUserDataRequired() || !silent, !silent);
+			dbDriver_->loadNodeData(fromS, reextractVisualFeatures || !silent || (reg->isScanRequired() && ui_->checkBox_icp_from_depth->isChecked()), reg->isScanRequired() || !silent, reg->isUserDataRequired() || !silent, !silent);
 			fromS->sensorData().uncompressData();
-			dbDriver_->loadNodeData(toS, reextractVisualFeatures || !silent, reg->isScanRequired() || !silent, reg->isUserDataRequired() || !silent, !silent);
+			dbDriver_->loadNodeData(toS, reextractVisualFeatures || !silent || (reg->isScanRequired() && ui_->checkBox_icp_from_depth->isChecked()), reg->isScanRequired() || !silent, reg->isUserDataRequired() || !silent, !silent);
 			toS->sensorData().uncompressData();
 			if(reextractVisualFeatures)
 			{
@@ -7795,6 +7856,33 @@ bool DatabaseViewer::addConstraint(int from, int to, bool silent)
 				fromS->sensorData().setFeatures(std::vector<cv::KeyPoint>(), std::vector<cv::Point3f>(), cv::Mat());
 				toS->removeAllWords();
 				toS->sensorData().setFeatures(std::vector<cv::KeyPoint>(), std::vector<cv::Point3f>(), cv::Mat());
+			}
+			if(reg->isScanRequired() && ui_->checkBox_icp_from_depth->isChecked())
+			{
+				// generate laser scans from depth image
+				pcl::PointCloud<pcl::PointXYZ>::Ptr cloudFrom = util3d::cloudFromSensorData(
+						fromS->sensorData(),
+						ui_->spinBox_icp_decimation->value()==0?1:ui_->spinBox_icp_decimation->value(),
+						ui_->doubleSpinBox_icp_maxDepth->value(),
+						ui_->doubleSpinBox_icp_minDepth->value(),
+						0,
+						ui_->parameters_toolbox->getParameters());
+				pcl::PointCloud<pcl::PointXYZ>::Ptr cloudTo = util3d::cloudFromSensorData(
+						toS->sensorData(),
+						ui_->spinBox_icp_decimation->value()==0?1:ui_->spinBox_icp_decimation->value(),
+						ui_->doubleSpinBox_icp_maxDepth->value(),
+						ui_->doubleSpinBox_icp_minDepth->value(),
+						0,
+						ui_->parameters_toolbox->getParameters());
+				int maxLaserScans = cloudFrom->size();
+				fromS->sensorData().setLaserScan(LaserScan(util3d::laserScanFromPointCloud(*util3d::removeNaNFromPointCloud(cloudFrom), Transform()), maxLaserScans, 0));
+				toS->sensorData().setLaserScan(LaserScan(util3d::laserScanFromPointCloud(*util3d::removeNaNFromPointCloud(cloudTo), Transform()), maxLaserScans, 0));
+
+				if(!fromS->sensorData().laserScanCompressed().isEmpty() || !toS->sensorData().laserScanCompressed().isEmpty())
+				{
+					UWARN("There are laser scans in data, but generate laser scan from "
+						  "depth image option is activated. Ignoring saved laser scans...");
+				}
 			}
 		}
 		else if(!reextractVisualFeatures && fromS->getWords().empty() && toS->getWords().empty())

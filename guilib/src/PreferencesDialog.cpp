@@ -196,6 +196,9 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 #ifndef RTABMAP_OPENVINS
 	_ui->odom_strategy->setItemData(10, 0, Qt::UserRole - 1);
 #endif
+#ifndef RTABMAP_FLOAM
+	_ui->odom_strategy->setItemData(11, 0, Qt::UserRole - 1);
+#endif
 
 #if CV_MAJOR_VERSION < 3
 	_ui->stereosgbm_mode->setItemData(2, 0, Qt::UserRole - 1);
@@ -689,6 +692,7 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	connect(_ui->openni2_stampsIdsUsed, SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->openni2_hshift, SIGNAL(valueChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->openni2_vshift, SIGNAL(valueChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
+	connect(_ui->openni2_depth_decimation, SIGNAL(valueChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->comboBox_freenect2Format, SIGNAL(currentIndexChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->doubleSpinBox_freenect2MinDepth, SIGNAL(valueChanged(double)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->doubleSpinBox_freenect2MaxDepth, SIGNAL(valueChanged(double)), this, SLOT(makeObsoleteSourcePanel()));
@@ -1246,9 +1250,9 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 
 	//Odometry
 	_ui->odom_strategy->setObjectName(Parameters::kOdomStrategy().c_str());
-	connect(_ui->odom_strategy, SIGNAL(currentIndexChanged(int)), _ui->stackedWidget_odometryType, SLOT(setCurrentIndex(int)));
+	connect(_ui->odom_strategy, SIGNAL(currentIndexChanged(int)), this, SLOT(updateOdometryStackedIndex(int)));
 	_ui->odom_strategy->setCurrentIndex(Parameters::defaultOdomStrategy());
-	_ui->stackedWidget_odometryType->setCurrentIndex(Parameters::defaultOdomStrategy());
+	updateOdometryStackedIndex(Parameters::defaultOdomStrategy());
 	_ui->odom_countdown->setObjectName(Parameters::kOdomResetCountdown().c_str());
 	_ui->odom_holonomic->setObjectName(Parameters::kOdomHolonomic().c_str());
 	_ui->odom_fillInfoData->setObjectName(Parameters::kOdomFillInfoData().c_str());
@@ -1360,6 +1364,7 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	// Odometry LOAM
 	_ui->odom_loam_sensor->setObjectName(Parameters::kOdomLOAMSensor().c_str());
 	_ui->odom_loam_scan_period->setObjectName(Parameters::kOdomLOAMScanPeriod().c_str());
+	_ui->odom_loam_resolution->setObjectName(Parameters::kOdomLOAMResolution().c_str());
 	_ui->odom_loam_linvar->setObjectName(Parameters::kOdomLOAMLinVar().c_str());
 	_ui->odom_loam_angvar->setObjectName(Parameters::kOdomLOAMAngVar().c_str());
 	_ui->odom_loam_localMapping->setObjectName(Parameters::kOdomLOAMLocalMapping().c_str());
@@ -1949,6 +1954,7 @@ void PreferencesDialog::resetSettings(QGroupBox * groupBox)
 		_ui->openni2_stampsIdsUsed->setChecked(false);
 		_ui->openni2_hshift->setValue(0);
 		_ui->openni2_vshift->setValue(0);
+		_ui->openni2_depth_decimation->setValue(1);
 		_ui->comboBox_freenect2Format->setCurrentIndex(1);
 		_ui->doubleSpinBox_freenect2MinDepth->setValue(0.3);
 		_ui->doubleSpinBox_freenect2MaxDepth->setValue(12.0);
@@ -2404,6 +2410,7 @@ void PreferencesDialog::readCameraSettings(const QString & filePath)
 	_ui->lineEdit_openni2OniPath->setText(settings.value("oniPath", _ui->lineEdit_openni2OniPath->text()).toString());
 	_ui->openni2_hshift->setValue(settings.value("hshift", _ui->openni2_hshift->value()).toInt());
 	_ui->openni2_vshift->setValue(settings.value("vshift", _ui->openni2_vshift->value()).toInt());
+	_ui->openni2_depth_decimation->setValue(settings.value("depthDecimation", _ui->openni2_depth_decimation->value()).toInt());
 	settings.endGroup(); // Openni2
 
 	settings.beginGroup("Freenect2");
@@ -2917,6 +2924,7 @@ void PreferencesDialog::writeCameraSettings(const QString & filePath) const
 	settings.setValue("oniPath", 		  _ui->lineEdit_openni2OniPath->text());
 	settings.setValue("hshift",           _ui->openni2_hshift->value());
 	settings.setValue("vshift",           _ui->openni2_vshift->value());
+	settings.setValue("depthDecimation",  _ui->openni2_depth_decimation->value());
 	settings.endGroup(); // Openni2
 
 	settings.beginGroup("Freenect2");
@@ -4913,6 +4921,18 @@ void PreferencesDialog::updateFeatureMatchingVisibility()
 	_ui->groupBox_gms->setVisible(_ui->reextract_nn->currentIndex() == 7);
 }
 
+void PreferencesDialog::updateOdometryStackedIndex(int index)
+{
+	if(index == 11) // FLOAM -> LOAM
+	{
+		_ui->stackedWidget_odometryType->setCurrentIndex(7);
+	}
+	else
+	{
+		_ui->stackedWidget_odometryType->setCurrentIndex(index);
+	}
+}
+
 void PreferencesDialog::useOdomFeatures()
 {
 	if(this->isVisible() && _ui->checkBox_useOdomFeatures->isChecked())
@@ -5172,7 +5192,8 @@ void PreferencesDialog::updateSourceGrpVisibility()
 			(_ui->comboBox_sourceType->currentIndex() == 1 && _ui->comboBox_cameraStereo->currentIndex() == kSrcStereoRealSense2 - kSrcStereo) || //T265
 			(_ui->comboBox_sourceType->currentIndex() == 1 && _ui->comboBox_cameraStereo->currentIndex() == kSrcStereoZed - kSrcStereo) || // ZEDm, ZED2
 			(_ui->comboBox_sourceType->currentIndex() == 1 && _ui->comboBox_cameraStereo->currentIndex() == kSrcStereoMyntEye - kSrcStereo) || // MYNT EYE S
-			(_ui->comboBox_sourceType->currentIndex() == 1 && _ui->comboBox_cameraStereo->currentIndex() == kSrcStereoZedOC - kSrcStereo));
+			(_ui->comboBox_sourceType->currentIndex() == 1 && _ui->comboBox_cameraStereo->currentIndex() == kSrcStereoZedOC - kSrcStereo) ||
+			(_ui->comboBox_sourceType->currentIndex() == 1 && _ui->comboBox_cameraStereo->currentIndex() == kSrcStereoDepthAI - kSrcStereo));
 	_ui->stackedWidget_imuFilter->setVisible(_ui->comboBox_imuFilter_strategy->currentIndex() > 0);
 	_ui->groupBox_madgwickfilter->setVisible(_ui->comboBox_imuFilter_strategy->currentIndex() == 1);
 	_ui->groupBox_complementaryfilter->setVisible(_ui->comboBox_imuFilter_strategy->currentIndex() == 2);
@@ -6332,6 +6353,7 @@ Camera * PreferencesDialog::createCamera(
 				}
 				((CameraOpenNI2*)camera)->setIRDepthShift(_ui->openni2_hshift->value(), _ui->openni2_vshift->value());
 				((CameraOpenNI2*)camera)->setMirroring(_ui->openni2_mirroring->isChecked());
+				((CameraOpenNI2*)camera)->setDepthDecimation(_ui->openni2_depth_decimation->value());
 			}
 		}
 	}

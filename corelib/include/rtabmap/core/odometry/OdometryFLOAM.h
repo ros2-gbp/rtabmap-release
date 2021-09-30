@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2021, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -25,23 +25,40 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifndef CORELIB_INCLUDE_RTABMAP_CORE_PDALWRITER_H_
-#define CORELIB_INCLUDE_RTABMAP_CORE_PDALWRITER_H_
+#ifndef ODOMETRYFLOAM_H_
+#define ODOMETRYFLOAM_H_
 
-#include <pcl/point_cloud.h>
-#include <pcl/point_types.h>
+#include <rtabmap/core/Odometry.h>
+
+class LaserProcessingClass;
+class OdomEstimationClass;
 
 namespace rtabmap {
 
-std::string getPDALSupportedWriters();
+class RTABMAP_EXP OdometryFLOAM : public Odometry
+{
+public:
+	OdometryFLOAM(const rtabmap::ParametersMap & parameters = rtabmap::ParametersMap());
+	virtual ~OdometryFLOAM();
 
-int savePDALFile(const std::string & filePath, const pcl::PointCloud<pcl::PointXYZ> & cloud,          const std::vector<int> & cameraIds = std::vector<int>(), bool binary = false);
-int savePDALFile(const std::string & filePath, const pcl::PointCloud<pcl::PointXYZRGB> & cloud,       const std::vector<int> & cameraIds = std::vector<int>(), bool binary = false, const std::vector<float> & intensities = std::vector<float>());
-int savePDALFile(const std::string & filePath, const pcl::PointCloud<pcl::PointXYZRGBNormal> & cloud, const std::vector<int> & cameraIds = std::vector<int>(), bool binary = false, const std::vector<float> & intensities = std::vector<float>());
-int savePDALFile(const std::string & filePath, const pcl::PointCloud<pcl::PointXYZI> & cloud,         const std::vector<int> & cameraIds = std::vector<int>(), bool binary = false);
-int savePDALFile(const std::string & filePath, const pcl::PointCloud<pcl::PointXYZINormal> & cloud,   const std::vector<int> & cameraIds = std::vector<int>(), bool binary = false);
+	virtual void reset(const Transform & initialPose = Transform::getIdentity());
+	virtual Odometry::Type getType() {return Odometry::kTypeFLOAM;}
+
+private:
+	virtual Transform computeTransform(SensorData & image, const Transform & guess = Transform(), OdometryInfo * info = 0);
+
+private:
+#ifdef RTABMAP_FLOAM
+	LaserProcessingClass * laserProcessing_;
+	OdomEstimationClass * odomEstimation_;
+
+	Transform lastPose_;
+	bool lost_;
+	float linVar_;
+	float angVar_;
+#endif
+};
 
 }
 
-
-#endif /* CORELIB_INCLUDE_RTABMAP_CORE_PDALWRITER_H_ */
+#endif /* ODOMETRYFLOAM_H_ */
