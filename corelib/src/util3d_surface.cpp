@@ -601,71 +601,72 @@ pcl::texture_mapping::CameraVector createTextureCameras(
 		const std::map<int, cv::Mat> & cameraDepths,
 		const std::vector<float> & roiRatios)
 {
-	UASSERT_MSG(poses.size() == cameraModels.size(), uFormat("%d vs %d", (int)poses.size(), (int)cameraModels.size()).c_str());
 	UASSERT(roiRatios.empty() || roiRatios.size() == 4);
 	pcl::texture_mapping::CameraVector cameras;
-	std::map<int, Transform>::const_iterator poseIter=poses.begin();
-	std::map<int, std::vector<CameraModel> >::const_iterator modelIter=cameraModels.begin();
-	for(; poseIter!=poses.end(); ++poseIter, ++modelIter)
+
+	for(std::map<int, Transform>::const_iterator poseIter=poses.begin(); poseIter!=poses.end(); ++poseIter)
 	{
-		UASSERT(poseIter->first == modelIter->first);
+		std::map<int, std::vector<CameraModel> >::const_iterator modelIter=cameraModels.find(poseIter->first);
 
-		std::map<int, cv::Mat>::const_iterator depthIter = cameraDepths.find(poseIter->first);
-
-		// for each sub camera
-		for(unsigned int i=0; i<modelIter->second.size(); ++i)
+		if(modelIter!=cameraModels.end())
 		{
-			pcl::TextureMapping<pcl::PointXYZ>::Camera cam;
-			// should be in camera frame
-			UASSERT(!modelIter->second[i].localTransform().isNull() && !poseIter->second.isNull());
-			Transform t = poseIter->second*modelIter->second[i].localTransform();
+			std::map<int, cv::Mat>::const_iterator depthIter = cameraDepths.find(poseIter->first);
 
-			cam.pose = t.toEigen3f();
-
-			if(modelIter->second[i].imageHeight() <=0 || modelIter->second[i].imageWidth() <=0)
+			// for each sub camera
+			for(unsigned int i=0; i<modelIter->second.size(); ++i)
 			{
-				UERROR("Should have camera models with width/height set to create texture cameras!");
-				return pcl::texture_mapping::CameraVector();
-			}
+				pcl::TextureMapping<pcl::PointXYZ>::Camera cam;
+				// should be in camera frame
+				UASSERT(!modelIter->second[i].localTransform().isNull() && !poseIter->second.isNull());
+				Transform t = poseIter->second*modelIter->second[i].localTransform();
 
-			UASSERT(modelIter->second[i].fx()>0 && modelIter->second[i].imageHeight()>0 && modelIter->second[i].imageWidth()>0);
-			cam.focal_length_w=modelIter->second[i].fx();
-			cam.focal_length_h=modelIter->second[i].fy();
-			cam.center_w=modelIter->second[i].cx();
-			cam.center_h=modelIter->second[i].cy();
-			cam.height=modelIter->second[i].imageHeight();
-			cam.width=modelIter->second[i].imageWidth();
-			if(modelIter->second.size() == 1)
-			{
-				cam.texture_file = uFormat("%d", poseIter->first); // camera index
-			}
-			else
-			{
-				cam.texture_file = uFormat("%d_%d", poseIter->first, (int)i); // camera index, sub camera model index
-			}
-			if(!roiRatios.empty())
-			{
-				cam.roi.resize(4);
-				cam.roi[0] = cam.width * roiRatios[0]; // left -> x
-				cam.roi[1] = cam.height * roiRatios[2]; // top -> y
-				cam.roi[2] = cam.width * (1.0 - roiRatios[1]) - cam.roi[0]; // right -> width
-				cam.roi[3] = cam.height * (1.0 - roiRatios[3]) - cam.roi[1]; // bottom -> height
-			}
+				cam.pose = t.toEigen3f();
 
-			if(depthIter != cameraDepths.end() && !depthIter->second.empty())
-			{
-				UASSERT(depthIter->second.type() == CV_32FC1 || depthIter->second.type() == CV_16UC1);
-				UASSERT(depthIter->second.cols % modelIter->second.size() == 0);
-				int subWidth = depthIter->second.cols/(modelIter->second.size());
-				cam.depth = cv::Mat(depthIter->second, cv::Range(0, depthIter->second.rows), cv::Range(subWidth*i, subWidth*(i+1)));
+				if(modelIter->second[i].imageHeight() <=0 || modelIter->second[i].imageWidth() <=0)
+				{
+					UERROR("Should have camera models with width/height set to create texture cameras!");
+					return pcl::texture_mapping::CameraVector();
+				}
+
+				UASSERT(modelIter->second[i].fx()>0 && modelIter->second[i].imageHeight()>0 && modelIter->second[i].imageWidth()>0);
+				cam.focal_length_w=modelIter->second[i].fx();
+				cam.focal_length_h=modelIter->second[i].fy();
+				cam.center_w=modelIter->second[i].cx();
+				cam.center_h=modelIter->second[i].cy();
+				cam.height=modelIter->second[i].imageHeight();
+				cam.width=modelIter->second[i].imageWidth();
+				if(modelIter->second.size() == 1)
+				{
+					cam.texture_file = uFormat("%d", poseIter->first); // camera index
+				}
+				else
+				{
+					cam.texture_file = uFormat("%d_%d", poseIter->first, (int)i); // camera index, sub camera model index
+				}
+				if(!roiRatios.empty())
+				{
+					cam.roi.resize(4);
+					cam.roi[0] = cam.width * roiRatios[0]; // left -> x
+					cam.roi[1] = cam.height * roiRatios[2]; // top -> y
+					cam.roi[2] = cam.width * (1.0 - roiRatios[1]) - cam.roi[0]; // right -> width
+					cam.roi[3] = cam.height * (1.0 - roiRatios[3]) - cam.roi[1]; // bottom -> height
+				}
+
+				if(depthIter != cameraDepths.end() && !depthIter->second.empty())
+				{
+					UASSERT(depthIter->second.type() == CV_32FC1 || depthIter->second.type() == CV_16UC1);
+					UASSERT(depthIter->second.cols % modelIter->second.size() == 0);
+					int subWidth = depthIter->second.cols/(modelIter->second.size());
+					cam.depth = cv::Mat(depthIter->second, cv::Range(0, depthIter->second.rows), cv::Range(subWidth*i, subWidth*(i+1)));
+				}
+
+				UDEBUG("%f", cam.focal_length);
+				UDEBUG("%f", cam.height);
+				UDEBUG("%f", cam.width);
+				UDEBUG("cam.pose=%s", t.prettyPrint().c_str());
+
+				cameras.push_back(cam);
 			}
-
-			UDEBUG("%f", cam.focal_length);
-			UDEBUG("%f", cam.height);
-			UDEBUG("%f", cam.width);
-			UDEBUG("cam.pose=%s", t.prettyPrint().c_str());
-
-			cameras.push_back(cam);
 		}
 	}
 	return cameras;
@@ -1513,7 +1514,7 @@ cv::Mat mergeTextures(
 	UASSERT(textureSize%256 == 0);
 	UDEBUG("textureSize = %d", textureSize);
 	cv::Mat globalTextures;
-	if(mesh.tex_materials.size() > 1)
+	if(!mesh.tex_materials.empty())
 	{
 		std::vector<std::pair<int, int> > textures(mesh.tex_materials.size(), std::pair<int, int>(-1,0));
 		cv::Size imageSize;
@@ -2231,6 +2232,52 @@ bool multiBandTexturing(
 		const std::pair<float, float> & contrastValues,               // optional output of util3d::mergeTextures()
 		bool gainRGB)
 {
+	return multiBandTexturing(
+			outputOBJPath,
+			cloud,
+			polygons,
+			cameraPoses,
+			vertexToPixels,
+			images,
+			cameraModels,
+			memory,
+			dbDriver,
+			textureSize,
+			2,
+			"1 5 10 0",
+			textureFormat,
+			gains,
+			blendingGains,
+			contrastValues,
+			gainRGB);
+}
+
+bool multiBandTexturing(
+		const std::string & outputOBJPath,
+		const pcl::PCLPointCloud2 & cloud,
+		const std::vector<pcl::Vertices> & polygons,
+		const std::map<int, Transform> & cameraPoses,
+		const std::vector<std::map<int, pcl::PointXY> > & vertexToPixels,
+		const std::map<int, cv::Mat> & images,
+		const std::map<int, std::vector<CameraModel> > & cameraModels,
+		const Memory * memory,
+		const DBDriver * dbDriver,
+		unsigned int textureSize,
+		unsigned int textureDownScale,
+		const std::string & nbContrib,
+		const std::string & textureFormat,
+		const std::map<int, std::map<int, cv::Vec4d> > & gains,
+		const std::map<int, std::map<int, cv::Mat> > & blendingGains,
+		const std::pair<float, float> & contrastValues,
+		bool gainRGB,
+		unsigned int unwrapMethod,
+		bool fillHoles,
+		unsigned int padding,
+		double bestScoreThreshold,
+		double angleHardThreshold,
+		bool forceVisibleByAllVertices)
+{
+
 #ifdef RTABMAP_ALICE_VISION
 	if(ULogger::level() == ULogger::kDebug)
 	{
@@ -2265,8 +2312,29 @@ bool multiBandTexturing(
 	texturing.pointsVisibilities = new mesh::PointsVisibility();
 	texturing.pointsVisibilities->reserve(cloud2.size());
 #endif
-	texturing.texParams.textureSide = 8192;
-	texturing.texParams.downscale = 8192/textureSize;
+	texturing.texParams.textureSide = textureSize;
+	texturing.texParams.downscale = textureDownScale;
+	std::vector<int> multiBandNbContrib;
+	std::list<std::string> values = uSplit(nbContrib, ' ');
+	for(std::list<std::string>::iterator iter=values.begin(); iter!=values.end(); ++iter)
+	{
+		multiBandNbContrib.push_back(uStr2Int(*iter));
+	}
+	if(multiBandNbContrib.size() != 4)
+	{
+		UERROR("multiband: Wrong number of nb of contribution (vaue=\"%s\", should be 4), using default values instead.", nbContrib.c_str());
+	}
+	else
+	{
+		texturing.texParams.multiBandNbContrib = multiBandNbContrib;
+	}
+	texturing.texParams.padding = padding;
+	texturing.texParams.fillHoles = fillHoles;
+	texturing.texParams.bestScoreThreshold = bestScoreThreshold;
+	texturing.texParams.angleHardThreshold = angleHardThreshold;
+	texturing.texParams.forceVisibleByAllVertices = forceVisibleByAllVertices;
+	texturing.texParams.visibilityRemappingMethod = mesh::EVisibilityRemappingMethod::Pull;
+
 
 	for(size_t i=0;i<cloud2.size();++i)
 	{
@@ -2428,13 +2496,20 @@ bool multiBandTexturing(
 				imageRoi = output;
 			}
 
-			Transform t = iter->second * model.localTransform();
-			Eigen::Matrix<double, 3, 4> m = (t.inverse()).toEigen3d().matrix().block<3,4>(0, 0);
+			Transform t = (iter->second * model.localTransform()).inverse();
+			Eigen::Matrix<double, 3, 4> m = t.toEigen3d().matrix().block<3,4>(0, 0);
 			sfmData::CameraPose pose(geometry::Pose3(m), true);
 			sfmData.setAbsolutePose((IndexT)viewId, pose);
 
+			UDEBUG("%d %d %f %f %f %f", imageSize.width, imageSize.height, model.fx(), model.fy(), model.cx(), model.cy());
 			std::shared_ptr<camera::IntrinsicBase> camPtr = std::make_shared<camera::Pinhole>(
+#if RTABMAP_ALICE_VISION_MAJOR > 2 || (RTABMAP_ALICE_VISION_MAJOR==2 && RTABMAP_ALICE_VISION_MINOR>=4)
+					//https://github.com/alicevision/AliceVision/commit/9fab5c79a1c65595fe5c5001267e1c5212bc93f0#diff-b0c0a3c30de50be8e4ed283dfe4c8ae4a9bc861aa9a83bd8bfda8182e9d67c08
+					// [all] the camera principal point is now defined as an offset relative to the image center
+					imageSize.width, imageSize.height, model.fx(), model.fy(), model.cx() - double(imageSize.width) * 0.5, model.cy() - double(imageSize.height) * 0.5);
+#else
 					imageSize.width, imageSize.height, model.fx(), model.cx(), model.cy());
+#endif
 			sfmData.intrinsics.insert(std::make_pair((IndexT)viewId, camPtr));
 
 			std::string imagePath = tmpImageDirectory+uFormat("/%d.jpg", viewId);
@@ -2456,14 +2531,18 @@ bool multiBandTexturing(
 
 	mvsUtils::MultiViewParams mp(sfmData);
 
-	UINFO("Unwrapping...");
-	texturing.unwrap(mp, mesh::EUnwrapMethod::Basic);
+	UINFO("Unwrapping (method=%d=%s)...", unwrapMethod, mesh::EUnwrapMethod_enumToString((mesh::EUnwrapMethod)unwrapMethod).c_str());
+	texturing.unwrap(mp, (mesh::EUnwrapMethod)unwrapMethod);
 	UINFO("Unwrapping done. %fs", timer.ticks());
 
 	// save final obj file
 	std::string baseName = uSplit(UFile::getName(outputOBJPath), '.').front();
+#if RTABMAP_ALICE_VISION_MAJOR > 2 || (RTABMAP_ALICE_VISION_MAJOR==2 && RTABMAP_ALICE_VISION_MINOR>=4)
+	texturing.saveAs(outputDirectory, baseName, aliceVision::mesh::EFileType::OBJ, imageIO::EImageFileType::PNG);
+#else
 	texturing.saveAsOBJ(outputDirectory, baseName);
-	UINFO("Saved %s. %fs", outputOBJPath, timer.ticks());
+#endif
+	UINFO("Saved %s. %fs", outputOBJPath.c_str(), timer.ticks());
 
 	// generate textures
 	UINFO("Generating textures...");
@@ -2525,7 +2604,9 @@ bool multiBandTexturing(
 	UINFO("Rename/convert textures... done. %fs", timer.ticks());
 
 #if RTABMAP_ALICE_VISION_MAJOR > 2 || (RTABMAP_ALICE_VISION_MAJOR==2 && RTABMAP_ALICE_VISION_MINOR>=3)
+	UINFO("Cleanup sfmdata...");
 	sfmData.clear();
+	UINFO("Cleanup sfmdata... done. %fs", timer.ticks());
 #endif
 
 	return true;
@@ -3561,6 +3642,55 @@ void adjustNormalsToViewPoints(
 						cloud->points[i].normal_x *= -1.0f;
 						cloud->points[i].normal_y *= -1.0f;
 						cloud->points[i].normal_z *= -1.0f;
+					}
+				}
+				else
+				{
+					UWARN("Not found camera viewpoint for point %d!?", i);
+				}
+			}
+		}
+	}
+}
+
+void adjustNormalsToViewPoints(
+		const std::map<int, Transform> & viewpoints,
+		const LaserScan & rawScan,
+		const std::vector<int> & viewpointIds,
+		LaserScan & scan)
+{
+	UDEBUG("poses=%d, rawCloud=%d, rawCameraIndices=%d, cloud=%d", (int)viewpoints.size(), (int)rawScan.size(), (int)viewpointIds.size(), (int)scan.size());
+	if(viewpoints.size() && rawScan.size() && rawScan.size() == (int)viewpointIds.size() && scan.size() && scan.hasNormals())
+	{
+		pcl::PointCloud<pcl::PointXYZ>::Ptr rawCloud = util3d::laserScanToPointCloud(rawScan);
+		pcl::search::KdTree<pcl::PointXYZ>::Ptr rawTree (new pcl::search::KdTree<pcl::PointXYZ>);
+		rawTree->setInputCloud (rawCloud);
+		for(int i=0; i<scan.size(); ++i)
+		{
+			pcl::PointNormal point = util3d::laserScanToPointNormal(scan, i);
+			pcl::PointXYZ normal(point.normal_x, point.normal_y, point.normal_z);
+			if(pcl::isFinite(normal))
+			{
+				std::vector<int> indices;
+				std::vector<float> dist;
+				rawTree->nearestKSearch(pcl::PointXYZ(point.x, point.y, point.z), 1, indices, dist);
+				if(indices.size() && indices[0]>=0)
+				{
+					UASSERT_MSG(indices[0]<(int)viewpointIds.size(), uFormat("indices[0]=%d rawCameraIndices.size()=%d", indices[0], (int)viewpointIds.size()).c_str());
+					UASSERT(uContains(viewpoints, viewpointIds[indices[0]]));
+					Transform p = viewpoints.at(viewpointIds[indices[0]]);
+					pcl::PointXYZ viewpoint(p.x(), p.y(), p.z());
+					Eigen::Vector3f v = viewpoint.getVector3fMap() - point.getVector3fMap();
+
+					Eigen::Vector3f n(normal.x, normal.y, normal.z);
+
+					float result = v.dot(n);
+					if(result < 0)
+					{
+						//reverse normal
+						scan.field(i, scan.getNormalsOffset()) *= -1.0f;
+						scan.field(i, scan.getNormalsOffset()+1) *= -1.0f;
+						scan.field(i, scan.getNormalsOffset()+2) *= -1.0f;
 					}
 				}
 				else
