@@ -54,7 +54,7 @@ public:
 			const std::string & deviceSerial = "",
 			int resolution = 1, // 0=720p, 1=800p, 2=400p
 			float imageRate=0.0f,
-			const Transform & localTransform = CameraModel::opticalRotation());
+			const Transform & localTransform = Transform::getIdentity());
 	virtual ~CameraDepthAI();
 
 	void setOutputDepth(bool enabled, int confidence = 200);
@@ -69,6 +69,7 @@ protected:
 private:
 #ifdef RTABMAP_DEPTHAI
 	StereoCameraModel stereoModel_;
+	Transform imuLocalTransform_;
 	std::string deviceSerial_;
 	bool outputDepth_;
 	int depthConfidence_;
@@ -76,6 +77,9 @@ private:
 	std::shared_ptr<dai::Device> device_;
 	std::shared_ptr<dai::DataOutputQueue> leftQueue_;
 	std::shared_ptr<dai::DataOutputQueue> rightOrDepthQueue_;
+	std::shared_ptr<dai::DataOutputQueue> imuQueue_;
+	std::map<double, cv::Vec3f> accBuffer_;
+	std::map<double, cv::Vec3f> gyroBuffer_;
 #endif
 };
 

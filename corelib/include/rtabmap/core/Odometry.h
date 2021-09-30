@@ -54,7 +54,8 @@ public:
 		kTypeLOAM = 7,
 		kTypeMSCKF = 8,
 		kTypeVINS = 9,
-		kTypeOpenVINS = 10
+		kTypeOpenVINS = 10,
+		kTypeFLOAM = 11
 	};
 
 public:
@@ -104,7 +105,7 @@ private:
 	bool _fillInfoData;
 	float _kalmanProcessNoise;
 	float _kalmanMeasurementNoise;
-	int _imageDecimation;
+	unsigned int _imageDecimation;
 	bool _alignWithGround;
 	bool _publishRAMUsage;
 	bool _imagesAlreadyRectified;
@@ -121,6 +122,7 @@ private:
 	std::vector<ParticleFilter *> particleFilters_;
 	cv::KalmanFilter kalmanFilter_;
 	StereoCameraModel stereoModel_;
+	std::vector<CameraModel> models_;
 	std::map<double, Transform> imus_;
 
 protected:
