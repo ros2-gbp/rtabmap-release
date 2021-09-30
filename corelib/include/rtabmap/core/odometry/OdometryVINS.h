@@ -51,7 +51,6 @@ private:
 private:
 #ifdef RTABMAP_VINS
 	VinsEstimator * vinsEstimator_;
-	int imagesProcessed_;
 	bool initGravity_;
 	Transform previousPose_;
 	Transform previousLocalTransform_;

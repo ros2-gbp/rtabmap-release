@@ -126,6 +126,9 @@ ExportCloudsDialog::ExportCloudsDialog(QWidget *parent) :
 	connect(_ui->doubleSpinBox_minDepth, SIGNAL(valueChanged(double)), this, SIGNAL(configChanged()));
 	connect(_ui->doubleSpinBox_ceilingHeight, SIGNAL(valueChanged(double)), this, SIGNAL(configChanged()));
 	connect(_ui->doubleSpinBox_floorHeight, SIGNAL(valueChanged(double)), this, SIGNAL(configChanged()));
+	connect(_ui->doubleSpinBox_footprintWidth, SIGNAL(valueChanged(double)), this, SIGNAL(configChanged()));
+	connect(_ui->doubleSpinBox_footprintLength, SIGNAL(valueChanged(double)), this, SIGNAL(configChanged()));
+	connect(_ui->doubleSpinBox_footprintHeight, SIGNAL(valueChanged(double)), this, SIGNAL(configChanged()));
 	connect(_ui->spinBox_decimation_scan, SIGNAL(valueChanged(int)), this, SIGNAL(configChanged()));
 	connect(_ui->doubleSpinBox_rangeMin, SIGNAL(valueChanged(double)), this, SIGNAL(configChanged()));
 	connect(_ui->doubleSpinBox_rangeMax, SIGNAL(valueChanged(double)), this, SIGNAL(configChanged()));
@@ -227,6 +230,16 @@ ExportCloudsDialog::ExportCloudsDialog(QWidget *parent) :
 	connect(_ui->doubleSpinBox_cameraFilterVel, SIGNAL(valueChanged(double)), this, SIGNAL(configChanged()));
 	connect(_ui->doubleSpinBox_cameraFilterVelRad, SIGNAL(valueChanged(double)), this, SIGNAL(configChanged()));
 	connect(_ui->doubleSpinBox_laplacianVariance, SIGNAL(valueChanged(double)), this, SIGNAL(configChanged()));
+	connect(_ui->checkBox_multiband, SIGNAL(stateChanged(int)), this, SIGNAL(configChanged()));
+	connect(_ui->checkBox_multiband, SIGNAL(stateChanged(int)), this, SLOT(updateReconstructionFlavor()));
+	connect(_ui->spinBox_multiband_downscale, SIGNAL(valueChanged(int)), this, SIGNAL(configChanged()));
+	connect(_ui->lineEdit_multiband_nbcontrib, SIGNAL(textChanged(const QString &)), this, SIGNAL(configChanged()));
+	connect(_ui->comboBox_multiband_unwrap, SIGNAL(currentIndexChanged(int)), this, SIGNAL(configChanged()));
+	connect(_ui->checkBox_multiband_fillholes, SIGNAL(stateChanged(int)), this, SIGNAL(configChanged()));
+	connect(_ui->spinBox_multiband_padding, SIGNAL(valueChanged(int)), this, SIGNAL(configChanged()));
+	connect(_ui->doubleSpinBox_multiband_bestscore, SIGNAL(valueChanged(double)), this, SIGNAL(configChanged()));
+	connect(_ui->doubleSpinBox_multiband_angle, SIGNAL(valueChanged(double)), this, SIGNAL(configChanged()));
+	connect(_ui->checkBox_multiband_forcevisible, SIGNAL(stateChanged(int)), this, SIGNAL(configChanged()));
 
 	connect(_ui->checkBox_poisson_outputPolygons, SIGNAL(stateChanged(int)), this, SIGNAL(configChanged()));
 	connect(_ui->checkBox_poisson_manifold, SIGNAL(stateChanged(int)), this, SIGNAL(configChanged()));
@@ -349,6 +362,9 @@ void ExportCloudsDialog::saveSettings(QSettings & settings, const QString & grou
 	settings.setValue("regenerate_min_depth", _ui->doubleSpinBox_minDepth->value());
 	settings.setValue("regenerate_ceiling", _ui->doubleSpinBox_ceilingHeight->value());
 	settings.setValue("regenerate_floor", _ui->doubleSpinBox_floorHeight->value());
+	settings.setValue("regenerate_footprint_height", _ui->doubleSpinBox_footprintHeight->value());
+	settings.setValue("regenerate_footprint_width", _ui->doubleSpinBox_footprintWidth->value());
+	settings.setValue("regenerate_footprint_length", _ui->doubleSpinBox_footprintLength->value());
 	settings.setValue("regenerate_scan_decimation", _ui->spinBox_decimation_scan->value());
 	settings.setValue("regenerate_scan_max_range", _ui->doubleSpinBox_rangeMax->value());
 	settings.setValue("regenerate_scan_min_range", _ui->doubleSpinBox_rangeMin->value());
@@ -434,6 +450,14 @@ void ExportCloudsDialog::saveSettings(QSettings & settings, const QString & grou
 	settings.setValue("mesh_textureBlending", _ui->checkBox_blending->isChecked());
 	settings.setValue("mesh_textureBlendingDecimation", _ui->comboBox_blendingDecimation->currentIndex());
 	settings.setValue("mesh_textureMultiband", _ui->checkBox_multiband->isChecked());
+	settings.setValue("mesh_textureMultibandDownScale", _ui->spinBox_multiband_downscale->value());
+	settings.setValue("mesh_textureMultibandNbContrib", _ui->lineEdit_multiband_nbcontrib->text());
+	settings.setValue("mesh_textureMultibandUnwrap", _ui->comboBox_multiband_unwrap->currentIndex());
+	settings.setValue("mesh_textureMultibandFillHoles", _ui->checkBox_multiband_fillholes->isChecked());
+	settings.setValue("mesh_textureMultibandPadding", _ui->spinBox_multiband_padding->value());
+	settings.setValue("mesh_textureMultibandBestScoreThr", _ui->doubleSpinBox_multiband_bestscore->value());
+	settings.setValue("mesh_textureMultibandAngleHardThr", _ui->doubleSpinBox_multiband_angle->value());
+	settings.setValue("mesh_textureMultibandForceVisible", _ui->checkBox_multiband_forcevisible->isChecked());
 
 
 	settings.setValue("mesh_angle_tolerance", _ui->doubleSpinBox_mesh_angleTolerance->value());
@@ -507,6 +531,9 @@ void ExportCloudsDialog::loadSettings(QSettings & settings, const QString & grou
 	_ui->doubleSpinBox_minDepth->setValue(settings.value("regenerate_min_depth", _ui->doubleSpinBox_minDepth->value()).toDouble());
 	_ui->doubleSpinBox_ceilingHeight->setValue(settings.value("regenerate_ceiling", _ui->doubleSpinBox_ceilingHeight->value()).toDouble());
 	_ui->doubleSpinBox_floorHeight->setValue(settings.value("regenerate_floor", _ui->doubleSpinBox_floorHeight->value()).toDouble());
+	_ui->doubleSpinBox_footprintHeight->setValue(settings.value("regenerate_footprint_height", _ui->doubleSpinBox_footprintHeight->value()).toDouble());
+	_ui->doubleSpinBox_footprintWidth->setValue(settings.value("regenerate_footprint_width", _ui->doubleSpinBox_footprintWidth->value()).toDouble());
+	_ui->doubleSpinBox_footprintLength->setValue(settings.value("regenerate_footprint_length", _ui->doubleSpinBox_footprintLength->value()).toDouble());
 	_ui->spinBox_decimation_scan->setValue(settings.value("regenerate_scan_decimation", _ui->spinBox_decimation_scan->value()).toInt());
 	_ui->doubleSpinBox_rangeMax->setValue(settings.value("regenerate_scan_max_range", _ui->doubleSpinBox_rangeMax->value()).toDouble());
 	_ui->doubleSpinBox_rangeMin->setValue(settings.value("regenerate_scan_min_range", _ui->doubleSpinBox_rangeMin->value()).toDouble());
@@ -598,6 +625,14 @@ void ExportCloudsDialog::loadSettings(QSettings & settings, const QString & grou
 	_ui->checkBox_blending->setChecked(settings.value("mesh_textureBlending", _ui->checkBox_blending->isChecked()).toBool());
 	_ui->comboBox_blendingDecimation->setCurrentIndex(settings.value("mesh_textureBlendingDecimation", _ui->comboBox_blendingDecimation->currentIndex()).toInt());
 	_ui->checkBox_multiband->setChecked(settings.value("mesh_textureMultiband", _ui->checkBox_multiband->isChecked()).toBool());
+	_ui->spinBox_multiband_downscale->setValue(settings.value("mesh_textureMultibandDownScale", _ui->spinBox_multiband_downscale->value()).toInt());
+	_ui->lineEdit_multiband_nbcontrib->setText(settings.value("mesh_textureMultibandNbContrib", _ui->lineEdit_multiband_nbcontrib->text()).toString());
+	_ui->comboBox_multiband_unwrap->setCurrentIndex(settings.value("mesh_textureMultibandUnwrap", _ui->comboBox_multiband_unwrap->currentIndex()).toInt());
+	_ui->checkBox_multiband_fillholes->setChecked(settings.value("mesh_textureMultibandFillHoles", _ui->checkBox_multiband_fillholes->isChecked()).toBool());
+	_ui->spinBox_multiband_padding->setValue(settings.value("mesh_textureMultibandPadding", _ui->spinBox_multiband_padding->value()).toInt());
+	_ui->doubleSpinBox_multiband_bestscore->setValue(settings.value("mesh_textureMultibandBestScoreThr", _ui->doubleSpinBox_multiband_bestscore->value()).toDouble());
+	_ui->doubleSpinBox_multiband_angle->setValue(settings.value("mesh_textureMultibandAngleHardThr", _ui->doubleSpinBox_multiband_angle->value()).toDouble());
+	_ui->checkBox_multiband_forcevisible->setChecked(settings.value("mesh_textureMultibandForceVisible", _ui->checkBox_multiband_forcevisible->isChecked()).toBool());
 
 	_ui->doubleSpinBox_mesh_angleTolerance->setValue(settings.value("mesh_angle_tolerance", _ui->doubleSpinBox_mesh_angleTolerance->value()).toDouble());
 	_ui->checkBox_mesh_quad->setChecked(settings.value("mesh_quad", _ui->checkBox_mesh_quad->isChecked()).toBool());
@@ -668,6 +703,9 @@ void ExportCloudsDialog::restoreDefaults()
 	_ui->doubleSpinBox_minDepth->setValue(0);
 	_ui->doubleSpinBox_ceilingHeight->setValue(0);
 	_ui->doubleSpinBox_floorHeight->setValue(0);
+	_ui->doubleSpinBox_footprintHeight->setValue(0);
+	_ui->doubleSpinBox_footprintLength->setValue(0);
+	_ui->doubleSpinBox_footprintWidth->setValue(0);
 	_ui->spinBox_decimation_scan->setValue(1);
 	_ui->doubleSpinBox_rangeMax->setValue(0);
 	_ui->doubleSpinBox_rangeMin->setValue(0);
@@ -681,8 +719,8 @@ void ExportCloudsDialog::restoreDefaults()
 	_ui->doubleSpinBox_bilateral_sigmaR->setValue(0.1);
 
 	_ui->checkBox_filtering->setChecked(false);
-	_ui->doubleSpinBox_filteringRadius->setValue(0.02);
-	_ui->spinBox_filteringMinNeighbors->setValue(2);
+	_ui->doubleSpinBox_filteringRadius->setValue(0.00);
+	_ui->spinBox_filteringMinNeighbors->setValue(5);
 
 	_ui->checkBox_assemble->setChecked(true);
 	_ui->doubleSpinBox_voxelSize_assembled->setValue(0.01);
@@ -733,7 +771,7 @@ void ExportCloudsDialog::restoreDefaults()
 
 	_ui->checkBox_textureMapping->setChecked(false);
 	_ui->comboBox_meshingTextureFormat->setCurrentIndex(0);
-	_ui->comboBox_meshingTextureSize->setCurrentIndex(5); // 4096
+	_ui->comboBox_meshingTextureSize->setCurrentIndex(6); // 8192
 	_ui->spinBox_mesh_maxTextures->setValue(1);
 	_ui->doubleSpinBox_meshingTextureMaxDistance->setValue(3.0);
 	_ui->doubleSpinBox_meshingTextureMaxDepthError->setValue(0.0);
@@ -753,6 +791,15 @@ void ExportCloudsDialog::restoreDefaults()
 	_ui->checkBox_blending->setChecked(true);
 	_ui->comboBox_blendingDecimation->setCurrentIndex(0);
 	_ui->checkBox_multiband->setChecked(false);
+	_ui->spinBox_multiband_downscale->setValue(2);
+	_ui->lineEdit_multiband_nbcontrib->setText("1 5 10 0");
+	_ui->comboBox_multiband_unwrap->setCurrentIndex(0);
+	_ui->checkBox_multiband_fillholes->setChecked(false);
+	_ui->spinBox_multiband_padding->setValue(5);
+	_ui->doubleSpinBox_multiband_bestscore->setValue(0.1);
+	_ui->doubleSpinBox_multiband_angle->setValue(90.0);
+	_ui->checkBox_multiband_forcevisible->setChecked(false);
+
 
 	_ui->doubleSpinBox_mesh_angleTolerance->setValue(15.0);
 	_ui->checkBox_mesh_quad->setChecked(false);
@@ -879,6 +926,7 @@ void ExportCloudsDialog::updateReconstructionFlavor()
 	_ui->groupBox_subtraction->setVisible(_ui->checkBox_subtraction->isChecked());
 	_ui->groupBox_textureMapping->setVisible(_ui->checkBox_textureMapping->isChecked());
 	_ui->groupBox_cameraFilter->setVisible(_ui->checkBox_cameraFilter->isChecked());
+	_ui->groupBox_multiband->setVisible(_ui->checkBox_multiband->isChecked());
 
 	// dense texturing options
 	if(_ui->checkBox_meshing->isChecked())
@@ -1419,7 +1467,7 @@ void ExportCloudsDialog::viewClouds(
 				_progressDialog->appendText(tr("Viewing the cloud %1 (%2 points)... done.").arg(iter->first).arg(iter->second->size()));
 			}
 		}
-		viewer->update();
+		viewer->refreshView();
 	}
 	else
 	{
@@ -3572,18 +3620,6 @@ std::map<int, std::pair<pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr, pcl::Indic
 						UERROR("Cloud %d not found in cache!", iter->first);
 					}
 				}
-				if(!cloud->empty() &&
-				   (_ui->doubleSpinBox_ceilingHeight->value() != 0.0 || _ui->doubleSpinBox_floorHeight->value() != 0.0))
-				{
-					float min = _ui->doubleSpinBox_floorHeight->value();
-					float max = _ui->doubleSpinBox_ceilingHeight->value();
-					indices = util3d::passThrough(
-							util3d::transformPointCloud(cloud, iter->second),
-							indices,
-							"z",
-							min!=0.0f&&min<max?min:std::numeric_limits<int>::min(),
-							max!=0.0f?max:std::numeric_limits<int>::max());
-				}
 			}
 			else if(_ui->checkBox_fromDepth->isChecked() && uContains(cachedClouds, iter->first))
 			{
@@ -3689,15 +3725,61 @@ std::map<int, std::pair<pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr, pcl::Indic
 				}
 			}
 
-			if(indices->size())
+			if(_ui->checkBox_filtering->isChecked())
 			{
-				if(_ui->checkBox_filtering->isChecked() &&
+				if(!indices->empty() &&
+				   (_ui->doubleSpinBox_ceilingHeight->value() != 0.0 ||
+					_ui->doubleSpinBox_floorHeight->value() != 0.0))
+				{
+					float min = _ui->doubleSpinBox_floorHeight->value();
+					float max = _ui->doubleSpinBox_ceilingHeight->value();
+					indices = util3d::passThrough(
+							util3d::transformPointCloud(cloud, iter->second),
+							indices,
+							"z",
+							min!=0.0f&&min<max?min:std::numeric_limits<int>::min(),
+							max!=0.0f?max:std::numeric_limits<int>::max());
+				}
+				if(!indices->empty() &&
+				   ( _ui->doubleSpinBox_footprintHeight->value() != 0.0 &&
+					 _ui->doubleSpinBox_footprintWidth->value() != 0.0 &&
+					 _ui->doubleSpinBox_footprintLength->value() != 0.0))
+				{
+					// filter footprint
+					float h = _ui->doubleSpinBox_footprintHeight->value();
+					float w = _ui->doubleSpinBox_footprintWidth->value();
+					float l = _ui->doubleSpinBox_footprintLength->value();
+					indices = util3d::cropBox(
+							cloud,
+							indices,
+							Eigen::Vector4f(
+									-l/2.0f,
+									-w/2.0f,
+									h<0.0f?h:0,
+									1),
+							Eigen::Vector4f(
+									l/2.0f,
+									w/2.0f,
+									h<0.0f?-h:h,
+									1),
+							Transform::getIdentity(),
+							true);
+				}
+
+				if( !indices->empty() &&
 					_ui->doubleSpinBox_filteringRadius->value() > 0.0f &&
 					_ui->spinBox_filteringMinNeighbors->value() > 0)
 				{
 					indices = util3d::radiusFiltering(cloud, indices, _ui->doubleSpinBox_filteringRadius->value(), _ui->spinBox_filteringMinNeighbors->value());
+					if(indices->empty())
+					{
+						UWARN("Point cloud %d doesn't have anymore points (had %d points) after radius filtering.", iter->first, (int)cloud->size());
+					}
 				}
+			}
 
+			if(!indices->empty())
+			{
 				if((_ui->comboBox_frame->isEnabled() && _ui->comboBox_frame->currentIndex()==2) && cloud->isOrganized())
 				{
 					cloud = util3d::transformPointCloud(cloud, localTransform.inverse()); // put back in camera frame
@@ -4397,10 +4479,19 @@ void ExportCloudsDialog::saveTextureMeshes(
 								0,
 								_dbDriver,
 								textureSize,
+								_ui->spinBox_multiband_downscale->value(),
+								_ui->lineEdit_multiband_nbcontrib->text().toStdString(),
 								_ui->comboBox_meshingTextureFormat->currentText().toStdString(),
 								gains,
 								blendingGains,
-								contrastValues);
+								contrastValues,
+								true,
+								_ui->comboBox_multiband_unwrap->currentIndex(),
+								_ui->checkBox_multiband_fillholes->isChecked(),
+								_ui->spinBox_multiband_padding->value(),
+								_ui->doubleSpinBox_multiband_bestscore->value(),
+								_ui->doubleSpinBox_multiband_angle->value(),
+								_ui->checkBox_multiband_forcevisible->isChecked());
 						if(success)
 						{
 							_progressDialog->incrementStep();
