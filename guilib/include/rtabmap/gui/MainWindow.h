@@ -284,6 +284,7 @@ protected:
 	const QMap<int, Signature> & cachedSignatures() const { return _cachedSignatures;}
 	const std::map<int, Transform> & currentPosesMap() const { return _currentPosesMap; }  // <nodeId, pose>
 	const std::map<int, Transform> & currentGTPosesMap() const { return _currentGTPosesMap; }  // <nodeId, pose>
+	std::map<int, Transform> currentVisiblePosesMap() const; // <nodeId, pose>
 	const std::multimap<int, Link> & currentLinksMap() const { return _currentLinksMap; }  // <nodeFromId, link>
 	const std::map<int, int> & currentMapIds() const { return _currentMapIds; }    // <nodeId, mapId>
 	const std::map<int, std::string> & currentLabels() const { return _currentLabels; }  // <nodeId, label>
@@ -305,7 +306,11 @@ protected:
 	const QString & newDatabasePathOutput() const { return _newDatabasePathOutput; }
 
 	virtual ParametersMap getCustomParameters() {return ParametersMap();}
-	virtual Camera* createCamera();
+	virtual Camera * createCamera(
+			Camera ** odomSensor,
+			Transform & odomSensorExtrinsics,
+			double & odomSensorTimeOffset,
+			float & odomSensorScaleFactor);
 
 private:
 	Ui_mainWindow * _ui;
