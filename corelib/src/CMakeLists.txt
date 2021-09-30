@@ -89,8 +89,10 @@ SET(SRC_FILES
     odometry/OdometryOkvis.cpp
     odometry/OdometryORBSLAM.cpp
     odometry/OdometryLOAM.cpp
+    odometry/OdometryFLOAM.cpp
     odometry/OdometryMSCKF.cpp
     odometry/OdometryVINS.cpp
+    odometry/OdometryOpenVINS.cpp
     
     IMU.cpp
     IMUThread.cpp
@@ -343,10 +345,17 @@ ENDIF(mynteye_FOUND)
 IF(depthai_FOUND)
 	SET(LIBRARIES
 		${LIBRARIES}
-		depthai::depthai-core
-		depthai::depthai-opencv
+		depthai::core
+		depthai::opencv
 	)
 ENDIF(depthai_FOUND)
+
+IF(TARGET OpenMP::OpenMP_CXX)
+	SET(LIBRARIES
+		${LIBRARIES}
+		OpenMP::OpenMP_CXX
+	)
+ENDIF(TARGET OpenMP::OpenMP_CXX)
 
 IF(WITH_TORO)
 	SET(SRC_FILES
@@ -481,6 +490,17 @@ IF(loam_velodyne_FOUND)
 	)
 ENDIF(loam_velodyne_FOUND)
 
+IF(floam_FOUND)
+    SET(INCLUDE_DIRS 
+        ${INCLUDE_DIRS} 
+        ${floam_INCLUDE_DIRS}
+    )
+    SET(LIBRARIES
+        ${LIBRARIES}
+        ${floam_LIBRARIES}
+    )
+ENDIF(floam_FOUND)
+
 IF(ZED_FOUND)
 	SET(INCLUDE_DIRS
 		${INCLUDE_DIRS}
@@ -608,6 +628,17 @@ IF(vins_FOUND)
 		${LIBRARIES}
 	)
 ENDIF(vins_FOUND)
+
+IF(ov_msckf_FOUND)
+    SET(INCLUDE_DIRS
+		${ov_msckf_INCLUDE_DIRS}
+		${INCLUDE_DIRS}
+	)
+	SET(LIBRARIES
+		${ov_msckf_LIBRARIES}
+		${LIBRARIES}
+	)
+ENDIF(ov_msckf_FOUND)
 
 IF(ORB_SLAM_FOUND)
     SET(INCLUDE_DIRS

@@ -30,6 +30,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap/utilite/UThreadC.h>
 #include <rtabmap/utilite/UConversion.h>
 #include <rtabmap/utilite/UEventsManager.h>
+#include <rtabmap/utilite/UStl.h>
 #include <opencv2/imgproc/types_c.h>
 
 #ifdef RTABMAP_REALSENSE2
@@ -68,6 +69,7 @@ CameraRealSense2::CameraRealSense2(
 	irDepth_(true),
 	rectifyImages_(true),
 	odometryProvided_(false),
+	odometryImagesDisabled_(false),
 	cameraWidth_(640),
 	cameraHeight_(480),
 	cameraFps_(30),
@@ -231,10 +233,6 @@ void CameraRealSense2::getPoseAndIMU(
 	pose.setNull();
 	imu = IMU();
 	poseConfidence = 0;
-	if(accBuffer_.empty() || gyroBuffer_.empty())
-	{
-		return;
-	}
 
 	// Interpolate pose
 	if(!poseBuffer_.empty())
@@ -252,7 +250,7 @@ void CameraRealSense2::getPoseAndIMU(
 		{
 			if(maxWaitTimeMs > 0)
 			{
-				UWARN("Could not find poses to interpolate at image time %f after waiting %d ms (last is %f)...", stamp, maxWaitTimeMs, poseBuffer_.rbegin()->first);
+				UWARN("Could not find poses to interpolate at image time %f after waiting %d ms (last is %f)...", stamp/1000.0, maxWaitTimeMs, poseBuffer_.rbegin()->first/1000.0);
 			}
 		}
 		else
@@ -283,11 +281,11 @@ void CameraRealSense2::getPoseAndIMU(
 				{
 					if(stamp < iterA->first)
 					{
-						UWARN("Could not find pose data to interpolate at image time %f (earliest is %f). Are sensors synchronized?", stamp, iterA->first);
+						UWARN("Could not find pose data to interpolate at image time %f (earliest is %f). Are sensors synchronized?", stamp/1000.0, iterA->first/1000.0);
 					}
 					else
 					{
-						UWARN("Could not find pose data to interpolate at image time %f (between %f and %f). Are sensors synchronized?", stamp, iterA->first, iterB->first);
+						UWARN("Could not find pose data to interpolate at image time %f (between %f and %f). Are sensors synchronized?", stamp/1000.0, iterA->first/1000.0, iterB->first/1000.0);
 					}
 				}
 				if(!globalTimeSync_)
@@ -304,6 +302,11 @@ void CameraRealSense2::getPoseAndIMU(
 			}
 		}
 		poseMutex_.unlock();
+	}
+
+	if(accBuffer_.empty() || gyroBuffer_.empty())
+	{
+		return;
 	}
 
 	// Interpolate acc
@@ -325,7 +328,7 @@ void CameraRealSense2::getPoseAndIMU(
 		{
 			if(maxWaitTimeMs>0)
 			{
-				UWARN("Could not find acc data to interpolate at image time %f after waiting %d ms (last is %f)...", stamp, maxWaitTimeMs, accBuffer_.rbegin()->first);
+				UWARN("Could not find acc data to interpolate at image time %f after waiting %d ms (last is %f)...", stamp/1000.0, maxWaitTimeMs, accBuffer_.rbegin()->first/1000.0);
 			}
 			imuMutex_.unlock();
 			return;
@@ -361,11 +364,11 @@ void CameraRealSense2::getPoseAndIMU(
 				{
 					if(stamp < iterA->first)
 					{
-						UWARN("Could not find acc data to interpolate at image time %f (earliest is %f). Are sensors synchronized?", stamp, iterA->first);
+						UWARN("Could not find acc data to interpolate at image time %f (earliest is %f). Are sensors synchronized?", stamp/1000.0, iterA->first/1000.0);
 					}
 					else
 					{
-						UWARN("Could not find acc data to interpolate at image time %f (between %f and %f). Are sensors synchronized?", stamp, iterA->first, iterB->first);
+						UWARN("Could not find acc data to interpolate at image time %f (between %f and %f). Are sensors synchronized?", stamp/1000.0, iterA->first/1000.0, iterB->first/1000.0);
 					}
 				}
 				if(!globalTimeSync_)
@@ -409,7 +412,7 @@ void CameraRealSense2::getPoseAndIMU(
 		{
 			if(maxWaitTimeMs>0)
 			{
-				UWARN("Could not find gyro data to interpolate at image time %f after waiting %d ms (last is %f)...", stamp, maxWaitTimeMs, gyroBuffer_.rbegin()->first);
+				UWARN("Could not find gyro data to interpolate at image time %f after waiting %d ms (last is %f)...", stamp/1000.0, maxWaitTimeMs, gyroBuffer_.rbegin()->first/1000.0);
 			}
 			imuMutex_.unlock();
 			return;
@@ -445,11 +448,11 @@ void CameraRealSense2::getPoseAndIMU(
 				{
 					if(stamp < iterA->first)
 					{
-						UWARN("Could not find gyro data to interpolate at image time %f (earliest is %f). Are sensors synchronized?", stamp, iterA->first);
+						UWARN("Could not find gyro data to interpolate at image time %f (earliest is %f). Are sensors synchronized?", stamp/1000.0, iterA->first/1000.0);
 					}
 					else
 					{
-						UWARN("Could not find gyro data to interpolate at image time %f (between %f and %f). Are sensors synchronized?", stamp, iterA->first, iterB->first);
+						UWARN("Could not find gyro data to interpolate at image time %f (between %f and %f). Are sensors synchronized?", stamp/1000.0, iterA->first/1000.0, iterB->first/1000.0);
 					}
 				}
 				if(!globalTimeSync_)
@@ -504,12 +507,13 @@ bool CameraRealSense2::init(const std::string & calibrationFolder, const std::st
 		{
 			auto sn = dev.get_info(RS2_CAMERA_INFO_SERIAL_NUMBER);
 			auto pid_str = dev.get_info(RS2_CAMERA_INFO_PRODUCT_ID);
+			auto name = dev.get_info(RS2_CAMERA_INFO_NAME);
 
 			uint16_t pid;
 			std::stringstream ss;
 			ss << std::hex << pid_str;
 			ss >> pid;
-			UINFO("Device with serial number %s was found with product ID=%d.", sn, (int)pid);
+			UINFO("Device \"%s\" with serial number %s was found with product ID=%d.", name, sn, (int)pid);
 			if(dualMode_ && pid == 0x0B37)
 			{
 				// Dual setup: device[0] = D400, device[1] = T265
@@ -517,7 +521,7 @@ bool CameraRealSense2::init(const std::string & calibrationFolder, const std::st
 				dev_.resize(2);
 				dev_[1] = dev;
 			}
-			else if (!found && (deviceId_.empty() || deviceId_ == sn))
+			else if (!found && (deviceId_.empty() || deviceId_ == sn || uStrContains(name, uToUpperCase(deviceId_))))
 			{
 				if(dev_.empty())
 				{
@@ -599,12 +603,11 @@ bool CameraRealSense2::init(const std::string & calibrationFolder, const std::st
 		}
 	});
 
+	auto sn = dev_[0].get_info(RS2_CAMERA_INFO_SERIAL_NUMBER);
+	UINFO("Using device with Serial No: %s", sn);
 
 	auto camera_name = dev_[0].get_info(RS2_CAMERA_INFO_NAME);
 	UINFO("Device Name: %s", camera_name);
-
-	auto sn = dev_[0].get_info(RS2_CAMERA_INFO_SERIAL_NUMBER);
-	UINFO("Device Serial No: %s", sn);
 
 	auto fw_ver = dev_[0].get_info(RS2_CAMERA_INFO_FIRMWARE_VERSION);
 	UINFO("Device FW version: %s", fw_ver);
@@ -882,25 +885,13 @@ bool CameraRealSense2::init(const std::string & calibrationFolder, const std::st
 			 std::cout<< model_ << std::endl;
 			 return false;
 		 }
-		 depthToRGBExtrinsics_ = depthStreamProfile.get_extrinsics_to(rgbStreamProfile);
 
 		 if(dualMode_)
 		 {
-			 Transform opticalTransform(0, 0, 1, 0, -1, 0, 0, 0, 0, -1, 0, 0);
 			 UINFO("Set base to pose");
-			 this->setLocalTransform(this->getLocalTransform()*opticalTransform.inverse());
-			 UINFO("poseToLeftIR = %s", dualExtrinsics_.prettyPrint().c_str());
-			 Transform baseToCam = this->getLocalTransform()*dualExtrinsics_*opticalTransform;
-			 if(!ir_)
-			 {
-				 Transform leftIRToRGB(
-						 depthToRGBExtrinsics_.rotation[0], depthToRGBExtrinsics_.rotation[1], depthToRGBExtrinsics_.rotation[2], depthToRGBExtrinsics_.translation[0],
-						 depthToRGBExtrinsics_.rotation[3], depthToRGBExtrinsics_.rotation[4], depthToRGBExtrinsics_.rotation[5], depthToRGBExtrinsics_.translation[1],
-						 depthToRGBExtrinsics_.rotation[6], depthToRGBExtrinsics_.rotation[7], depthToRGBExtrinsics_.rotation[8], depthToRGBExtrinsics_.translation[2]);
-				 leftIRToRGB = leftIRToRGB.inverse();
-				 UINFO("leftIRToRGB = %s", leftIRToRGB.prettyPrint().c_str());
-				 baseToCam *= leftIRToRGB;
-			 }
+			 this->setLocalTransform(this->getLocalTransform()*CameraModel::opticalRotation().inverse());
+			 UINFO("dualExtrinsics_ = %s", dualExtrinsics_.prettyPrint().c_str());
+			 Transform baseToCam = this->getLocalTransform()*dualExtrinsics_;
 			 UASSERT(profilesPerSensor.size()>=2);
 			 UASSERT(profilesPerSensor.back().size() == 3);
 			 rs2_extrinsics poseToIMU = profilesPerSensor.back()[0].get_extrinsics_to(profilesPerSensor.back()[2]);
@@ -1012,11 +1003,18 @@ bool CameraRealSense2::init(const std::string & calibrationFolder, const std::st
 			poseToIMUT = realsense2PoseRotation_ * poseToIMUT;
 			UINFO("poseToIMU = %s", poseToIMUT.prettyPrint().c_str());
 
-			UINFO("Set base to pose");
 			Transform opticalTransform(0, 0, 1, 0, -1, 0, 0, 0, 0, -1, 0, 0);
 			this->setLocalTransform(this->getLocalTransform() * opticalTransform.inverse());
 			stereoModel_.setLocalTransform(this->getLocalTransform()*poseToLeftT);
 			imuLocalTransform_ = this->getLocalTransform()* poseToIMUT;
+
+			if(odometryImagesDisabled_)
+			{
+				// keep only pose stream
+				std::vector<rs2::stream_profile> profiles;
+				profiles.push_back(profilesPerSensor[0][4]);
+				profilesPerSensor[0] = profiles;
+			}
 		}
 		else
 		{
@@ -1114,6 +1112,29 @@ bool CameraRealSense2::odomProvided() const
 #endif
 }
 
+bool CameraRealSense2::getPose(double stamp, Transform & pose, cv::Mat & covariance)
+{
+#ifdef RTABMAP_REALSENSE2
+	IMU imu;
+	unsigned int confidence = 0;
+	double rsStamp = stamp*1000.0;
+	Transform p;
+	getPoseAndIMU(rsStamp, p, confidence, imu);
+
+	if(!p.isNull())
+	{
+		// Transform in base frame
+		pose = this->getLocalTransform() * p * this->getLocalTransform().inverse();
+
+		covariance = cv::Mat::eye(6,6,CV_64FC1) * 0.0001;
+		covariance.rowRange(0,3) *= pow(10, 3-(int)confidence);
+		covariance.rowRange(3,6) *= pow(10, 1-(int)confidence);
+		return true;
+	}
+#endif
+	return false;
+}
+
 void CameraRealSense2::setEmitterEnabled(bool enabled)
 {
 #ifdef RTABMAP_REALSENSE2
@@ -1166,10 +1187,11 @@ void CameraRealSense2::setDualMode(bool enabled, const Transform & extrinsics)
 #ifdef RTABMAP_REALSENSE2
 	UASSERT(!enabled || !extrinsics.isNull());
 	dualMode_ = enabled;
-	dualExtrinsics_ =  extrinsics;
+	dualExtrinsics_ =  extrinsics*CameraModel::opticalRotation();
 	if(dualMode_)
 	{
 		odometryProvided_ = true;
+		odometryImagesDisabled_ = false;
 	}
 #endif
 }
@@ -1188,7 +1210,7 @@ void CameraRealSense2::setImagesRectified(bool enabled)
 #endif
 }
 
-void CameraRealSense2::setOdomProvided(bool enabled)
+void CameraRealSense2::setOdomProvided(bool enabled, bool imageStreamsDisabled)
 {
 #ifdef RTABMAP_REALSENSE2
 	if(dualMode_ && !enabled)
@@ -1197,6 +1219,7 @@ void CameraRealSense2::setOdomProvided(bool enabled)
 		dualMode_ = false;
 	}
 	odometryProvided_ = enabled;
+	odometryImagesDisabled_ = enabled && imageStreamsDisabled;
 #endif
 }
 

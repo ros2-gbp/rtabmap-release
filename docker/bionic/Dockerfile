@@ -4,29 +4,21 @@ FROM ros:melodic-perception
 
 # Install build dependencies
 RUN apt-get update && \
-    apt-get install -y ros-melodic-rtabmap-ros && \
+    apt-get install -y git software-properties-common ros-melodic-rtabmap-ros && \
     apt-get remove -y ros-melodic-rtabmap && \
     rm -rf /var/lib/apt/lists/
 
 WORKDIR /root/
 
 # GTSAM
-RUN git clone https://bitbucket.org/gtborg/gtsam.git
-RUN cd gtsam && \
-    git checkout 4.0.0-alpha2 && \
-    mkdir build && \
-    cd build && \
-    cmake -DMETIS_SHARED=ON -DGTSAM_BUILD_STATIC_LIBRARY=OFF -DGTSAM_USE_SYSTEM_EIGEN=ON -DGTSAM_BUILD_TESTS=OFF -DGTSAM_BUILD_EXAMPLES_ALWAYS=OFF -DCMAKE_BUILD_TYPE=Release .. && \
-    make -j$(nproc) && \
-    make install && \
-    cd && \
-    rm -r gtsam
+RUN add-apt-repository ppa:borglab/gtsam-release-4.0 -y
+RUN apt install libgtsam-dev libgtsam-unstable-dev -y
 
 # libpointmatcher 
 RUN git clone https://github.com/ethz-asl/libnabo.git
-#commit Apr 25 2018
+#commit February 13 2021
 RUN cd libnabo && \
-    git checkout 7e378f6765393462357b8b74d8dc8c5554542ae6 && \
+    git checkout 3cab7eed92bd5d4aed997347b8c8a2692a83a532 && \
     mkdir build && \
     cd build && \
     cmake -DCMAKE_BUILD_TYPE=Release .. && \
@@ -35,9 +27,9 @@ RUN cd libnabo && \
     cd && \
     rm -r libnabo
 RUN git clone https://github.com/ethz-asl/libpointmatcher.git
-#commit Jan 19 2018
+#commit April 6 2021
 RUN cd libpointmatcher && \
-    git checkout 00004bd41e44a1cf8de24ad87e4914760717cbcc && \
+    git checkout 76f99fce0fe69e6384102a0343fdf8d262626e1f && \
     mkdir build && \
     cd build && \
     cmake -DCMAKE_BUILD_TYPE=Release .. && \
@@ -46,7 +38,7 @@ RUN cd libpointmatcher && \
     cd && \
     rm -r libpointmatcher
 
-# AliceVision
+# AliceVision v2.4.0 modified (Sept 13 2021)
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
       libsuitesparse-dev \
       libceres-dev \
@@ -58,38 +50,44 @@ RUN cd oiio && \
     git checkout Release-2.0.12 && \
     mkdir build && \
     cd build && \
-    cmake .. && \
+    cmake -DUSE_PYTHON=OFF -DOIIO_BUILD_TESTS=OFF -DOIIO_BUILD_TOOLS=OFF .. && \
     make -j$(nproc) && \
     make install && \
     cd && \
     rm -r oiio
-RUN git clone https://github.com/alembic/alembic.git
-RUN cd alembic && \
-    git checkout 1.7.12 && \
+RUN git clone https://github.com/assimp/assimp.git
+RUN cd assimp && \
+    git checkout 71a87b653cd4b5671104fe49e2e38cf5dd4d8675 && \
     mkdir build && \
     cd build && \
     cmake .. && \
     make -j$(nproc) && \
     make install && \
     cd && \
-    rm -r alembic
+    rm -r assimp
 RUN git clone https://github.com/alicevision/geogram.git
 RUN cd geogram && \
-    git checkout v1.7.1 && \
+    git checkout v1.7.6 && \
+    wget https://gist.githubusercontent.com/matlabbe/1df724465106c056ca4cc195c81d8cf0/raw/b3ed4cb8f9b270833a40d57d870a259eabfa4415/geogram_8b2ae61.patch && \
+    git apply geogram_8b2ae61.patch && \
     ./configure.sh && \
     cd build/Linux64-gcc-dynamic-Release && \
     make -j$(nproc) && \
     make install && \
     cd && \
     rm -r geogram
+# cmake >=3.11 required
+RUN wget -nv https://github.com/Kitware/CMake/releases/download/v3.17.0/cmake-3.17.0-Linux-x86_64.tar.gz && \
+    tar -xzf cmake-3.17.0-Linux-x86_64.tar.gz && \
+    rm cmake-3.17.0-Linux-x86_64.tar.gz
 RUN git clone https://github.com/alicevision/AliceVision.git --recursive
 RUN cd AliceVision && \
-    git checkout v2.2.0 && \
-    wget https://gist.githubusercontent.com/matlabbe/469bba5e7733ad6f2e3d7857b84f1f9e/raw/edaa88ed38344219af1cc919a5597f5a74445336/alice_vision_eigen.patch && \
-    git apply alice_vision_eigen.patch && \
+    git checkout 0f6115b6af6183c524aa7fcf26141337c1cf3872 && \
+    wget https://gist.githubusercontent.com/matlabbe/1df724465106c056ca4cc195c81d8cf0/raw/b3ed4cb8f9b270833a40d57d870a259eabfa4415/alicevision_0f6115b.patch && \
+    git apply alicevision_0f6115b.patch && \
     mkdir build && \
     cd build && \
-    cmake -DALICEVISION_USE_CUDA=OFF .. && \
+    ../../cmake-3.17.0-Linux-x86_64/bin/cmake -DALICEVISION_USE_CUDA=OFF -DALICEVISION_USE_APRILTAG=OFF -DALICEVISION_BUILD_SOFTWARE=OFF .. && \
     make -j$(nproc) && \
     make install && \
     cd && \
@@ -104,8 +102,8 @@ RUN rm /bin/sh && ln -s /bin/bash /bin/sh
 # Build RTAB-Map project
 RUN source /ros_entrypoint.sh && \
     cd rtabmap/build && \
-    cmake -DWITH_ALICE_VISION=ON .. && \
-    make && \
+    ../../cmake-3.17.0-Linux-x86_64/bin/cmake -DWITH_ALICE_VISION=ON .. && \
+    make -j2 && \
     make install && \
     cd ../.. && \
     rm -rf rtabmap && \

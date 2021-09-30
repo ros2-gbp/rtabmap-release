@@ -54,7 +54,7 @@ public:
 	CameraOpenNI2(const std::string & deviceId = "",
 					Type type = kTypeColorDepth,
 					float imageRate = 0,
-					const Transform & localTransform = CameraModel::opticalRotation());
+					const Transform & localTransform = Transform::getIdentity());
 	virtual ~CameraOpenNI2();
 
 	virtual bool init(const std::string & calibrationFolder = ".", const std::string & cameraName = "");
@@ -68,6 +68,7 @@ public:
 	bool setMirroring(bool enabled);
 	void setOpenNI2StampsAndIDsUsed(bool used);
 	void setIRDepthShift(int horizontal, int vertical);
+	void setDepthDecimation(int decimation);
 
 protected:
 	virtual SensorData captureImage(CameraInfo * info = 0);
@@ -85,6 +86,7 @@ private:
 	StereoCameraModel _stereoModel;
 	int _depthHShift;
 	int _depthVShift;
+	int _depthDecimation;
 #endif
 };
 

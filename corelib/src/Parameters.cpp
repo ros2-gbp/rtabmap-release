@@ -825,6 +825,12 @@ ParametersMap Parameters::parseArguments(int argc, char * argv[], bool onlyParam
 #else
 				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
 #endif
+				str = "With FLOAM:";
+#ifdef RTABMAP_FLOAM
+				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
+#endif
 				str = "With FOVIS:";
 #ifdef RTABMAP_FOVIS
 				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
@@ -869,6 +875,12 @@ ParametersMap Parameters::parseArguments(int argc, char * argv[], bool onlyParam
 #endif
 				str = "With VINS-Fusion:";
 #ifdef RTABMAP_VINS
+				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
+#endif
+				str = "With OpenVINS:";
+#ifdef RTABMAP_OPENVINS
 				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
 #else
 				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
@@ -1047,7 +1059,7 @@ ParametersMap Parameters::parseArguments(int argc, char * argv[], bool onlyParam
 						ignore = true;
 					}
 #endif
-#ifndef RTABMAP_LOAM
+#if not defined(RTABMAP_LOAM) and not defined(RTABMAP_FLOAM)
 					if(group.compare("OdomLOAM") == 0)
 					{
 						ignore = true;
