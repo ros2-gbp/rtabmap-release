@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2019, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -25,37 +25,40 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifndef RTABMAP_EDITCONSTRAINTDIALOG_H_
-#define RTABMAP_EDITCONSTRAINTDIALOG_H_
+#ifndef ODOMETRYFLOAM_H_
+#define ODOMETRYFLOAM_H_
 
-#include "rtabmap/gui/RtabmapGuiExp.h" // DLL export/import defines
+#include <rtabmap/core/Odometry.h>
 
-#include <QDialog>
-#include <rtabmap/core/Transform.h>
-
-class Ui_EditConstraintDialog;
+class LaserProcessingClass;
+class OdomEstimationClass;
 
 namespace rtabmap {
 
-class RTABMAPGUI_EXP EditConstraintDialog : public QDialog
+class RTABMAP_EXP OdometryFLOAM : public Odometry
 {
-	Q_OBJECT
-
 public:
-	EditConstraintDialog(const Transform & constraint, double linearSigma = 1, double angularSigma = 1, QWidget * parent = 0);
+	OdometryFLOAM(const rtabmap::ParametersMap & parameters = rtabmap::ParametersMap());
+	virtual ~OdometryFLOAM();
 
-	virtual ~EditConstraintDialog();
-	Transform getTransform() const;
-	double getLinearVariance() const;
-	double getAngularVariance() const;
-
-private Q_SLOTS:
-	void switchUnits();
+	virtual void reset(const Transform & initialPose = Transform::getIdentity());
+	virtual Odometry::Type getType() {return Odometry::kTypeFLOAM;}
 
 private:
-	Ui_EditConstraintDialog * _ui;
+	virtual Transform computeTransform(SensorData & image, const Transform & guess = Transform(), OdometryInfo * info = 0);
+
+private:
+#ifdef RTABMAP_FLOAM
+	LaserProcessingClass * laserProcessing_;
+	OdomEstimationClass * odomEstimation_;
+
+	Transform lastPose_;
+	bool lost_;
+	float linVar_;
+	float angVar_;
+#endif
 };
 
 }
 
-#endif /* EDITCONSTRAINTDIALOG_H_ */
+#endif /* ODOMETRYFLOAM_H_ */
