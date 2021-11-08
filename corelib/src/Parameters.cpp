@@ -213,14 +213,15 @@ ParametersMap Parameters::getDefaultParameters(const std::string & groupIn)
 	return parameters;
 }
 
-ParametersMap Parameters::filterParameters(const ParametersMap & parameters, const std::string & groupIn)
+ParametersMap Parameters::filterParameters(const ParametersMap & parameters, const std::string & group, bool remove)
 {
 	ParametersMap output;
 	for(rtabmap::ParametersMap::const_iterator iter=parameters.begin(); iter!=parameters.end(); ++iter)
 	{
 		UASSERT(uSplit(iter->first, '/').size()  == 2);
 		std::string group = uSplit(iter->first, '/').front();
-		if(group.compare(groupIn) == 0)
+		bool sameGroup = group.compare(group) == 0;
+		if((!remove && sameGroup) || (remove && !sameGroup))
 		{
 			output.insert(*iter);
 		}
@@ -233,6 +234,9 @@ const std::map<std::string, std::pair<bool, std::string> > & Parameters::getRemo
 	if(removedParameters_.empty())
 	{
 		// removed parameters
+
+		// 0.20.15
+		removedParameters_.insert(std::make_pair("Grid/FromDepth",           std::make_pair(true, Parameters::kGridSensor())));
 
 		// 0.20.9
 		removedParameters_.insert(std::make_pair("OdomORBSLAM2/VocPath",     std::make_pair(true, Parameters::kOdomORBSLAMVocPath())));
@@ -659,6 +663,12 @@ ParametersMap Parameters::parseArguments(int argc, char * argv[], bool onlyParam
 #endif
 				str = "With Madgwick:";
 #ifdef RTABMAP_MADGWICK
+				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
+#endif
+				str = "With PDAL:";
+#ifdef RTABMAP_PDAL
 				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
 #else
 				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;

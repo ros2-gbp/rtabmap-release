@@ -292,6 +292,7 @@ DatabaseViewer::DatabaseViewer(const QString & ini, QWidget * parent) :
 	connect(ui_->actionDetect_more_loop_closures, SIGNAL(triggered()), this, SLOT(detectMoreLoopClosures()));
 	connect(ui_->actionUpdate_all_neighbor_covariances, SIGNAL(triggered()), this, SLOT(updateAllNeighborCovariances()));
 	connect(ui_->actionUpdate_all_loop_closure_covariances, SIGNAL(triggered()), this, SLOT(updateAllLoopClosureCovariances()));
+	connect(ui_->actionUpdate_all_landmark_covariances, SIGNAL(triggered()), this, SLOT(updateAllLandmarkCovariances()));
 	connect(ui_->actionRefine_all_neighbor_links, SIGNAL(triggered()), this, SLOT(refineAllNeighborLinks()));
 	connect(ui_->actionRefine_all_loop_closure_links, SIGNAL(triggered()), this, SLOT(refineAllLoopClosureLinks()));
 	connect(ui_->actionRegenerate_local_grid_maps, SIGNAL(triggered()), this, SLOT(regenerateLocalMaps()));
@@ -1830,7 +1831,8 @@ void DatabaseViewer::updateIds()
 				ids.find(jter->second.from()) != ids.end() &&
 				(ids.find(jter->second.to()) != ids.end() || jter->second.to()<0) && // to add landmark links
 				graph::findLink(links_, jter->second.from(), jter->second.to()) == links_.end() &&
-				invertedLinkIter != links.end())
+				invertedLinkIter != links.end() &&
+				w != -9)
 			{
 				// check if user_data is set in opposite direction
 				if(jter->second.userDataCompressed().cols == 0 &&
@@ -4128,7 +4130,27 @@ void DatabaseViewer::updateAllNeighborCovariances()
 }
 void DatabaseViewer::updateAllLoopClosureCovariances()
 {
-	updateAllCovariances(loopLinks_);
+	QList<rtabmap::Link> links;
+	for(int i=0; i<loopLinks_.size(); ++i)
+	{
+		if(loopLinks_.at(i).type() != Link::kLandmark)
+		{
+			links.push_back(loopLinks_.at(i));
+		}
+	}
+	updateAllCovariances(links);
+}
+void DatabaseViewer::updateAllLandmarkCovariances()
+{
+	QList<rtabmap::Link> links;
+	for(int i=0; i<loopLinks_.size(); ++i)
+	{
+		if(loopLinks_.at(i).type() == Link::kLandmark)
+		{
+			links.push_back(loopLinks_.at(i));
+		}
+	}
+	updateAllCovariances(links);
 }
 
 void DatabaseViewer::updateAllCovariances(const QList<Link> & links)
@@ -4136,10 +4158,10 @@ void DatabaseViewer::updateAllCovariances(const QList<Link> & links)
 	if(links.size())
 	{
 		bool ok = false;
-		double stddev = QInputDialog::getDouble(this, tr("Linear error"), tr("Std deviation (m)"), 0.01, 0.0001, 9, 4, &ok);
+		double stddev = QInputDialog::getDouble(this, tr("Linear error"), tr("Std deviation (m) 0=inf"), 0.01, 0.0, 9, 4, &ok);
 		if(!ok) return;
 		double linearVar = stddev*stddev;
-		stddev = QInputDialog::getDouble(this, tr("Angular error"), tr("Std deviation (deg)"), 1, 0.01, 45, 2, &ok)*M_PI/180.0;
+		stddev = QInputDialog::getDouble(this, tr("Angular error"), tr("Std deviation (deg) 0=inf"), 1, 0.0, 90, 2, &ok)*M_PI/180.0;
 		if(!ok) return;
 		double angularVar = stddev*stddev;
 
@@ -4151,8 +4173,22 @@ void DatabaseViewer::updateAllCovariances(const QList<Link> & links)
 		progressDialog->show();
 
 		cv::Mat infMatrix = cv::Mat::eye(6,6,CV_64FC1);
-		infMatrix(cv::Range(0,3), cv::Range(0,3))/=linearVar;
-		infMatrix(cv::Range(3,6), cv::Range(3,6))/=angularVar;
+		if(linearVar == 0.0)
+		{
+			infMatrix(cv::Range(0,3), cv::Range(0,3)) /= 9999.9;
+		}
+		else
+		{
+			infMatrix(cv::Range(0,3), cv::Range(0,3)) /= linearVar;
+		}
+		if(angularVar == 0.0)
+		{
+			infMatrix(cv::Range(3,6), cv::Range(3,6)) /= 9999.9;
+		}
+		else
+		{
+			infMatrix(cv::Range(3,6), cv::Range(3,6)) /= angularVar;
+		}
 
 		for(int i=0; i<links.size(); ++i)
 		{
@@ -4989,6 +5025,7 @@ void DatabaseViewer::update(int value,
 								float xMin=0.0f, yMin=0.0f;
 								cv::Mat map8S;
 								ParametersMap parameters = ui_->parameters_toolbox->getParameters();
+								parameters = Parameters::filterParameters(parameters, "GridGlobal", true);
 								float gridCellSize = Parameters::defaultGridCellSize();
 								Parameters::parse(parameters, Parameters::kGridCellSize(), gridCellSize);
 #ifdef RTABMAP_OCTOMAP
@@ -4999,7 +5036,7 @@ void DatabaseViewer::update(int value,
 								else
 #endif
 								{
-									OccupancyGrid grid(ui_->parameters_toolbox->getParameters());
+									OccupancyGrid grid(parameters);
 									grid.setCellSize(gridCellSize);
 									grid.addToCache(data.id(), localMaps.begin()->second.first.first, localMaps.begin()->second.first.second, localMaps.begin()->second.second);
 									grid.update(poses);
@@ -5602,24 +5639,41 @@ void DatabaseViewer::editConstraint()
 {
 	if(ids_.size())
 	{
-		Link link = this->findActiveLink(ids_.at(ui_->horizontalSlider_A->value()), ids_.at(ui_->horizontalSlider_B->value()));
+		Link link;
+		if(ui_->label_type->text().toInt() == Link::kLandmark)
+		{
+			int position = ui_->horizontalSlider_loops->value();
+			link = loopLinks_.at(position);
+		}
+		else
+		{
+			link = this->findActiveLink(ids_.at(ui_->horizontalSlider_A->value()), ids_.at(ui_->horizontalSlider_B->value()));
+		}
 		if(link.isValid())
 		{
 			cv::Mat covBefore = link.infMatrix().inv();
 			EditConstraintDialog dialog(link.transform(),
-					covBefore.at<double>(0,0)!=1.0?std::sqrt(covBefore.at<double>(0,0)):0,
-					covBefore.at<double>(5,5)!=1.0?std::sqrt(covBefore.at<double>(5,5)):0);
+					covBefore.at<double>(0,0)<9999.0?std::sqrt(covBefore.at<double>(0,0)):0.0,
+					covBefore.at<double>(5,5)<9999.0?std::sqrt(covBefore.at<double>(5,5)):0.0);
 			if(dialog.exec() == QDialog::Accepted)
 			{
 				bool updated = false;
 				cv::Mat covariance = cv::Mat::eye(6, 6, CV_64FC1);
 				if(dialog.getLinearVariance()>0)
 				{
-					covariance(cv::Range(0,3), cv::Range(0,3)) *= dialog.getLinearVariance()*dialog.getLinearVariance();
+					covariance(cv::Range(0,3), cv::Range(0,3)) *= dialog.getLinearVariance();
+				}
+				else
+				{
+					covariance(cv::Range(0,3), cv::Range(0,3)) *= 9999.9;
 				}
 				if(dialog.getAngularVariance()>0)
 				{
-					covariance(cv::Range(3,6), cv::Range(3,6)) *= dialog.getAngularVariance()*dialog.getAngularVariance();
+					covariance(cv::Range(3,6), cv::Range(3,6)) *= dialog.getAngularVariance();
+				}
+				else
+				{
+					covariance(cv::Range(3,6), cv::Range(3,6)) *= 9999.9;
 				}
 				Link newLink(link.from(), link.to(), link.type(), dialog.getTransform(), covariance.inv());
 				std::multimap<int, Link>::iterator iter = linksRefined_.find(link.from());
@@ -5654,11 +5708,19 @@ void DatabaseViewer::editConstraint()
 				cv::Mat covariance = cv::Mat::eye(6, 6, CV_64FC1);
 				if(dialog.getLinearVariance()>0)
 				{
-					covariance(cv::Range(0,3), cv::Range(0,3)) *= dialog.getLinearVariance()*dialog.getLinearVariance();
+					covariance(cv::Range(0,3), cv::Range(0,3)) *= dialog.getLinearVariance();
+				}
+				else
+				{
+					covariance(cv::Range(0,3), cv::Range(0,3)) *= 9999.9;
 				}
 				if(dialog.getAngularVariance()>0)
 				{
-					covariance(cv::Range(3,6), cv::Range(3,6)) *= dialog.getAngularVariance()*dialog.getAngularVariance();
+					covariance(cv::Range(3,6), cv::Range(3,6)) *= dialog.getAngularVariance();
+				}
+				else
+				{
+					covariance(cv::Range(3,6), cv::Range(3,6)) *= 9999.9;
 				}
 				int from = ids_.at(ui_->horizontalSlider_A->value());
 				int to = ids_.at(ui_->horizontalSlider_B->value());
@@ -6315,29 +6377,36 @@ void DatabaseViewer::updateConstraintButtons()
 	ui_->pushButton_reject->setEnabled(false);
 	ui_->toolButton_constraint->setEnabled(false);
 
+	Link currentLink;
+	int from;
+	int to;
 	if(ui_->label_type->text().toInt() == Link::kLandmark)
 	{
-		ui_->pushButton_reject->setEnabled(true);
-		return;
+		//check for modified link
+		currentLink = loopLinks_.at(ui_->horizontalSlider_loops->value());
+		from = currentLink.from();
+		to = currentLink.to();
 	}
-
-	int from = ids_.at(ui_->horizontalSlider_A->value());
-	int to = ids_.at(ui_->horizontalSlider_B->value());
-	if(from!=to && from && to &&
-	   odomPoses_.find(from) != odomPoses_.end() &&
-	   odomPoses_.find(to) != odomPoses_.end() &&
-	   (ui_->checkBox_enableForAll->isChecked() ||
-	   (weights_.find(from) != weights_.end() && weights_.at(from)>=0 &&
-	   weights_.find(to) != weights_.end() && weights_.at(to)>=0)))
+	else
 	{
-		if((!containsLink(links_, from ,to) && !containsLink(linksAdded_, from ,to)) ||
-			containsLink(linksRemoved_, from ,to))
+		from = ids_.at(ui_->horizontalSlider_A->value());
+		to = ids_.at(ui_->horizontalSlider_B->value());
+		if(from!=to && from && to &&
+		   odomPoses_.find(from) != odomPoses_.end() &&
+		   odomPoses_.find(to) != odomPoses_.end() &&
+		   (ui_->checkBox_enableForAll->isChecked() ||
+		   (weights_.find(from) != weights_.end() && weights_.at(from)>=0 &&
+		   weights_.find(to) != weights_.end() && weights_.at(to)>=0)))
 		{
-			ui_->pushButton_add->setEnabled(true);
+			if((!containsLink(links_, from ,to) && !containsLink(linksAdded_, from ,to)) ||
+				containsLink(linksRemoved_, from ,to))
+			{
+				ui_->pushButton_add->setEnabled(true);
+			}
 		}
-	}
 
-	Link currentLink = findActiveLink(from ,to);
+		currentLink = findActiveLink(from ,to);
+	}
 
 	if(currentLink.isValid() &&
 		((currentLink.from() == from && currentLink.to() == to) || (currentLink.from() == to && currentLink.to() == from)))
@@ -6348,19 +6417,13 @@ void DatabaseViewer::updateConstraintButtons()
 		}
 
 		//check for modified link
-		bool modified = false;
 		std::multimap<int, Link>::iterator iter = rtabmap::graph::findLink(linksRefined_, currentLink.from(), currentLink.to());
 		if(iter != linksRefined_.end())
 		{
 			currentLink = iter->second;
 			ui_->pushButton_reset->setEnabled(true);
-			modified = true;
 		}
-		if(!modified)
-		{
-			ui_->pushButton_reset->setEnabled(false);
-		}
-		ui_->pushButton_refine->setEnabled(currentLink.from()!=currentLink.to());
+		ui_->pushButton_refine->setEnabled(currentLink.from()!=currentLink.to() && currentLink.type() != Link::kLandmark);
 		ui_->toolButton_constraint->setEnabled(true);
 	}
 }
@@ -6547,6 +6610,7 @@ void DatabaseViewer::sliderIterationsValueChanged(int value)
 				ui_->graphViewer->updatePosterior(colors, 1, 1);
 			}
 		}
+		QGraphicsRectItem * rectScaleItem = 0;
 		ui_->graphViewer->clearMap();
 		occupancyGridViewer_->clear();
 		if(graph.size() && localMaps.size() &&
@@ -6631,6 +6695,70 @@ void DatabaseViewer::sliderIterationsValueChanged(int value)
 					{
 						occupancyGridViewer_->addOccupancyGridMap(map8U, cellSize, xMin, yMin, 1.0f);
 						occupancyGridViewer_->refreshView();
+					}
+
+					// Zoom to ignore unknowns
+					int xFirst = 0;
+					int yFirst = 0;
+					int xLast = map.cols;
+					int yLast = map.rows;
+					bool firstSet = false;
+					bool lastSet = false;
+					for(int x=0; x<map.cols && (!firstSet || !lastSet); ++x)
+					{
+						for(int y=0; y<map.rows; ++y)
+						{
+							// check for first
+							if(!firstSet && map.at<char>(y, x) != -1)
+							{
+								xFirst = x;
+								firstSet = true;
+							}
+							// check for last
+							int opp = map.cols-(x+1);
+							if(!lastSet && map.at<char>(y, opp) != -1)
+							{
+								xLast = opp;
+								lastSet = true;
+							}
+						}
+					}
+					firstSet = false;
+					lastSet = false;
+					for(int y=0; y<map.rows && (!firstSet || !lastSet); ++y)
+					{
+						for(int x=0; x<map.cols; ++x)
+						{
+							// check for first
+							if(!firstSet && map.at<char>(y, x) != -1)
+							{
+								yFirst = y;
+								firstSet = true;
+							}
+							// check for last
+							int opp = map.rows-(y+1);
+							if(!lastSet && map.at<char>(map.rows-(y+1), x) != -1)
+							{
+								yLast = opp;
+								lastSet = true;
+							}
+						}
+					}
+					// Only zoom if there are significant unknowns
+					if( (xLast > xFirst && yLast > yFirst) &&
+						(xFirst > 50 ||
+						 xLast < map.cols-50 ||
+						 yFirst > 50 ||
+						 yLast < map.rows-50))
+					{
+						rectScaleItem = ui_->graphViewer->scene()->addRect(
+								xFirst-25,
+								yFirst-25,
+								xLast-xFirst+50,
+								yLast-yFirst+50);
+						rectScaleItem->setTransform(QTransform::fromScale(cellSize*100.0f, -cellSize*100.0f), true);
+						rectScaleItem->setRotation(90);
+						rectScaleItem->setPos(-yMin*100.0f, -xMin*100.0f);
 					}
 				}
 			}
@@ -6758,6 +6886,13 @@ void DatabaseViewer::sliderIterationsValueChanged(int value)
 			}
 		}
 		ui_->graphViewer->fitInView(ui_->graphViewer->scene()->itemsBoundingRect(), Qt::KeepAspectRatio);
+		if(rectScaleItem != 0)
+		{
+			ui_->graphViewer->fitInView(rectScaleItem, Qt::KeepAspectRatio);
+			ui_->graphViewer->scene()->removeItem(rectScaleItem);
+			delete rectScaleItem;
+		}
+
 		ui_->graphViewer->update();
 		ui_->label_iterations->setNum(value);
 
@@ -8194,6 +8329,14 @@ void DatabaseViewer::resetConstraint()
 {
 	int from = ids_.at(ui_->horizontalSlider_A->value());
 	int to = ids_.at(ui_->horizontalSlider_B->value());
+	if(ui_->label_type->text().toInt() == Link::kLandmark)
+	{
+		int position = ui_->horizontalSlider_loops->value();
+		const rtabmap::Link & link = loopLinks_.at(position);
+		from = link.from();
+		to = link.to();
+	}
+
 	if(from < to)
 	{
 		int tmp = to;
