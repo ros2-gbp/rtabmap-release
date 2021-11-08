@@ -2863,7 +2863,7 @@ std::vector<std::pair< std::pair<int, int>, pcl::PointXY> > projectCloudToCamera
 	int cameraProcessed = 0;
 	for(std::map<int, Transform>::const_iterator pter = cameraPoses.lower_bound(0); pter!=cameraPoses.end(); ++pter)
 	{
-		std::map<int, std::vector<CameraModel> >::const_iterator iter=cameraModels.begin();
+		std::map<int, std::vector<CameraModel> >::const_iterator iter=cameraModels.find(pter->first);
 		if(iter!=cameraModels.end() && !iter->second.empty())
 		{
 			for(size_t i=0; i<iter->second.size(); ++i)
