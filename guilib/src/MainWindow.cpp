@@ -102,7 +102,6 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/core/util3d_mapping.h"
 #include "rtabmap/core/util3d_surface.h"
 #include "rtabmap/core/util3d_registration.h"
-#include "rtabmap/core/Optimizer.h"
 #include "rtabmap/core/optimizer/OptimizerCVSBA.h"
 #include "rtabmap/core/Graph.h"
 #include "rtabmap/core/RegistrationIcp.h"
@@ -394,7 +393,7 @@ MainWindow::MainWindow(PreferencesDialog * prefDialog, QWidget * parent, bool sh
 	connect(_ui->actionReset_Odometry, SIGNAL(triggered()), this, SLOT(resetOdometry()));
 	connect(_ui->actionTrigger_a_new_map, SIGNAL(triggered()), this, SLOT(triggerNewMap()));
 	connect(_ui->actionData_recorder, SIGNAL(triggered()), this, SLOT(dataRecorder()));
-	connect(_ui->actionPost_processing, SIGNAL(triggered()), this, SLOT(postProcessing()));
+	connect(_ui->actionPost_processing, SIGNAL(triggered()), this, SLOT(showPostProcessingDialog()));
 	connect(_ui->actionDepth_Calibration, SIGNAL(triggered()), this, SLOT(depthCalibration()));
 
 	_ui->actionPause->setShortcut(Qt::Key_Space);
@@ -2066,9 +2065,22 @@ void MainWindow::processStats(const rtabmap::Statistics & stat)
 				}
 				else if(landmarkId!=0)
 				{
-					_ui->imageView_loopClosure->setBackgroundColor(QColor("orange"));
-					_ui->label_matchId->setText(QString("Landmark match = %1 with %2").arg(landmarkId).arg(landmarkNodeRef));
-					matchId = landmarkNodeRef;
+					if(rejectedHyp)
+					{
+						show = _preferencesDialog->imageRejectedShown();
+						if(show)
+						{
+							_ui->imageView_loopClosure->setBackgroundColor(Qt::red);
+							_ui->label_stats_loopClosuresRejected->setText(QString::number(_ui->label_stats_loopClosuresRejected->text().toInt() + 1));
+							_ui->label_matchId->setText(QString("Landmark rejected = %1 with %2").arg(landmarkId).arg(landmarkNodeRef));
+						}
+					}
+					else
+					{
+						_ui->imageView_loopClosure->setBackgroundColor(QColor("orange"));
+						_ui->label_matchId->setText(QString("Landmark match = %1 with %2").arg(landmarkId).arg(landmarkNodeRef));
+						matchId = landmarkNodeRef;
+					}
 				}
 				else if(rejectedHyp && highestHypothesisValue >= _preferencesDialog->getLoopThr())
 				{
@@ -2400,6 +2412,8 @@ void MainWindow::processStats(const rtabmap::Statistics & stat)
 					mapIds,
 					labels,
 					groundTruth,
+					stat.odomCachePoses(),
+					stat.odomCacheConstraints(),
 					false,
 					&updateCloudSats);
 
@@ -2519,6 +2533,8 @@ void MainWindow::updateMapCloud(
 		const std::map<int, int> & mapIdsIn,
 		const std::map<int, std::string> & labels,
 		const std::map<int, Transform> & groundTruths, // ground truth should contain only valid transforms
+		const std::map<int, Transform> & odomCachePoses,
+		const std::multimap<int, Link> & odomCacheConstraints,
 		bool verboseProgress,
 		std::map<std::string, float> * stats)
 {
@@ -2938,12 +2954,24 @@ void MainWindow::updateMapCloud(
 		mapToGt = alignPosesToGroundTruth(_currentPosesMap, _currentGTPosesMap).inverse();
 	}
 
+	std::map<int, Transform> posesWithOdomCache;
+
+	if(_ui->graphicsView_graphView->isVisible() ||
+	   ((_preferencesDialog->isGraphsShown() || _preferencesDialog->isFrustumsShown(0)) && _currentPosesMap.size()))
+	{
+		posesWithOdomCache = posesIn;
+		for(std::map<int, Transform>::const_iterator iter=odomCachePoses.begin(); iter!=odomCachePoses.end(); ++iter)
+		{
+			posesWithOdomCache.insert(std::make_pair(iter->first, _odometryCorrection*iter->second));
+		}
+	}
+
 	if((_preferencesDialog->isGraphsShown() || _preferencesDialog->isFrustumsShown(0)) && _currentPosesMap.size())
 	{
 		UTimer timerGraph;
 		// Find all graphs
 		std::map<int, pcl::PointCloud<pcl::PointXYZ>::Ptr > graphs;
-		for(std::map<int, Transform>::iterator iter=_currentPosesMap.lower_bound(1); iter!=_currentPosesMap.end(); ++iter)
+		for(std::map<int, Transform>::iterator iter=posesWithOdomCache.lower_bound(1); iter!=posesWithOdomCache.end(); ++iter)
 		{
 			int mapId = uValue(_currentMapIds, iter->first, -1);
 
@@ -3033,7 +3061,7 @@ void MainWindow::updateMapCloud(
 				{
 					int id = std::atoi(splitted.back().c_str());
 					if((splitted.front().compare("f_") == 0 || splitted.front().compare("f_gt_") == 0) &&
-						_currentPosesMap.find(id) == _currentPosesMap.end())
+						posesWithOdomCache.find(id) == posesWithOdomCache.end())
 					{
 						_cloudViewer->removeFrustum(iter.key());
 					}
@@ -3144,7 +3172,10 @@ void MainWindow::updateMapCloud(
 	// Update occupancy grid map in 3D map view and graph view
 	if(_ui->graphicsView_graphView->isVisible())
 	{
-		_ui->graphicsView_graphView->updateGraph(posesIn, constraints, mapIdsIn);
+		std::multimap<int, Link> constraintsWithOdomCache;
+		constraintsWithOdomCache = constraints;
+		constraintsWithOdomCache.insert(odomCacheConstraints.begin(), odomCacheConstraints.end());
+		_ui->graphicsView_graphView->updateGraph(posesWithOdomCache, constraintsWithOdomCache, mapIdsIn);
 		if(_preferencesDialog->isGroundTruthAligned() && !mapToGt.isIdentity())
 		{
 			std::map<int, Transform> gtPoses = _currentGTPosesMap;
@@ -4428,7 +4459,7 @@ void MainWindow::processRtabmapEvent3DMap(const rtabmap::RtabmapEvent3DMap & eve
 			_progressCanceled = false;
 			QApplication::processEvents();
 			std::map<int, Transform> poses = event.getPoses();
-			this->updateMapCloud(poses, event.getConstraints(), mapIds, labels, groundTruth, true);
+			this->updateMapCloud(poses, event.getConstraints(), mapIds, labels, groundTruth, std::map<int, Transform>(), std::multimap<int, Link>(), true);
 
 			if( _ui->graphicsView_graphView->isVisible() &&
 			    _preferencesDialog->isWordsCountGraphView() &&
@@ -6043,7 +6074,44 @@ void MainWindow::exportPoses(int format)
 	}
 }
 
-void MainWindow::postProcessing()
+void MainWindow::showPostProcessingDialog()
+{
+	if(_postProcessingDialog->exec() != QDialog::Accepted)
+	{
+		return;
+	}
+
+	postProcessing(
+			_postProcessingDialog->isRefineNeighborLinks(),
+			_postProcessingDialog->isRefineLoopClosureLinks(),
+			_postProcessingDialog->isDetectMoreLoopClosures(),
+			_postProcessingDialog->clusterRadius(),
+			_postProcessingDialog->clusterAngle(),
+			_postProcessingDialog->iterations(),
+			_postProcessingDialog->interSession(),
+			_postProcessingDialog->intraSession(),
+			_postProcessingDialog->isSBA(),
+			_postProcessingDialog->sbaIterations(),
+			_postProcessingDialog->sbaVariance(),
+			_postProcessingDialog->sbaType(),
+			_postProcessingDialog->sbaRematchFeatures());
+}
+
+void MainWindow::postProcessing(
+		bool refineNeighborLinks,
+		bool refineLoopClosureLinks,
+		bool detectMoreLoopClosures,
+		double clusterRadius,
+		double clusterAngle,
+		int iterations,
+		bool interSession,
+		bool intraSession,
+		bool sba,
+		int sbaIterations,
+		double sbaVariance,
+		Optimizer::Type sbaType,
+		double sbaRematchFeatures,
+		bool abortIfDataMissing)
 {
 	if(_cachedSignatures.size() == 0)
 	{
@@ -6054,22 +6122,6 @@ void MainWindow::postProcessing()
 				   "refresh the cache."));
 		return;
 	}
-	if(_postProcessingDialog->exec() != QDialog::Accepted)
-	{
-		return;
-	}
-
-	bool detectMoreLoopClosures = _postProcessingDialog->isDetectMoreLoopClosures();
-	bool refineNeighborLinks = _postProcessingDialog->isRefineNeighborLinks();
-	bool refineLoopClosureLinks = _postProcessingDialog->isRefineLoopClosureLinks();
-	double clusterRadius = _postProcessingDialog->clusterRadius();
-	double clusterAngle = _postProcessingDialog->clusterAngle();
-	int detectLoopClosureIterations = _postProcessingDialog->iterations();
-	bool sba = _postProcessingDialog->isSBA();
-	int sbaIterations = _postProcessingDialog->sbaIterations();
-	double sbaVariance = _postProcessingDialog->sbaVariance();
-	Optimizer::Type sbaType = _postProcessingDialog->sbaType();
-	double sbaRematchFeatures = _postProcessingDialog->sbaRematchFeatures();
 
 	if(!detectMoreLoopClosures && !refineNeighborLinks && !refineLoopClosureLinks && !sba)
 	{
@@ -6104,10 +6156,14 @@ void MainWindow::postProcessing()
 
 	if(!allDataAvailable)
 	{
-		QMessageBox::warning(this, tr("Not all data available in the GUI..."),
-				tr("Some data missing in the cache to respect the constraints chosen. "
-				   "Try \"Edit->Download all clouds\" to update the cache and try again."));
-		return;
+		QString msg = tr("Some data missing in the cache to respect the constraints chosen. "
+				   "Try \"Edit->Download all clouds\" to update the cache and try again.");
+		UWARN(msg.toStdString().c_str());
+		if(abortIfDataMissing)
+		{
+			QMessageBox::warning(this, tr("Not all data available in the GUI..."), msg);
+			return;
+		}
 	}
 
 	_progressDialog->resetProgress();
@@ -6159,13 +6215,11 @@ void MainWindow::postProcessing()
 			odomMaxInf = graph::getMaxOdomInf(_currentLinksMap);
 		}
 
-		UASSERT(detectLoopClosureIterations>0);
-		bool interSession = _postProcessingDialog->interSession();
-		bool intraSession = _postProcessingDialog->intraSession();
-		for(int n=0; n<detectLoopClosureIterations && !_progressCanceled; ++n)
+		UASSERT(iterations>0);
+		for(int n=0; n<iterations && !_progressCanceled; ++n)
 		{
 			_progressDialog->appendText(tr("Looking for more loop closures, clustering poses... (iteration=%1/%2, radius=%3 m angle=%4 degrees)")
-					.arg(n+1).arg(detectLoopClosureIterations).arg(clusterRadius).arg(clusterAngle));
+					.arg(n+1).arg(iterations).arg(clusterRadius).arg(clusterAngle));
 
 			std::multimap<int, int> clusters = graph::radiusPosesClustering(
 					std::map<int, Transform>(_currentPosesMap.upper_bound(0), _currentPosesMap.end()),
@@ -6411,13 +6465,13 @@ void MainWindow::postProcessing()
 				QApplication::processEvents();
 				_progressDialog->incrementStep();
 			}
-			_progressDialog->appendText(tr("Iteration %1/%2: Detected %3 loop closures!").arg(n+1).arg(detectLoopClosureIterations).arg(addedLinks.size()/2));
+			_progressDialog->appendText(tr("Iteration %1/%2: Detected %3 loop closures!").arg(n+1).arg(iterations).arg(addedLinks.size()/2));
 			if(addedLinks.size() == 0)
 			{
 				break;
 			}
 
-			if(n+1 < detectLoopClosureIterations)
+			if(n+1 < iterations)
 			{
 				_progressDialog->appendText(tr("Optimizing graph with new links (%1 nodes, %2 constraints)...")
 						.arg(_currentPosesMap.size()).arg(_currentLinksMap.size()));
@@ -6583,6 +6637,8 @@ void MainWindow::postProcessing()
 			std::map<int, int>(_currentMapIds),
 			std::map<int, std::string>(_currentLabels),
 			std::map<int, Transform>(_currentGTPosesMap),
+			std::map<int, Transform>(),
+			std::multimap<int, Link>(),
 			false);
 	_progressDialog->appendText(tr("Updating map... done!"));
 

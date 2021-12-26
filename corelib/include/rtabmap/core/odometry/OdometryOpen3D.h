@@ -25,65 +25,35 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifndef RTABMAP_PROGRESSDIALOG_H_
-#define RTABMAP_PROGRESSDIALOG_H_
+#ifndef ODOMETRYOPEN3D_H_
+#define ODOMETRYOPEN3D_H_
 
-#include "rtabmap/gui/RtabmapGuiExp.h" // DLL export/import defines
-
-#include <QDialog>
-
-class QLabel;
-class QTextEdit;
-class QProgressBar;
-class QPushButton;
-class QCheckBox;
+#include <rtabmap/core/Odometry.h>
 
 namespace rtabmap {
 
-class RTABMAPGUI_EXP ProgressDialog : public QDialog
+class RTABMAP_EXP OdometryOpen3D : public Odometry
 {
-	Q_OBJECT
-
 public:
-	ProgressDialog(QWidget *parent = 0, Qt::WindowFlags flags = 0);
-	virtual ~ProgressDialog();
+	OdometryOpen3D(const rtabmap::ParametersMap & parameters = rtabmap::ParametersMap());
+	virtual ~OdometryOpen3D();
 
-	void setEndMessage(const QString & message) {_endMessage = message;} // Message shown when the progress is finished
-	void setValue(int value);
-	int maximumSteps() const;
-	void setMaximumSteps(int steps);
-	void setAutoClose(bool on, int delayedClosingTimeSec = -1);
-	void setCancelButtonVisible(bool visible);
-	bool isCanceled() const {return _canceled;}
-
-Q_SIGNALS:
-	void canceled();
-
-protected:
-	virtual void closeEvent(QCloseEvent * event);
-
-public Q_SLOTS:
-	void appendText(const QString & text ,const QColor & color = Qt::black);
-	void incrementStep(int steps = 1);
-	void clear();
-	void resetProgress();
-
-private Q_SLOTS:
-	void closeDialog();
-	void cancel();
+	virtual void reset(const Transform & initialPose = Transform::getIdentity());
+	virtual Odometry::Type getType() {return Odometry::kTypeOpen3D;}
 
 private:
-	QLabel * _text;
-	QTextEdit * _detailedText;
-	QProgressBar * _progressBar;
-	QPushButton * _closeButton;
-	QPushButton * _cancelButton;
-	QCheckBox * _closeWhenDoneCheckBox;
-	QString _endMessage;
-	int _delayedClosingTime; // sec
-	bool _canceled;
+	virtual Transform computeTransform(SensorData & image, const Transform & guess = Transform(), OdometryInfo * info = 0);
+
+private:
+#ifdef RTABMAP_OPEN3D
+	rtabmap::SensorData keyFrame_;
+	Transform lastKeyFramePose_;
+	int method_;
+	float maxDepth_;
+	float keyFrameThr_;
+#endif
 };
 
 }
 
-#endif /* PROGRESSDIALOG_H_ */
+#endif /* ODOMETRYOPEN3D_H_ */
