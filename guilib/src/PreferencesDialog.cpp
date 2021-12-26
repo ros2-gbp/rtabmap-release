@@ -199,6 +199,9 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 #ifndef RTABMAP_FLOAM
 	_ui->odom_strategy->setItemData(11, 0, Qt::UserRole - 1);
 #endif
+#ifndef RTABMAP_OPEN3D
+	_ui->odom_strategy->setItemData(12, 0, Qt::UserRole - 1);
+#endif
 
 #if CV_MAJOR_VERSION < 3
 	_ui->stereosgbm_mode->setItemData(2, 0, Qt::UserRole - 1);
@@ -1219,7 +1222,7 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_ui->doubleSpinBox_grid_footprintWidth->setObjectName(Parameters::kGridFootprintWidth().c_str());
 	_ui->doubleSpinBox_grid_footprintHeight->setObjectName(Parameters::kGridFootprintHeight().c_str());
 	_ui->checkBox_grid_flatObstaclesDetected->setObjectName(Parameters::kGridFlatObstacleDetected().c_str());
-	_ui->groupBox_grid_fromDepthImage->setObjectName(Parameters::kGridFromDepth().c_str());
+	_ui->comboBox_grid_sensor->setObjectName(Parameters::kGridSensor().c_str());
 	_ui->checkBox_grid_projMapFrame->setObjectName(Parameters::kGridMapFrameProjection().c_str());
 	_ui->doubleSpinBox_grid_maxGroundAngle->setObjectName(Parameters::kGridMaxGroundAngle().c_str());
 	_ui->spinBox_grid_normalK->setObjectName(Parameters::kGridNormalK().c_str());
@@ -1412,6 +1415,10 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_ui->stereo_ssd->setObjectName(Parameters::kStereoSSD().c_str());
 	_ui->stereo_flow_eps->setObjectName(Parameters::kStereoEps().c_str());
 	_ui->stereo_opticalFlow->setObjectName(Parameters::kStereoOpticalFlow().c_str());
+
+	// Odometry Open3D
+	_ui->odom_open3d_method->setObjectName(Parameters::kOdomOpen3DMethod().c_str());
+	_ui->odom_open3d_max_depth->setObjectName(Parameters::kOdomOpen3DMaxDepth().c_str());
 
 	//StereoDense
 	_ui->comboBox_stereoDense_strategy->setObjectName(Parameters::kStereoDenseStrategy().c_str());
@@ -4377,7 +4384,8 @@ void PreferencesDialog::setParameter(const std::string & key, const std::string 
 		{
 			//backward compatibility
 			std::string valueCpy = value;
-			if(key.compare(Parameters::kIcpStrategy()) == 0)
+			if( key.compare(Parameters::kIcpStrategy()) == 0 ||
+				key.compare(Parameters::kGridSensor()) == 0)
 			{
 				if(value.compare("true") == 0)
 				{
@@ -4931,6 +4939,18 @@ void PreferencesDialog::updateOdometryStackedIndex(int index)
 	{
 		_ui->stackedWidget_odometryType->setCurrentIndex(index);
 	}
+	_ui->groupBox_odomF2M->setVisible(index==0);
+	_ui->groupBox_odomF2F->setVisible(index==1);
+	_ui->groupBox_odomFovis->setVisible(index==2);
+	_ui->groupBox_odomViso2->setVisible(index==3);
+	_ui->groupBox_odomDVO->setVisible(index==4);
+	_ui->groupBox_odomORBSLAM->setVisible(index==5);
+	_ui->groupBox_odomOKVIS->setVisible(index==6);
+	_ui->groupBox_odomLOAM->setVisible(index==7);
+	_ui->groupBox_odomMSCKF->setVisible(index==8);
+	_ui->groupBox_odomVINS->setVisible(index==9);
+	_ui->groupBox_odomOpenVINS->setVisible(index==10);
+	_ui->groupBox_odomOpen3D->setVisible(index==12);
 }
 
 void PreferencesDialog::useOdomFeatures()
@@ -5595,9 +5615,9 @@ bool PreferencesDialog::getGridMapShown() const
 {
 	return _ui->checkBox_map_shown->isChecked();
 }
-bool PreferencesDialog::isGridMapFrom3DCloud() const
+int PreferencesDialog::getGridMapSensor() const
 {
-	return _ui->groupBox_grid_fromDepthImage->isChecked();
+	return _ui->comboBox_grid_sensor->currentIndex();
 }
 bool PreferencesDialog::projMapFrame() const
 {
@@ -5856,6 +5876,7 @@ Camera * PreferencesDialog::createCamera(bool useRawImages, bool useColor)
 		 !_ui->checkBox_stereo_rectify->isChecked()) || 
 		useRawImages, 
 		useColor, 
+		false,
 		false);
 }
 
@@ -5865,7 +5886,8 @@ Camera * PreferencesDialog::createCamera(
 		const QString & calibrationPath,
 		bool useRawImages,
 		bool useColor,
-		bool odomOnly)
+		bool odomOnly,
+		bool odomSensorExtrinsicsCalib)
 {
 	if(odomOnly && !(driver == kSrcStereoRealSense2 || driver == kSrcStereoZed))
 	{
@@ -6013,7 +6035,7 @@ Camera * PreferencesDialog::createCamera(
 			if(driver == kSrcStereoRealSense2)
 			{
 				((CameraRealSense2*)camera)->setImagesRectified(!useRawImages);
-				((CameraRealSense2*)camera)->setOdomProvided(_ui->comboBox_odom_sensor->currentIndex() == 1 || odomOnly, odomOnly);
+				((CameraRealSense2*)camera)->setOdomProvided(_ui->comboBox_odom_sensor->currentIndex() == 1 || odomOnly, odomOnly, odomSensorExtrinsicsCalib);
 			}
 			else
 			{
@@ -6382,7 +6404,7 @@ Camera * PreferencesDialog::createOdomSensor(Transform & extrinsics, double & ti
 		timeOffset = _ui->doubleSpinBox_odom_sensor_time_offset->value()/1000.0;
 		scaleFactor = (float)_ui->doubleSpinBox_odom_sensor_scale_factor->value();
 
-		return createCamera(driver, _ui->lineEdit_odomSourceDevice->text(), _ui->lineEdit_odom_sensor_path_calibration->text(), false, true, true);
+		return createCamera(driver, _ui->lineEdit_odomSourceDevice->text(), _ui->lineEdit_odom_sensor_path_calibration->text(), false, true, true, false);
 	}
 	return 0;
 }
@@ -7059,7 +7081,7 @@ void PreferencesDialog::calibrateOdomSensorExtrinsics()
 						odomDriver,
 						_ui->lineEdit_odomSourceDevice->text(),
 						_ui->lineEdit_odom_sensor_path_calibration->text(),
-						false, true, false); // Odom sensor
+						false, true, false, true); // Odom sensor
 				if(!camera)
 				{
 					return;
