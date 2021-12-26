@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2019, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -25,37 +25,35 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifndef RTABMAP_EDITCONSTRAINTDIALOG_H_
-#define RTABMAP_EDITCONSTRAINTDIALOG_H_
+#ifndef ODOMETRYOPEN3D_H_
+#define ODOMETRYOPEN3D_H_
 
-#include "rtabmap/gui/RtabmapGuiExp.h" // DLL export/import defines
-
-#include <QDialog>
-#include <rtabmap/core/Transform.h>
-
-class Ui_EditConstraintDialog;
+#include <rtabmap/core/Odometry.h>
 
 namespace rtabmap {
 
-class RTABMAPGUI_EXP EditConstraintDialog : public QDialog
+class RTABMAP_EXP OdometryOpen3D : public Odometry
 {
-	Q_OBJECT
-
 public:
-	EditConstraintDialog(const Transform & constraint, double linearSigma = 1, double angularSigma = 1, QWidget * parent = 0);
+	OdometryOpen3D(const rtabmap::ParametersMap & parameters = rtabmap::ParametersMap());
+	virtual ~OdometryOpen3D();
 
-	virtual ~EditConstraintDialog();
-	Transform getTransform() const;
-	double getLinearVariance() const;
-	double getAngularVariance() const;
-
-private Q_SLOTS:
-	void switchUnits();
+	virtual void reset(const Transform & initialPose = Transform::getIdentity());
+	virtual Odometry::Type getType() {return Odometry::kTypeOpen3D;}
 
 private:
-	Ui_EditConstraintDialog * _ui;
+	virtual Transform computeTransform(SensorData & image, const Transform & guess = Transform(), OdometryInfo * info = 0);
+
+private:
+#ifdef RTABMAP_OPEN3D
+	rtabmap::SensorData keyFrame_;
+	Transform lastKeyFramePose_;
+	int method_;
+	float maxDepth_;
+	float keyFrameThr_;
+#endif
 };
 
 }
 
-#endif /* EDITCONSTRAINTDIALOG_H_ */
+#endif /* ODOMETRYOPEN3D_H_ */
