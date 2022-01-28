@@ -56,6 +56,7 @@ OccupancyGrid::OccupancyGrid(const ParametersMap & parameters) :
 	projMapFrame_(Parameters::defaultGridMapFrameProjection()),
 	maxObstacleHeight_(Parameters::defaultGridMaxObstacleHeight()),
 	normalKSearch_(Parameters::defaultGridNormalK()),
+	groundNormalsUp_(Parameters::defaultIcpPointToPlaneGroundNormalsUp()),
 	maxGroundAngle_(Parameters::defaultGridMaxGroundAngle()*M_PI/180.0f),
 	clusterRadius_(Parameters::defaultGridClusterRadius()),
 	minClusterSize_(Parameters::defaultGridMinClusterSize()),
@@ -115,6 +116,7 @@ void OccupancyGrid::parseParameters(const ParametersMap & parameters)
 	Parameters::parse(parameters, Parameters::kGridMinGroundHeight(), minGroundHeight_);
 	Parameters::parse(parameters, Parameters::kGridMaxGroundHeight(), maxGroundHeight_);
 	Parameters::parse(parameters, Parameters::kGridNormalK(), normalKSearch_);
+	Parameters::parse(parameters, Parameters::kIcpPointToPlaneGroundNormalsUp(), groundNormalsUp_);
 	if(Parameters::parse(parameters, Parameters::kGridMaxGroundAngle(), maxGroundAngle_))
 	{
 		maxGroundAngle_ *= M_PI/180.0f;
@@ -336,10 +338,11 @@ void OccupancyGrid::createLocalMap(
 				const Transform & t = node.sensorData().laserScanRaw().localTransform();
 				LaserScan scan = util3d::downsample(node.sensorData().laserScanRaw(), scanDecimation_);
 #ifdef RTABMAP_OCTOMAP
-				// clipping will be done in OctoMap
-				float maxRange = grid3D_&&rayTracing_?0.0f:cloudMaxDepth_;
+				// If ray tracing enabled, clipping will be done in OctoMap or in occupancy2DFromLaserScan()
+				float maxRange = rayTracing_?0.0f:cloudMaxDepth_;
 #else
-				float maxRange = cloudMaxDepth_;
+				// If ray tracing enabled, clipping will be done in occupancy2DFromLaserScan()
+				float maxRange = !grid3D_ && rayTracing_?0.0f:cloudMaxDepth_;
 #endif
 				if(cloudMinDepth_ > 0.0f || maxRange > 0.0f)
 				{
@@ -390,10 +393,11 @@ void OccupancyGrid::createLocalMap(
 					node.sensorData(),
 					cloudDecimation_,
 #ifdef RTABMAP_OCTOMAP
-					// clipping will be done in OctoMap
-					grid3D_&&rayTracing_?0.0f:cloudMaxDepth_,
+					// If ray tracing enabled, clipping will be done in OctoMap or in occupancy2DFromLaserScan()
+					rayTracing_?0.0f:cloudMaxDepth_,
 #else
-					cloudMaxDepth_,
+					// If ray tracing enabled, clipping will be done in occupancy2DFromLaserScan()
+					!grid3D_&&rayTracing_?0.0f:cloudMaxDepth_,
 #endif
 					cloudMinDepth_,
 					indices.get(),
@@ -401,6 +405,7 @@ void OccupancyGrid::createLocalMap(
 					roiRatios_);
 
 			// update viewpoint
+			viewPoint = cv::Point3f(0,0,0);
 			if(node.sensorData().cameraModels().size())
 			{
 				// average of all local transforms

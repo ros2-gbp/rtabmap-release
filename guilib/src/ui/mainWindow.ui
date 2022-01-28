@@ -229,8 +229,19 @@
        </property>
        <addaction name="actionRealSense2_L515"/>
       </widget>
+      <widget class="QMenu" name="menuOrbbec_Astra">
+       <property name="title">
+        <string>Orbbec Astra</string>
+       </property>
+       <property name="icon">
+        <iconset resource="../GuiLib.qrc">
+         <normaloff>:/images/astra.png</normaloff>:/images/astra.png</iconset>
+       </property>
+       <addaction name="actionOpenNI2_orbbec"/>
+      </widget>
       <addaction name="menuKinect_for_Xbox_360"/>
       <addaction name="menuXtion_PRO_LIVE"/>
+      <addaction name="menuOrbbec_Astra"/>
       <addaction name="menuSense_3D_scanner"/>
       <addaction name="menuKinect_v2"/>
       <addaction name="menuKinect_K4A"/>
@@ -340,6 +351,7 @@
     <addaction name="actionTrigger_a_new_map"/>
     <addaction name="separator"/>
     <addaction name="actionLabel_current_location"/>
+    <addaction name="actionRemove_label"/>
     <addaction name="actionSend_waypoints"/>
     <addaction name="actionSend_goal"/>
     <addaction name="actionCancel_goal"/>
@@ -1649,6 +1661,19 @@
   <action name="actionRGBD_SLAM_ID_format_txt">
    <property name="text">
     <string>RGBD-SLAM + ID format (*.txt)</string>
+   </property>
+  </action>
+  <action name="actionOpenNI2_orbbec">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>OpenNI2</string>
+   </property>
+  </action>
+  <action name="actionRemove_label">
+   <property name="text">
+    <string>Remove label...</string>
    </property>
   </action>
  </widget>
