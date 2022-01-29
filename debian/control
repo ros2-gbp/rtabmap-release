@@ -1,0 +1,13 @@
+Source: ros-foxy-rtabmap
+Section: misc
+Priority: optional
+Maintainer: Mathieu Labbe <matlabbe@gmail.com>
+Build-Depends: debhelper (>= 9.0.0), cmake, libfreenect-dev, libopenni-dev, libpcl-dev, libproj-dev, libsqlite3-dev, ros-foxy-cv-bridge, ros-foxy-libg2o, ros-foxy-libpointmatcher, ros-foxy-octomap, ros-foxy-qt-gui-cpp, zlib1g-dev, ros-foxy-ros-workspace
+Homepage: http://introlab.github.io/rtabmap
+Standards-Version: 3.9.2
+
+Package: ros-foxy-rtabmap
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, libfreenect-dev, libopenni-dev, libpcl-dev, libsqlite3-dev, ros-foxy-cv-bridge, ros-foxy-libg2o, ros-foxy-libpointmatcher, ros-foxy-octomap, ros-foxy-qt-gui-cpp, zlib1g-dev, ros-foxy-ros-workspace
+Description: RTAB-Map's standalone library.
+ RTAB-Map is a RGB-D SLAM approach with real-time constraints.
