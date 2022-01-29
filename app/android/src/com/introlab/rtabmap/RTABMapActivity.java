@@ -2,6 +2,7 @@ package com.introlab.rtabmap;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -25,6 +26,8 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.ProgressDialog;
 import android.content.ComponentName;
+import android.content.ContentResolver;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.DialogInterface.OnShowListener;
@@ -35,6 +38,7 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageManager.NameNotFoundException;
+import android.database.Cursor;
 import android.hardware.Camera;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
@@ -46,6 +50,7 @@ import android.hardware.display.DisplayManager;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
+import android.media.MediaScannerConnection;
 import android.net.Uri;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
@@ -56,6 +61,8 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Message;
 import android.preference.PreferenceManager;
+import android.provider.MediaStore;
+import android.provider.OpenableColumns;
 import android.support.v4.app.FragmentActivity;
 import android.support.v4.content.FileProvider;
 import android.text.InputType;
@@ -256,6 +263,8 @@ public class RTABMapActivity extends FragmentActivity implements OnClickListener
 
 	ARCoreSharedCamera mArCoreCamera = null;
 	int mCameraDriver = 0;
+	
+	private String mIntentDbToOpen = null;
 
 	//Tango Service connection.
 	boolean mCameraServiceConnectionUsed = false; 
@@ -294,7 +303,7 @@ public class RTABMapActivity extends FragmentActivity implements OnClickListener
 		}
 
 		public void onServiceDisconnected(ComponentName name) {
-			// Handle this if you need to gracefully shutdown/retry
+			// Handle this if you need to gracefully shutsaveDatabasedown/retry
 			// in the event that Tango itself crashes/gets upgraded while running.
 			mToast.makeText(getApplicationContext(), 
 					String.format("Tango disconnected!"), mToast.LENGTH_LONG).show();
@@ -494,10 +503,11 @@ public class RTABMapActivity extends FragmentActivity implements OnClickListener
 		mWorkingDirectoryHuman = "";
 		mTotalLoopClosures = 0;
 		mLastFastMovementNotificationStamp = System.currentTimeMillis()/1000;
-
-		if(Environment.getExternalStorageState().compareTo(Environment.MEDIA_MOUNTED)==0)
+		
+		if(Environment.getExternalStorageState().compareTo(Environment.MEDIA_MOUNTED)==0 && 
+				getActivity().getExternalFilesDirs(null).length >=1)
 		{
-			File extStore = Environment.getExternalStorageDirectory();
+			File extStore = getActivity().getExternalFilesDirs(null)[0];
 			mWorkingDirectory = extStore.getAbsolutePath() + "/" + getString(R.string.app_name) + "/";
 			extStore = new File(mWorkingDirectory);
 			extStore.mkdirs();
@@ -507,7 +517,7 @@ public class RTABMapActivity extends FragmentActivity implements OnClickListener
 		{
 			// show warning that data cannot be saved!
 			mToast.makeText(getApplicationContext(), 
-					String.format("Failed to get external storage path (SD-CARD, state=%s). Saving disabled.", 
+					String.format("Failed to get external storage path (state=%s). Saving disabled.", 
 							Environment.getExternalStorageState()), mToast.LENGTH_LONG).show();
 		}
 
@@ -574,32 +584,140 @@ public class RTABMapActivity extends FragmentActivity implements OnClickListener
 
 		DISABLE_LOG =  !( 0 != ( getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE ) );
 
-		if (!PermissionHelper.hasPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)) {
-			PermissionHelper.requestPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE);
-		}
-		else
-		{
-			postCreate();
-		}
-
 		SharedPreferences sharedPref = PreferenceManager.getDefaultSharedPreferences(this);
 		String cameraDriverStr = sharedPref.getString(getString(R.string.pref_key_camera_driver), getString(R.string.pref_default_camera_driver));
 		mCameraDriver = Integer.parseInt(cameraDriverStr);
 		
 		isArCoreAvailable();
 		isArEngineAvailable();
+		
+		if (!PermissionHelper.hasPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)) {
+			PermissionHelper.requestPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE);
+		}
+		else
+		{
+			// Get intent, action and MIME type
+		    Intent intent = getIntent();
+		    String action = intent.getAction();
+		    String type = intent.getType();
+
+		    if (Intent.ACTION_SEND.equals(action) && type != null) {
+		        if ("application/octet-stream".equals(type)) {
+		        	Uri imageUri = (Uri) intent.getParcelableExtra(Intent.EXTRA_STREAM);
+		            if (imageUri != null) {
+		               String fileName = getFileName(imageUri);
+		               Log.i(TAG, "Intent received: " + imageUri.getPath() + " Name:" + fileName);
+		               if(fileName.endsWith(".db"))
+		               {
+			               File file = new File(mWorkingDirectory+fileName);
+			               if(file.exists())
+			               {
+			            	   mToast.makeText(this, fileName + " already exists in RTAB-Map's library! Cannot be copied.", mToast.LENGTH_LONG).show();
+			               }
+			               else
+			               {
+				               copy(imageUri, file);
+				               mIntentDbToOpen = fileName;
+			               }
+		               }
+		            }
+		        }
+		    } else if (Intent.ACTION_SEND_MULTIPLE.equals(action) && type != null) {
+		    	if (type.startsWith("application/")) {
+		    		ArrayList<Uri> imageUris = intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
+		    		if (imageUris != null) {
+		    			boolean added = false;
+		    			for(Uri imageUri: imageUris)
+		    			{
+		    				String fileName = getFileName(imageUri);
+		    				Log.i(TAG, "Intent received: " + imageUri.getPath() + " Name:" + fileName);
+		    				if(fileName.endsWith(".db"))
+		    				{
+		    					File file = new File(mWorkingDirectory+"/"+getFileName(imageUri));
+		    					if(!file.exists())
+		    					{
+			    					copy(imageUri, file);
+			    					added = true;
+		    					}
+		    					else
+		    					{
+		    						Log.e(TAG,  fileName + " already exists in RTAB-Map's library! Cannot be copied.");
+		    					}
+		    				}
+		    			}
+		    			if(added)
+		    			{
+		    				openDatabase();
+		    			}
+		    		}
+
+		    	}
+		    }
+
+			postCreate();
+		}
 	}
+	
+	public void copy(File src, File dst) throws IOException {
+		InputStream in = new FileInputStream(src);
+		OutputStream out = new FileOutputStream(dst);
+
+		// Transfer bytes from in to out
+		byte[] buf = new byte[1024];
+		int len;
+		while ((len = in.read(buf)) > 0) {
+			out.write(buf, 0, len);
+		}
+		in.close();
+		out.close();
+	}
+	
+	public void copy(Uri uri, File file)
+	{
+		InputStream in;
+		try {
+			in = getApplicationContext().getContentResolver().openInputStream(uri);
+			
+			OutputStream out = new FileOutputStream(file);
+    		byte[] buf = new byte[1024];
+    		int len;
+    		while ((len = in.read(buf)) > 0) {
+    			out.write(buf, 0, len);
+    		}
+    		in.close();
+    		out.close();
+		} catch (IOException e) {
+			Log.e(TAG, e.getMessage());
+		}
+	}
+	
+	public String getFileName(Uri uri) {
+		  String result = null;
+		  if (uri.getScheme().equals("content")) {
+		    Cursor cursor = getContentResolver().query(uri, null, null, null, null);
+		    try {
+		      if (cursor != null && cursor.moveToFirst()) {
+		        result = cursor.getString(cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME));
+		      }
+		    } finally {
+		      cursor.close();
+		    }
+		  }
+		  if (result == null) {
+		    result = uri.getPath();
+		    int cut = result.lastIndexOf('/');
+		    if (cut != -1) {
+		      result = result.substring(cut + 1);
+		    }
+		  }
+		  return result;
+		}
+
 	
 	// Should be called only if read/write permissions are granted!
 	private void postCreate()
 	{
 		Log.i(TAG, "postCreate()");
-		
-		String tmpDatabase = mWorkingDirectory+RTABMAP_TMP_DB;
-		(new File(tmpDatabase)).delete();
-		SharedPreferences sharedPref = PreferenceManager.getDefaultSharedPreferences(this);
-		boolean databaseInMemory = sharedPref.getBoolean(getString(R.string.pref_key_db_in_memory), Boolean.parseBoolean(getString(R.string.pref_default_db_in_memory)));
-		RTABMapLib.openDatabase(nativeApplication, tmpDatabase, databaseInMemory, false);
 		
 		final String[] files = Util.loadFileList(mWorkingDirectory, true);
 		if(files.length == 0)
@@ -613,6 +731,17 @@ public class RTABMapActivity extends FragmentActivity implements OnClickListener
 		Log.i(TAG, String.format("updateCameraDriverSettings() mCameraDriver=%d RTABMapLib.isBuiltWith(%d)=%d", mCameraDriver, mCameraDriver, RTABMapLib.isBuiltWith(nativeApplication, mCameraDriver)?1:0));
 		
 		SharedPreferences sharedPref = PreferenceManager.getDefaultSharedPreferences(this);
+		String cameraDriverStr = sharedPref.getString(getString(R.string.pref_key_camera_driver), getString(R.string.pref_default_camera_driver));
+		mCameraDriver = Integer.parseInt(cameraDriverStr);
+		
+		if(mCameraDriver == -1)
+		{
+			// Prioritize tango if available
+			mCameraDriver = 0;
+			SharedPreferences.Editor editor = sharedPref.edit();
+			editor.putString(getString(R.string.pref_key_camera_driver), "0");
+			editor.commit();
+		}
 		
 		if(mCameraDriver == 0 && (!CheckTangoCoreVersion(MIN_TANGO_CORE_VERSION) || !RTABMapLib.isBuiltWith(nativeApplication, 0)))
 		{
@@ -1167,7 +1296,7 @@ public class RTABMapActivity extends FragmentActivity implements OnClickListener
 		final boolean depthFromMotion = sharedPref.getBoolean(getString(R.string.pref_key_depth_from_motion), Boolean.parseBoolean(getString(R.string.pref_default_depth_from_motion)));
 		mCameraDriver = Integer.parseInt(cameraDriverStr);
 
-		if(!DISABLE_LOG) Log.i(TAG, String.format("startCamera() driver=%d", mCameraDriver));
+		Log.i(TAG, String.format("startCamera() driver=%d", mCameraDriver));
 		if(mCameraDriver == 0) // Tango
 		{
 			// Check if the Tango Core is out dated.
@@ -1490,7 +1619,7 @@ public class RTABMapActivity extends FragmentActivity implements OnClickListener
 		}
 
 		updateState(mState);
-
+		
 		return true;
 	}
 
@@ -1992,6 +2121,7 @@ public class RTABMapActivity extends FragmentActivity implements OnClickListener
 				final int loopDetected = RTABMapLib.postProcessing(nativeApplication, -1);
 				runOnUiThread(new Runnable() {
 					public void run() {
+						updateState(State.STATE_IDLE);
 						if(mExportProgressDialog.isShowing())
 						{
 							mExportProgressDialog.dismiss();
@@ -2024,8 +2154,6 @@ public class RTABMapActivity extends FragmentActivity implements OnClickListener
 							mProgressDialog.dismiss();
 							mToast.makeText(getActivity(), String.format("Optimization canceled"), mToast.LENGTH_LONG).show();
 						}
-
-						updateState(State.STATE_IDLE);
 					}
 				});
 			} 
@@ -2144,7 +2272,7 @@ public class RTABMapActivity extends FragmentActivity implements OnClickListener
 			mButtonCloseVisualization.setVisibility(mHudVisible && mState != State.STATE_VISUALIZING_CAMERA?View.VISIBLE:View.INVISIBLE);
 			mButtonCloseVisualization.setEnabled(true);
 			mButtonSaveOnDevice.setVisibility(mHudVisible && mState != State.STATE_VISUALIZING_CAMERA?View.VISIBLE:View.INVISIBLE);
-			mButtonShareOnSketchfab.setVisibility(mHudVisible && mState != State.STATE_VISUALIZING_CAMERA?View.VISIBLE:View.INVISIBLE);
+			//mButtonShareOnSketchfab.setVisibility(mHudVisible && mState != State.STATE_VISUALIZING_CAMERA?View.VISIBLE:View.INVISIBLE);
 			mButtonLibrary.setVisibility(View.INVISIBLE);
 			mButtonNewScan.setVisibility(View.INVISIBLE);
 			mItemSave.setEnabled(mState != State.STATE_VISUALIZING_CAMERA);
@@ -2216,6 +2344,12 @@ public class RTABMapActivity extends FragmentActivity implements OnClickListener
 		else
 		{
 			mGLView.setRenderMode(GLSurfaceView.RENDERMODE_CONTINUOUSLY);
+		}
+		
+		if(mState == State.STATE_WELCOME && mIntentDbToOpen != null)
+		{
+			openDatabase(mIntentDbToOpen, false);
+			mIntentDbToOpen = null;
 		}
 	}
 
@@ -2626,7 +2760,7 @@ public class RTABMapActivity extends FragmentActivity implements OnClickListener
 							SharedPreferences sharedPref = PreferenceManager.getDefaultSharedPreferences(getActivity());
 							boolean databaseInMemory = sharedPref.getBoolean(getString(R.string.pref_key_db_in_memory), Boolean.parseBoolean(getString(R.string.pref_default_db_in_memory)));
 							String tmpDatabase = mWorkingDirectory+RTABMAP_TMP_DB;
-							RTABMapLib.openDatabase(nativeApplication, tmpDatabase, databaseInMemory, false);
+							RTABMapLib.openDatabase(nativeApplication, tmpDatabase, databaseInMemory, false, true);
 
 							mItemLocalizationMode.setEnabled(!mItemDataRecorderMode.isChecked());		   
 
@@ -2780,16 +2914,110 @@ public class RTABMapActivity extends FragmentActivity implements OnClickListener
 		mOpenedDatabasePath = "";
 		SharedPreferences sharedPref = PreferenceManager.getDefaultSharedPreferences(this);
 		boolean databaseInMemory = sharedPref.getBoolean(getString(R.string.pref_key_db_in_memory), Boolean.parseBoolean(getString(R.string.pref_default_db_in_memory)));
-		String tmpDatabase = mWorkingDirectory+RTABMAP_TMP_DB;
-		RTABMapLib.openDatabase(nativeApplication, tmpDatabase, databaseInMemory, false);
-
-		if(!(mState == State.STATE_CAMERA || mState ==State.STATE_MAPPING))
+		final String tmpDatabase = mWorkingDirectory+RTABMAP_TMP_DB;
+		
+		File newFile = new File(tmpDatabase);
+		final int fileSizeMB = (int)newFile.length()/(1024 * 1024);
+		if(!(mState == State.STATE_CAMERA || mState ==State.STATE_MAPPING) &&
+			newFile.exists() && 
+			fileSizeMB>1) // >1MB
 		{
-			setCamera(1);
-			startCamera(String.format("Hold Tight! Initializing Camera Service...\n"
-					+ "Tip: If the camera is still drifting just after the mapping has started, do \"Reset\"."));
+			AlertDialog d2 = new AlertDialog.Builder(getActivity())
+					.setCancelable(false)
+					.setTitle("Recovery")
+					.setMessage(String.format("The previous session (%d MB) was not correctly saved, do you want to recover it?", fileSizeMB))
+					.setNegativeButton("Ignore", new DialogInterface.OnClickListener() {
+						public void onClick(DialogInterface dialog, int which) {
+							(new File(tmpDatabase)).delete();
+							newScan();
+						}
+					})
+					.setNeutralButton("Cancel", new DialogInterface.OnClickListener() {
+						public void onClick(DialogInterface dialog, int which) {
+							// do nothing
+						}
+					})
+					.setPositiveButton("Yes", new DialogInterface.OnClickListener() {
+						public void onClick(DialogInterface dialog, int which) {
+							final String fileName = new SimpleDateFormat("yyMMdd-HHmmss").format(new Date()) + ".db";
+							final String outputDbPath = mWorkingDirectory + fileName;
+							
+							mExportProgressDialog.setTitle("Recovering");
+							mExportProgressDialog.setMessage(String.format("Please wait while recovering data..."));
+							mExportProgressDialog.setProgress(0);
+
+							final State previousState = mState;
+
+							mExportProgressDialog.show();
+							updateState(State.STATE_PROCESSING);
+
+							Thread exportThread = new Thread(new Runnable() {
+								public void run() {
+
+									final long startTime = System.currentTimeMillis()/1000;
+
+									final boolean success = RTABMapLib.recover(
+											nativeApplication, 
+											tmpDatabase,
+											outputDbPath);
+									runOnUiThread(new Runnable() {
+										public void run() {
+											if(mExportProgressDialog.isShowing())
+											{							
+												if(success)
+												{								
+													AlertDialog d2 = new AlertDialog.Builder(getActivity())
+															.setCancelable(false)
+															.setTitle("Database saved!")
+															.setMessage(String.format("Database \"%s\" (%d MB) successfully saved!", fileName, fileSizeMB))
+															.setPositiveButton("OK", new DialogInterface.OnClickListener() {
+																public void onClick(DialogInterface dialog, int which) {
+																	openDatabase(fileName, false);
+																}
+															})
+															.create();
+													d2.setCanceledOnTouchOutside(true);
+													d2.show();
+												}
+												else
+												{
+													updateState(previousState);
+													mToast.makeText(getActivity(), String.format("Recovery failed!"), mToast.LENGTH_LONG).show();
+												}
+												mExportProgressDialog.dismiss();
+											}
+											else
+											{
+												mToast.makeText(getActivity(), String.format("Recovery canceled"), mToast.LENGTH_LONG).show();
+												updateState(previousState);
+											}
+										}
+									});
+								} 
+							});
+							exportThread.start();
+							
+							refreshSystemMediaScanDataBase(getActivity(), outputDbPath);
+						}
+					})
+					.create();
+			d2.setCanceledOnTouchOutside(false);
+			d2.show();
+		}
+		else
+		{
+		
+			RTABMapLib.openDatabase(nativeApplication, tmpDatabase, databaseInMemory, false, true);
+	
+			if(!(mState == State.STATE_CAMERA || mState ==State.STATE_MAPPING))
+			{
+				setCamera(0);
+				startCamera(String.format("Hold Tight! Initializing Camera Service...\n"
+						+ "Tip: If the camera is still drifting just after the mapping has started, do \"Reset\"."));
+			}
 		}
 	}
+		
 
 	private void openDatabase()
 	{
@@ -3215,7 +3443,7 @@ public class RTABMapActivity extends FragmentActivity implements OnClickListener
 		context.sendBroadcast(mediaScanIntent);
 	}
 
-	private void saveDatabase(String fileName)
+	private void saveDatabase(final String fileName)
 	{
 		final String newDatabasePath = mWorkingDirectory + fileName + ".db";
 		final String newDatabasePathHuman = mWorkingDirectoryHuman + fileName + ".db";
@@ -3247,7 +3475,7 @@ public class RTABMapActivity extends FragmentActivity implements OnClickListener
 							mSavedStamp = System.currentTimeMillis();
 							msg = String.format("Database saved to \"%s\".", newDatabasePathHuman);	
 						}
-
+									            
 						// build notification
 						Intent intent = new Intent(getActivity(), RTABMapActivity.class);
 						// use System.currentTimeMillis() to have a unique ID for the pending intent
@@ -3280,7 +3508,7 @@ public class RTABMapActivity extends FragmentActivity implements OnClickListener
 						AlertDialog d2 = new AlertDialog.Builder(getActivity())
 								.setCancelable(false)
 								.setTitle("Database saved!")
-								.setMessage(String.format("Database \"%s\" (%d MB) successfully saved on the SD-CARD!", newDatabasePathHuman, fileSizeMB))
+								.setMessage(String.format("Database \"%s\" (%d MB) successfully saved!", newDatabasePathHuman, fileSizeMB))
 								.setPositiveButton("OK", new DialogInterface.OnClickListener() {
 									public void onClick(DialogInterface dialog, int which) {
 										resetNoTouchTimer(true);
@@ -3334,30 +3562,7 @@ public class RTABMapActivity extends FragmentActivity implements OnClickListener
 				dialog.dismiss();
 				if(!fileName.isEmpty())
 				{
-					File newFile = new File(mWorkingDirectory + RTABMAP_EXPORT_DIR + fileName + ".zip");
-					if(newFile.exists())
-					{
-						AlertDialog ad = new AlertDialog.Builder(getActivity())
-								.setCancelable(false)
-								.setTitle("File Already Exists")
-								.setMessage("Do you want to overwrite the existing file?")
-								.setPositiveButton("Yes", new DialogInterface.OnClickListener() {
-									public void onClick(DialogInterface dialog, int which) {
-										writeExportedFiles(fileName);
-									}
-								})
-								.setNegativeButton("No", new DialogInterface.OnClickListener() {
-									public void onClick(DialogInterface dialog, int which) {
-										saveOnDevice();
-									}
-								}).create();
-						ad.setCanceledOnTouchOutside(false);
-						ad.show();
-					}
-					else
-					{
-						writeExportedFiles(fileName);
-					}
+					writeExportedFiles(fileName);
 				}
 			}
 		});
@@ -3371,7 +3576,7 @@ public class RTABMapActivity extends FragmentActivity implements OnClickListener
 	{		
 		Log.i(TAG, String.format("Write exported mesh to \"%s\"", fileName));
 
-		mProgressDialog.setTitle("Saving to sd-card");
+		mProgressDialog.setTitle("Exporting");
 		mProgressDialog.setMessage(String.format("Compressing the files..."));
 		mProgressDialog.show();
 
@@ -3397,8 +3602,23 @@ public class RTABMapActivity extends FragmentActivity implements OnClickListener
 				}
 				File exportDir = new File(mWorkingDirectory + RTABMAP_EXPORT_DIR);
 				exportDir.mkdirs();
+				
+				// cleanup old zip
+				fileNames = Util.loadFileList(mWorkingDirectory + RTABMAP_EXPORT_DIR, false);
+				if(!DISABLE_LOG) Log.i(TAG, String.format("Deleting %d files in \"%s\"", fileNames.length, mWorkingDirectory + RTABMAP_EXPORT_DIR));
+				for(int i=0; i<fileNames.length; ++i)
+				{
+					File f = new File(mWorkingDirectory + RTABMAP_EXPORT_DIR + "/" + fileNames[i]);
+					if(f.delete())
+					{
+						if(!DISABLE_LOG) Log.i(TAG, String.format("Deleted \"%s\"", f.getPath()));
+					}
+					else
+					{
+						if(!DISABLE_LOG) Log.i(TAG, String.format("Failed deleting \"%s\"", f.getPath()));
+					}
+				}
 
-				final String pathHuman = mWorkingDirectoryHuman + RTABMAP_EXPORT_DIR + fileName + ".zip";
 				final String zipOutput = mWorkingDirectory+RTABMAP_EXPORT_DIR+fileName+".zip";
 				if(RTABMapLib.writeExportedMesh(nativeApplication, mWorkingDirectory + RTABMAP_TMP_DIR, RTABMAP_TMP_FILENAME))
 				{							
@@ -3424,7 +3644,7 @@ public class RTABMapActivity extends FragmentActivity implements OnClickListener
 							final String msg = e.getMessage();
 							runOnUiThread(new Runnable() {
 								public void run() {
-									mToast.makeText(getActivity(), String.format("Exporting mesh \"%s\" failed! Error=%s", pathHuman, msg), mToast.LENGTH_LONG).show();
+									mToast.makeText(getActivity(), String.format("Exporting mesh \"%s\" failed! Error=%s", fileName, msg), mToast.LENGTH_LONG).show();
 								}
 							});
 						}
@@ -3440,29 +3660,41 @@ public class RTABMapActivity extends FragmentActivity implements OnClickListener
 							final File f = new File(zipOutput);
 							final int fileSizeMB = (int)f.length()/(1024 * 1024);
 
-							AlertDialog d = new AlertDialog.Builder(getActivity())
-									.setCancelable(false)
-									.setTitle("Mesh Saved!")
-									.setMessage(String.format("Mesh \"%s\" (%d MB) successfully exported on the SD-CARD! Share it?", pathHuman, fileSizeMB))
-									.setPositiveButton("Yes", new DialogInterface.OnClickListener() {
-										public void onClick(DialogInterface dialog, int which) {
-											// Send to...
-											Intent shareIntent = new Intent();
-											shareIntent.setAction(Intent.ACTION_SEND);
-											shareIntent.putExtra(Intent.EXTRA_STREAM, Uri.fromFile(f));
-											shareIntent.setType("application/zip");
-											startActivity(Intent.createChooser(shareIntent, "Sharing..."));
+							// Save to public Documents/RTAB-Map folder
+							/*ContentValues values = new ContentValues();
+				            values.put(MediaStore.MediaColumns.DISPLAY_NAME, fileName); //file name                     
+				            values.put(MediaStore.MediaColumns.MIME_TYPE, "application/zip");        //file extension, will automatically add to file
+				            values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOCUMENTS + "/RTAB-Map");     //end "/" is not mandatory
+				            Uri uri = getContentResolver().insert(MediaStore.Files.getContentUri("external"),values);
+				            if (uri != null) {
+				            	OutputStream out;
+								try {
+									out = getApplicationContext().getContentResolver().openOutputStream(uri);
+									
+									InputStream in = new FileInputStream(zipOutput);
+					        		byte[] buf = new byte[1024];
+					        		int len;
+					        		while ((len = in.read(buf)) > 0) {
+					        			out.write(buf, 0, len);
+					        		}
+					        		in.close();
+					        		out.close();
+					        		
+					        		f.delete(); // remove private file
+								} catch (IOException e) {
+									Log.e(TAG, e.getMessage());
+								}
+				            } */
 
-											resetNoTouchTimer(true);
-										}
-									})
-									.setNegativeButton("No", new DialogInterface.OnClickListener() {
-										public void onClick(DialogInterface dialog, int which) {
-											resetNoTouchTimer(true);
-										}
-									}).create();
-							d.setCanceledOnTouchOutside(false);
-							d.show();
+							// Send to...
+							Intent shareIntent = new Intent();
+							shareIntent.setAction(Intent.ACTION_SEND);
+							shareIntent.putExtra(Intent.EXTRA_STREAM, FileProvider.getUriForFile(getActivity(), getActivity().getApplicationContext().getPackageName() + ".provider", f));
+							shareIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+							shareIntent.setType("application/zip");
+							startActivity(Intent.createChooser(shareIntent, "Sharing..."));
+
+							resetNoTouchTimer(true);
 						}
 					});
 				}
@@ -3471,7 +3703,7 @@ public class RTABMapActivity extends FragmentActivity implements OnClickListener
 					runOnUiThread(new Runnable() {
 						public void run() {
 							mProgressDialog.dismiss();
-							mToast.makeText(getActivity(), String.format("Exporting mesh \"%s\" failed! No files found in tmp directory!? Last export may have failed or have been canceled.", pathHuman), mToast.LENGTH_LONG).show();
+							mToast.makeText(getActivity(), String.format("Exporting mesh \"%s\" failed! No files found in tmp directory!? Last export may have failed or have been canceled.", fileName), mToast.LENGTH_LONG).show();
 							resetNoTouchTimer(true);
 						}
 					});
@@ -3498,8 +3730,7 @@ public class RTABMapActivity extends FragmentActivity implements OnClickListener
 		Thread openThread = new Thread(new Runnable() {
 			public void run() {
 
-				final String tmpDatabase = mWorkingDirectory+RTABMAP_TMP_DB;				
-				final int status = RTABMapLib.openDatabase2(nativeApplication, mOpenedDatabasePath, tmpDatabase, databaseInMemory, optimize);
+				final int status = RTABMapLib.openDatabase(nativeApplication, mOpenedDatabasePath, databaseInMemory, optimize, false);
 
 				runOnUiThread(new Runnable() {
 					public void run() {
@@ -3576,20 +3807,6 @@ public class RTABMapActivity extends FragmentActivity implements OnClickListener
 			} 
 		});
 		openThread.start();	
-	}
-
-	public void copy(File src, File dst) throws IOException {
-		InputStream in = new FileInputStream(src);
-		OutputStream out = new FileOutputStream(dst);
-
-		// Transfer bytes from in to out
-		byte[] buf = new byte[1024];
-		int len;
-		while ((len = in.read(buf)) > 0) {
-			out.write(buf, 0, len);
-		}
-		in.close();
-		out.close();
 	}
 
 	private void shareToSketchfab()
