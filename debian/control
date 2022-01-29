@@ -1,0 +1,13 @@
+Source: ros-galactic-rtabmap
+Section: misc
+Priority: optional
+Maintainer: Mathieu Labbe <matlabbe@gmail.com>
+Build-Depends: debhelper (>= 9.0.0), cmake, libfreenect-dev, libopenni-dev, libpcl-dev, libproj-dev, libsqlite3-dev, ros-galactic-cv-bridge, ros-galactic-libg2o, ros-galactic-libpointmatcher, ros-galactic-octomap, ros-galactic-qt-gui-cpp, zlib1g-dev, ros-galactic-ros-workspace
+Homepage: http://introlab.github.io/rtabmap
+Standards-Version: 3.9.2
+
+Package: ros-galactic-rtabmap
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, libfreenect-dev, libopenni-dev, libpcl-dev, libsqlite3-dev, ros-galactic-cv-bridge, ros-galactic-libg2o, ros-galactic-libpointmatcher, ros-galactic-octomap, ros-galactic-qt-gui-cpp, zlib1g-dev, ros-galactic-ros-workspace
+Description: RTAB-Map's standalone library.
+ RTAB-Map is a RGB-D SLAM approach with real-time constraints.
