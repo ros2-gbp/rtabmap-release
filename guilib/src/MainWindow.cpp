@@ -354,6 +354,7 @@ MainWindow::MainWindow(PreferencesDialog * prefDialog, QWidget * parent, bool sh
 	connect(_ui->actionSend_waypoints, SIGNAL(triggered()), this, SLOT(sendWaypoints()));
 	connect(_ui->actionCancel_goal, SIGNAL(triggered()), this, SLOT(cancelGoal()));
 	connect(_ui->actionLabel_current_location, SIGNAL(triggered()), this, SLOT(label()));
+	connect(_ui->actionRemove_label, SIGNAL(triggered()), this, SLOT(removeLabel()));
 	connect(_ui->actionClear_cache, SIGNAL(triggered()), this, SLOT(clearTheCache()));
 	connect(_ui->actionAbout, SIGNAL(triggered()), _aboutDialog , SLOT(exec()));
 	connect(_ui->actionHelp, SIGNAL(triggered()), this , SLOT(openHelp()));
@@ -428,6 +429,7 @@ MainWindow::MainWindow(PreferencesDialog * prefDialog, QWidget * parent, bool sh
 	connect(_ui->actionOpenNI_CV_ASUS, SIGNAL(triggered()), this, SLOT(selectOpenniCvAsus()));
 	connect(_ui->actionOpenNI2, SIGNAL(triggered()), this, SLOT(selectOpenni2()));
 	connect(_ui->actionOpenNI2_kinect, SIGNAL(triggered()), this, SLOT(selectOpenni2()));
+	connect(_ui->actionOpenNI2_orbbec, SIGNAL(triggered()), this, SLOT(selectOpenni2()));
 	connect(_ui->actionOpenNI2_sense, SIGNAL(triggered()), this, SLOT(selectOpenni2()));
 	connect(_ui->actionFreenect2, SIGNAL(triggered()), this, SLOT(selectFreenect2()));
 	connect(_ui->actionKinect_for_Windows_SDK_v2, SIGNAL(triggered()), this, SLOT(selectK4W2()));
@@ -451,6 +453,7 @@ MainWindow::MainWindow(PreferencesDialog * prefDialog, QWidget * parent, bool sh
 	_ui->actionOpenNI_CV_ASUS->setEnabled(CameraOpenNICV::available());
 	_ui->actionOpenNI2->setEnabled(CameraOpenNI2::available());
 	_ui->actionOpenNI2_kinect->setEnabled(CameraOpenNI2::available());
+	_ui->actionOpenNI2_orbbec->setEnabled(CameraOpenNI2::available());
 	_ui->actionOpenNI2_sense->setEnabled(CameraOpenNI2::available());
 	_ui->actionFreenect2->setEnabled(CameraFreenect2::available());
 	_ui->actionKinect_for_Windows_SDK_v2->setEnabled(CameraK4W2::available());
@@ -2298,17 +2301,12 @@ void MainWindow::processStats(const rtabmap::Statistics & stat)
 			// update pose only if odometry is not received
 			std::map<int, int> mapIds = _currentMapIds;
 			std::map<int, Transform> groundTruth = _currentGTPosesMap;
-			std::map<int, std::string> labels = _currentLabels;
 
 			mapIds.insert(std::make_pair(stat.getLastSignatureData().id(), stat.getLastSignatureData().mapId()));
 			if(!stat.getLastSignatureData().getGroundTruthPose().isNull() &&
 				_cachedSignatures.contains(stat.getLastSignatureData().id()))
 			{
 				groundTruth.insert(std::make_pair(stat.getLastSignatureData().id(), stat.getLastSignatureData().getGroundTruthPose()));
-			}
-			for(std::map<int, std::string>::const_iterator iter=stat.labels().begin(); iter!=stat.labels().end(); ++iter)
-			{
-				uInsert(labels, std::pair<int, std::string>(*iter)); // overwrite labels because they could have been modified
 			}
 
 			if(_preferencesDialog->isPriorIgnored() &&
@@ -2346,6 +2344,7 @@ void MainWindow::processStats(const rtabmap::Statistics & stat)
 			}
 #endif
 
+			UDEBUG("%d %d %d", poses.size(), poses.size()?poses.rbegin()->first:0, stat.refImageId());
 			if(!_odometryReceived && poses.size() && poses.rbegin()->first == stat.refImageId())
 			{
 				if(poses.rbegin()->first == stat.getLastSignatureData().id())
@@ -2410,7 +2409,7 @@ void MainWindow::processStats(const rtabmap::Statistics & stat)
 					poses,
 					stat.constraints(),
 					mapIds,
-					labels,
+					stat.labels(),
 					groundTruth,
 					stat.odomCachePoses(),
 					stat.odomCacheConstraints(),
@@ -2643,7 +2642,7 @@ void MainWindow::updateMapCloud(
 		std::map<int, Transform> nearestPoses;
 		if(maxNodes > 0)
 		{
-			std::map<int, float> nodes = graph::findNearestNodes(poses, currentPose, maxNodes);
+			std::map<int, float> nodes = graph::findNearestNodes(currentPose, poses, 0, 0, maxNodes);
 			for(std::map<int, float>::iterator iter=nodes.begin(); iter!=nodes.end(); ++iter)
 			{
 				if(altitudeDelta<=0.0 ||
@@ -4971,6 +4970,7 @@ void MainWindow::updateSelectSourceMenu()
 	_ui->actionOpenNI_CV_ASUS->setChecked(_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcOpenNI_CV_ASUS);
 	_ui->actionOpenNI2->setChecked(_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcOpenNI2);
 	_ui->actionOpenNI2_kinect->setChecked(_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcOpenNI2);
+	_ui->actionOpenNI2_orbbec->setChecked(_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcOpenNI2);
 	_ui->actionOpenNI2_sense->setChecked(_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcOpenNI2);
 	_ui->actionFreenect2->setChecked(_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcFreenect2);
 	_ui->actionKinect_for_Windows_SDK_v2->setChecked(_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcK4W2);
@@ -6004,6 +6004,16 @@ void MainWindow::exportPoses(int format)
 			}
 		}
 
+		if(format != 4 && !poses.empty() && poses.begin()->first<0) // not g2o, landmark not supported
+		{
+			UWARN("Only g2o format (4) can export landmarks, they are ignored with format %d", format);
+			std::map<int, Transform>::iterator iter=poses.begin();
+			while(iter!=poses.end() && iter->first < 0)
+			{
+				poses.erase(iter++);
+			}
+		}
+
 		std::map<int, double> stamps;
 		if(format == 1 || format == 10 || format == 11)
 		{
@@ -6930,6 +6940,17 @@ void MainWindow::label()
 	if(ok && !label.isEmpty())
 	{
 		this->post(new RtabmapEventCmd(RtabmapEventCmd::kCmdLabel, label.toStdString(), 0));
+	}
+}
+
+void MainWindow::removeLabel()
+{
+	UINFO("Removing label...");
+	bool ok = false;
+	QString label = QInputDialog::getText(this, tr("Remove label"), tr("Label: "), QLineEdit::Normal, "", &ok);
+	if(ok && !label.isEmpty())
+	{
+		this->post(new RtabmapEventCmd(RtabmapEventCmd::kCmdRemoveLabel, label.toStdString(), 0));
 	}
 }
 
