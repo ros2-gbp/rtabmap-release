@@ -64,6 +64,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap/core/Memory.h>
 #include <rtabmap/core/GainCompensator.h>
 #include <rtabmap/core/DBDriver.h>
+#include <rtabmap/core/Recovery.h>
 #include <pcl/common/common.h>
 #include <pcl/filters/extract_indices.h>
 #include <pcl/io/ply_io.h>
@@ -80,6 +81,43 @@ const int g_optMeshId = -100;
 #ifdef __ANDROID__
 static JavaVM *jvm;
 static jobject RTABMapActivity = 0;
+#endif
+
+#ifdef __ANDROID__
+#ifndef DISABLE_LOG
+//ref: https://codelab.wordpress.com/2014/11/03/how-to-use-standard-output-streams-for-logging-in-android-apps/
+static int pfd[2];
+static pthread_t thr;
+static void *thread_func(void*)
+{
+    ssize_t rdsz;
+    char buf[128];
+    while((rdsz = read(pfd[0], buf, sizeof buf - 1)) > 0) {
+        if(buf[rdsz - 1] == '\n') --rdsz;
+        buf[rdsz] = 0;  /* add null-terminator */
+        __android_log_write(ANDROID_LOG_DEBUG, LOG_TAG, buf);
+    }
+    return 0;
+}
+
+int start_logger()
+{
+    /* make stdout line-buffered and stderr unbuffered */
+    setvbuf(stdout, 0, _IOLBF, 0);
+    setvbuf(stderr, 0, _IONBF, 0);
+
+    /* create the pipe and redirect stdout and stderr */
+    pipe(pfd);
+    dup2(pfd[1], 1);
+    dup2(pfd[1], 2);
+
+    /* spawn the logging thread */
+    if(pthread_create(&thr, 0, thread_func, 0) == -1)
+        return -1;
+    pthread_detach(thr);
+    return 0;
+}
+#endif
 #endif
 
 rtabmap::ParametersMap RTABMapApp::getRtabmapParameters()
@@ -243,6 +281,12 @@ RTABMapApp::RTABMapApp() :
 
 	this->registerToEventsManager();
 	LOGI("RTABMapApp::RTABMapApp() end");
+
+#ifdef __ANDROID__
+#ifndef DISABLE_LOG
+	start_logger();
+#endif
+#endif
 }
 
 #ifndef __ANDROID__ // __APPLE__
@@ -305,9 +349,9 @@ void RTABMapApp::setScreenRotation(int displayRotation, int cameraRotation)
 	}
 }
 
-int RTABMapApp::openDatabase(const std::string & databasePath, bool databaseInMemory, bool optimize, const std::string & databaseSource)
+int RTABMapApp::openDatabase(const std::string & databasePath, bool databaseInMemory, bool optimize, bool clearDatabase)
 {
-	LOGW("Opening database %s (inMemory=%d, optimize=%d)", databasePath.c_str(), databaseInMemory?1:0, optimize?1:0);
+	LOGW("Opening database %s (inMemory=%d, optimize=%d, clearDatabase=%d)", databasePath.c_str(), databaseInMemory?1:0, optimize?1:0, clearDatabase?1:0);
 	this->unregisterFromEventsManager(); // to ignore published init events when closing rtabmap
 	status_.first = rtabmap::RtabmapEventInit::kInitializing;
 	rtabmapMutex_.lock();
@@ -360,11 +404,11 @@ int RTABMapApp::openDatabase(const std::string & databasePath, bool databaseInMe
 	std::vector<std::vector<Eigen::Vector2f> > texCoords;
 #endif
 	cv::Mat textures;
-	if(!databaseSource.empty())
+	if(!databasePath.empty() && UFile::exists(databasePath) && !clearDatabase)
 	{
 		UEventsManager::post(new rtabmap::RtabmapEventInit(rtabmap::RtabmapEventInit::kInfo, "Loading optimized cloud/mesh..."));
 		rtabmap::DBDriver * driver = rtabmap::DBDriver::create();
-		if(driver->openConnection(databaseSource))
+		if(driver->openConnection(databasePath))
 		{
 			cloudMat = driver->loadOptimizedMesh(&polygons, &texCoords, &textures);
 			if(!cloudMat.empty())
@@ -416,13 +460,11 @@ int RTABMapApp::openDatabase(const std::string & databasePath, bool databaseInMe
 	}
 
 	UEventsManager::post(new rtabmap::RtabmapEventInit(rtabmap::RtabmapEventInit::kInfo, "Loading database..."));
-	LOGI("Erasing database \"%s\"...", databasePath.c_str());
-	UFile::erase(databasePath);
-	if(!databaseSource.empty())
-	{
-		LOGI("Copying database source \"%s\" to \"%s\"...", databaseSource.c_str(), databasePath.c_str());
-		UFile::copy(databaseSource, databasePath);
-	}
+	if(clearDatabase)
+    {
+        LOGI("Erasing database \"%s\"...", databasePath.c_str());
+        UFile::erase(databasePath);
+    }
 
 	//Rtabmap
 	mapToOdom_.setIdentity();
@@ -593,7 +635,7 @@ int RTABMapApp::openDatabase(const std::string & databasePath, bool databaseInMe
                                     if(renderingTextureDecimation_>1)
                                     {
                                         cv::Size reducedSize(data.imageRaw().cols/renderingTextureDecimation_, data.imageRaw().rows/renderingTextureDecimation_);
-                                        cv::resize(data.imageRaw(), inserted.first->second.texture, reducedSize, 0, 0, CV_INTER_LINEAR);
+                                        cv::resize(data.imageRaw(), inserted.first->second.texture, reducedSize, 0, 0, cv::INTER_LINEAR);
                                     }
                                     else
                                     {
@@ -1199,7 +1241,12 @@ int RTABMapApp::Render()
 	std::list<rtabmap::RtabmapEvent*> rtabmapEvents;
 	try
 	{
-		UTimer fpsTime;
+        if(camera_ == 0)
+        {
+            // We are not doing continous drawing, just measure single draw
+            fpsTime_.restart();
+        }
+        
 #ifdef DEBUG_RENDERING_PERFORMANCE
 		UTimer time;
 #endif
@@ -1446,12 +1493,12 @@ int RTABMapApp::Render()
 
 			main_scene_.setMeshRendering(main_scene_.hasMesh(g_optMeshId), main_scene_.hasTexture(g_optMeshId));
 
-			fpsTime.restart();
 			main_scene_.setFrustumVisible(camera_!=0);
 			lastDrawnCloudsCount_ = main_scene_.Render(uvsTransformed, arViewMatrix, arProjectionMatrix);
-			if(renderingTime_ < fpsTime.elapsed())
+            double fpsTime = fpsTime_.ticks();
+			if(renderingTime_ < fpsTime)
 			{
-				renderingTime_ = fpsTime.elapsed();
+				renderingTime_ = fpsTime;
 			}
 
 			// revert state
@@ -1578,7 +1625,7 @@ int RTABMapApp::Render()
 									{
 										cv::Size reducedSize(textureRaw.cols/renderingTextureDecimation_, textureRaw.rows/renderingTextureDecimation_);
 										LOGD("resize image from %dx%d to %dx%d", textureRaw.cols, textureRaw.rows, reducedSize.width, reducedSize.height);
-										cv::resize(textureRaw, iter->second.texture, reducedSize, 0, 0, CV_INTER_LINEAR);
+										cv::resize(textureRaw, iter->second.texture, reducedSize, 0, 0, cv::INTER_LINEAR);
 									}
 									else
 									{
@@ -1863,7 +1910,7 @@ int RTABMapApp::Render()
                                                 if(renderingTextureDecimation_ > 1)
                                                 {
                                                     cv::Size reducedSize(data.imageRaw().cols/renderingTextureDecimation_, data.imageRaw().rows/renderingTextureDecimation_);
-                                                    cv::resize(data.imageRaw(), inserted.first->second.texture, reducedSize, 0, 0, CV_INTER_LINEAR);
+                                                    cv::resize(data.imageRaw(), inserted.first->second.texture, reducedSize, 0, 0, cv::INTER_LINEAR);
 #ifdef DEBUG_RENDERING_PERFORMANCE
                                                     LOGW("resize image from %dx%d to %dx%d (%fs)", data.imageRaw().cols, data.imageRaw().rows, reducedSize.width, reducedSize.height, time.ticks());
 #endif
@@ -2053,13 +2100,13 @@ int RTABMapApp::Render()
 				notifyDataLoaded = true;
 			}
 
-			fpsTime.restart();
-			main_scene_.setFrustumVisible(camera_!=0);
+            main_scene_.setFrustumVisible(camera_!=0);
 			lastDrawnCloudsCount_ = main_scene_.Render(uvsTransformed, arViewMatrix, arProjectionMatrix, occlusionMesh, true);
-			if(renderingTime_ < fpsTime.elapsed())
+            double fpsTime = fpsTime_.ticks();
+            if(renderingTime_ < fpsTime)
 			{
-				renderingTime_ = fpsTime.elapsed();
-			}
+				renderingTime_ = fpsTime;
+            }
 
 			if(rtabmapEvents.size())
 			{
@@ -2096,7 +2143,7 @@ int RTABMapApp::Render()
 			cv::Mat image(h, w, CV_8UC4);
 			glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, image.data);
 			cv::flip(image, image, 0);
-			cv::cvtColor(image, image, CV_RGBA2BGRA);
+			cv::cvtColor(image, image, cv::COLOR_RGBA2BGRA);
 			cv::Mat roi;
 			if(w>h)
 			{
@@ -2113,16 +2160,6 @@ int RTABMapApp::Render()
 			rtabmap_->getMemory()->savePreviewImage(roi);
 			rtabmapMutex_.unlock();
 			screenshotReady_.release();
-		}
-
-		if((openingDatabase_ && !visualizingMesh_) || exporting_ || postProcessing_)
-		{
-			// throttle rendering max 5Hz if we are doing some processing
-			double renderTime = fpsTime.elapsed();
-			if(0.2 - renderTime > 0.0)
-			{
-				uSleep((0.2 - renderTime)*1000);
-			}
 		}
 
 		if((rtabmapThread_==0 || !rtabmapThread_->isRunning()) && lastPostRenderEventTime_ > 0.0)
@@ -2555,6 +2592,26 @@ void RTABMapApp::save(const std::string & databasePath)
 	{
 		clearSceneOnNextRender_ = true;
 	}
+}
+
+bool RTABMapApp::recover(const std::string & from, const std::string & to)
+{
+    std::string errorMsg;
+    if(!databaseRecovery(from, false, &errorMsg, &progressionStatus_))
+    {
+        LOGE("Recovery Error: %s", errorMsg.c_str());
+        return false;
+    }
+    else
+    {
+        LOGI("Renaming %s to %s", from.c_str(), to.c_str());
+        if(UFile::rename(from, to) != 0)
+        {
+            LOGE("Failed renaming %s to %s", from.c_str(), to.c_str());
+            return false;
+        }
+        return true;
+    }
 }
 
 void RTABMapApp::cancelProcessing()
@@ -3711,14 +3768,14 @@ void RTABMapApp::postOdometryEvent(
 					cv::Mat yuv(rgbHeight+rgbHeight/2, rgbWidth, CV_8UC1);
 					memcpy(yuv.data, yPlane, yPlaneLen);
 					memcpy(yuv.data+yPlaneLen, vPlane, rgbHeight/2*rgbWidth);
-					cv::cvtColor(yuv, outputRGB, CV_YUV2BGR_NV21);
+					cv::cvtColor(yuv, outputRGB, cv::COLOR_YUV2BGR_NV21);
 				}
 				else
 				{
 #ifdef __ANDROID__
-					cv::cvtColor(cv::Mat(rgbHeight+rgbHeight/2, rgbWidth, CV_8UC1, (void*)yPlane), outputRGB, CV_YUV2BGR_NV21);
+					cv::cvtColor(cv::Mat(rgbHeight+rgbHeight/2, rgbWidth, CV_8UC1, (void*)yPlane), outputRGB, cv::COLOR_YUV2BGR_NV21);
 #else // __APPLE__
-                    cv::cvtColor(cv::Mat(rgbHeight+rgbHeight/2, rgbWidth, CV_8UC1, (void*)yPlane), outputRGB, CV_YUV2RGB_NV21);
+					cv::cvtColor(cv::Mat(rgbHeight+rgbHeight/2, rgbWidth, CV_8UC1, (void*)yPlane), outputRGB, cv::COLOR_YUV2RGB_NV21);
 #endif
 				}
 
