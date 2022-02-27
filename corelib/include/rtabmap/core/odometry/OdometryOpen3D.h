@@ -25,60 +25,35 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifndef OPTIMIZERG2O_H_
-#define OPTIMIZERG2O_H_
+#ifndef ODOMETRYOPEN3D_H_
+#define ODOMETRYOPEN3D_H_
 
-#include "rtabmap/core/RtabmapExp.h" // DLL export/import defines
-
-#include <rtabmap/core/Optimizer.h>
+#include <rtabmap/core/Odometry.h>
 
 namespace rtabmap {
 
-class RTABMAP_EXP OptimizerG2O : public Optimizer
+class RTABMAP_EXP OdometryOpen3D : public Odometry
 {
 public:
-	static bool available();
-	static bool isCSparseAvailable();
-	static bool isCholmodAvailable();
+	OdometryOpen3D(const rtabmap::ParametersMap & parameters = rtabmap::ParametersMap());
+	virtual ~OdometryOpen3D();
 
-public:
-	OptimizerG2O(const ParametersMap & parameters = ParametersMap());
-	virtual ~OptimizerG2O() {}
-
-	virtual Type type() const {return kTypeG2O;}
-
-	virtual void parseParameters(const ParametersMap & parameters);
-
-	virtual std::map<int, Transform> optimize(
-				int rootId,
-				const std::map<int, Transform> & poses,
-				const std::multimap<int, Link> & edgeConstraints,
-				cv::Mat & outputCovariance,
-				std::list<std::map<int, Transform> > * intermediateGraphes = 0,
-				double * finalError = 0,
-				int * iterationsDone = 0);
-
-	virtual std::map<int, Transform> optimizeBA(
-			int rootId,
-			const std::map<int, Transform> & poses,
-			const std::multimap<int, Link> & links,
-			const std::map<int, CameraModel> & models, // in case of stereo, Tx should be set
-			std::map<int, cv::Point3f> & points3DMap,
-			const std::map<int, std::map<int, FeatureBA> > & wordReferences, // <ID words, IDs frames + keypoint(x,y,depth)>
-			std::set<int> * outliers = 0);
-
-	bool saveGraph(
-		const std::string & fileName,
-		const std::map<int, Transform> & poses,
-		const std::multimap<int, Link> & edgeConstraints);
+	virtual void reset(const Transform & initialPose = Transform::getIdentity());
+	virtual Odometry::Type getType() {return Odometry::kTypeOpen3D;}
 
 private:
-	int solver_;
-	int optimizer_;
-	double pixelVariance_;
-	double robustKernelDelta_;
-	double baseline_;
+	virtual Transform computeTransform(SensorData & image, const Transform & guess = Transform(), OdometryInfo * info = 0);
+
+private:
+#ifdef RTABMAP_OPEN3D
+	rtabmap::SensorData keyFrame_;
+	Transform lastKeyFramePose_;
+	int method_;
+	float maxDepth_;
+	float keyFrameThr_;
+#endif
 };
 
-} /* namespace rtabmap */
-#endif /* OPTIMIZERG2O_H_ */
+}
+
+#endif /* ODOMETRYOPEN3D_H_ */

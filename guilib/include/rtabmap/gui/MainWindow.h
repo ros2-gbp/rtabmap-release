@@ -37,6 +37,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/core/SensorData.h"
 #include "rtabmap/core/OdometryEvent.h"
 #include "rtabmap/core/CameraInfo.h"
+#include "rtabmap/core/Optimizer.h"
 #include "rtabmap/gui/PreferencesDialog.h"
 
 #include <pcl/point_cloud.h>
@@ -161,7 +162,7 @@ protected Q_SLOTS:
 	void exportPosesG2O();
 	void exportImages();
 	void exportOctomap();
-	void postProcessing();
+	void showPostProcessingDialog();
 	void depthCalibration();
 	void openWorkingDirectory();
 	void updateEditMenu();
@@ -193,6 +194,7 @@ protected Q_SLOTS:
 	void postGoal(const QString & goal);
 	void cancelGoal();
 	void label();
+	void removeLabel();
 	void updateCacheFromDatabase();
 	void anchorCloudsToGroundTruth();
 	void selectScreenCaptureFormat(bool checked);
@@ -261,6 +263,8 @@ private:
 			const std::map<int, int> & mapIds,
 			const std::map<int, std::string> & labels,
 			const std::map<int, Transform> & groundTruths,
+			const std::map<int, Transform> & odomCachePoses = std::map<int, Transform>(),
+			const std::multimap<int, Link> & odomCacheConstraints = std::multimap<int, Link>(),
 			bool verboseProgress = false,
 			std::map<std::string, float> * stats = 0);
 	std::pair<pcl::PointCloud<pcl::PointXYZRGB>::Ptr, pcl::IndicesPtr> createAndAddCloudToMap(int nodeId,	const Transform & pose, int mapId);
@@ -311,6 +315,24 @@ protected:
 			Transform & odomSensorExtrinsics,
 			double & odomSensorTimeOffset,
 			float & odomSensorScaleFactor);
+
+	void postProcessing(
+			bool refineNeighborLinks,
+			bool refineLoopClosureLinks,
+			// Detect more loop closures params:
+			bool detectMoreLoopClosures,
+			double clusterRadius,
+			double clusterAngle,
+			int iterations,
+			bool interSession,
+			bool intraSession,
+			// SBA params:
+			bool sba,
+			int sbaIterations,
+			double sbaVariance,
+			Optimizer::Type sbaType,
+			double sbaRematchFeatures,
+			bool abortIfDataMissing = true);
 
 private:
 	Ui_mainWindow * _ui;

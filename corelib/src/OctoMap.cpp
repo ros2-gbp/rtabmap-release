@@ -106,6 +106,23 @@ bool RtabmapColorOcTreeNode::createChild(unsigned int i) {
 #endif
 }
 
+void RtabmapColorOcTreeNode::updateOccupancyTypeChildren()
+{
+	if (children != NULL){
+		int type = kTypeUnknown;
+		for (int i=0; i<8 && type != kTypeObstacle; i++) {
+			RtabmapColorOcTreeNode* child = static_cast<RtabmapColorOcTreeNode*>(children[i]);
+
+			if (child != NULL && child->getOccupancyType() >= kTypeEmpty) {
+				if(type == kTypeUnknown) {
+					type = child->getOccupancyType();
+				}
+			}
+		}
+		type_ = type;
+	}
+}
+
 RtabmapColorOcTree::RtabmapColorOcTree(double resolution)
 	: OccupancyOcTreeBase<RtabmapColorOcTreeNode>(resolution) {
 	RtabmapColorOcTreeMemberInit.ensureLinking();
@@ -231,6 +248,7 @@ void RtabmapColorOcTree::updateInnerOccupancyRecurs(RtabmapColorOcTreeNode* node
 		}
 		node->updateOccupancyChildren();
 		node->updateColorChildren();
+		node->updateOccupancyTypeChildren();
 	}
 #else
 	// only recurse and update for inner nodes:
@@ -245,6 +263,7 @@ void RtabmapColorOcTree::updateInnerOccupancyRecurs(RtabmapColorOcTreeNode* node
 	  }
 	  node->updateOccupancyChildren();
 	  node->updateColorChildren();
+	  node->updateOccupancyTypeChildren();
 	}
 #endif
 }
@@ -872,7 +891,7 @@ bool OctoMap::update(const std::map<int, Transform> & poses)
 						}
 					}
 
-					RtabmapColorOcTreeNode * n = octree_->updateNode(*it, false, orderedPoses.size() == 1);
+					RtabmapColorOcTreeNode * n = octree_->updateNode(*it, false,  true);
 					if(n && n->getOccupancyType() == RtabmapColorOcTreeNode::kTypeUnknown)
 					{
 						n->setOccupancyType(RtabmapColorOcTreeNode::kTypeEmpty);
@@ -938,6 +957,10 @@ bool OctoMap::update(const std::map<int, Transform> & poses)
 							}
 						}
 					}
+				}
+
+				if((occupancyIter != cache_.end() && occupancyIter->second.second.cols) || !free_cells.empty())
+				{
 					octree_->updateInnerOccupancy();
 				}
 
@@ -1209,21 +1232,23 @@ cv::Mat OctoMap::createProjectionMap(float & xMin, float & yMin, float & gridCel
 	int oi=0;
 	cv::Vec2f * oPtr = obstaclesMat.ptr<cv::Vec2f>(0,0);
 	cv::Vec2f * gPtr = groundMat.ptr<cv::Vec2f>(0,0);
+	float halfCellSize = octree_->getNodeSize(treeDepth)/2.0f;
 	for (RtabmapColorOcTree::iterator it = octree_->begin(treeDepth); it != octree_->end(); ++it)
 	{
 		octomap::point3d pt = octree_->keyToCoord(it.getKey());
-		if(octree_->isNodeOccupied(*it) && it->getOccupancyType() == RtabmapColorOcTreeNode::kTypeObstacle)
+		if(octree_->isNodeOccupied(*it) &&
+		   it->getOccupancyType() == RtabmapColorOcTreeNode::kTypeObstacle)
 		{
 			// projected on ground
-			oPtr[oi][0] = pt.x();
-			oPtr[oi][1] = pt.y();
+			oPtr[oi][0] = pt.x()-halfCellSize;
+			oPtr[oi][1] = pt.y()-halfCellSize;
 			++oi;
 		}
 		else
 		{
 			// projected on ground
-			gPtr[gi][0] = pt.x();
-			gPtr[gi][1] = pt.y();
+			gPtr[gi][0] = pt.x()-halfCellSize;
+			gPtr[gi][1] = pt.y()-halfCellSize;
 			++gi;
 		}
 	}

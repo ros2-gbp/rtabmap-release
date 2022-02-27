@@ -58,17 +58,21 @@ void showUsage()
 			"Options:\n"
 			"    --output \"\"           Output name (default: name of the database is used).\n"
 			"    --output_dir \"\"       Output directory (default: same directory than the database).\n"
-			"    --bin                 Export PLY in binary format.\n"
+			"    --ascii               Export PLY in ascii format.\n"
 			"    --las                 Export cloud in LAS instead of PLY (PDAL dependency required).\n"
 			"    --mesh                Create a mesh.\n"
 			"    --texture             Create a mesh with texture.\n"
 			"    --texture_size  #     Texture size 1024, 2048, 4096, 8192, 16384 (default 8192).\n"
 			"    --texture_count #     Maximum textures generated (default 1). Ignored by --multiband option (adjust --multiband_contrib instead).\n"
 			"    --texture_range #     Maximum camera range for texturing a polygon (default 0 meters: no limit).\n"
+			"    --texture_angle #     Maximum camera angle for texturing a polygon (default 0 deg: no limit).\n"
 			"    --texture_depth_error # Maximum depth error between reprojected mesh and depth image to texture a face (-1=disabled, 0=edge length is used, default=0).\n"
+			"    --texture_roi_ratios \"# # # #\" Region of interest from images to texture or to color scans. Format is \"left right top bottom\" (e.g. \"0 0 0 0.1\" means 10%% of the image bottom not used).\n"
 			"    --texture_d2c         Distance to camera policy.\n"
 			"    --cam_projection      Camera projection on assembled cloud and export node ID on each point (in PointSourceId field).\n"
 			"    --cam_projection_keep_all  Keep not colored points from cameras (node ID will be 0 and color will be red).\n"
+			"    --cam_projection_decimation  Decimate images before projecting the points.\n"
+			"    --cam_projection_mask \"\"  File path for a mask. Format should be 8-bits grayscale. The mask should cover all cameras in case multi-camera is used and have the same resolution.\n"
 			"    --poses               Export optimized poses of the robot frame (e.g., base_link).\n"
 			"    --poses_camera        Export optimized poses of the camera frame (e.g., optical frame).\n"
 			"    --poses_scan          Export optimized poses of the scan frame.\n"
@@ -87,6 +91,7 @@ void showUsage()
 			"    --gain_gray           Do gain estimation compensation on gray channel only (default RGB channels).\n"
 			"    --no_blending         Disable blending when texturing.\n"
 			"    --no_clean            Disable cleaning colorless polygons.\n"
+			"    --min_cluster   #     When meshing, filter clusters of polygons with size less than this threshold (default 200, -1 means keep only biggest contiguous surface).\n"
 			"    --low_gain      #     Low brightness gain 0-100 (default 0).\n"
 			"    --high_gain     #     High brightness gain 0-100 (default 10).\n"
 			"    --multiband               Enable multiband texturing (AliceVision dependency required).\n"
@@ -104,8 +109,12 @@ void showUsage()
 			"    --max_range     #     Maximum range of the created clouds (default 4 m, 0 m with --scan).\n"
 			"    --decimation    #     Depth image decimation before creating the clouds (default 4, 1 with --scan).\n"
 			"    --voxel         #     Voxel size of the created clouds (default 0.01 m, 0 m with --scan).\n"
+			"    --ground_normals_up  #  Flip ground normals up if close to -z axis (default 0, 0=disabled, value should be >0 and <1, typical 0.9).\n"
 			"    --noise_radius  #     Noise filtering search radius (default 0, 0=disabled).\n"
 			"    --noise_k       #     Noise filtering minimum neighbors in search radius (default 5, 0=disabled).\n"
+			"    --prop_radius_factor #  Proportional radius filter factor (default 0, 0=disabled). Start tuning from 0.01.\n"
+			"    --prop_radius_scale  #  Proportional radius filter neighbor scale (default 2).\n"
+			"    --random_samples #    Number of output samples using a random filter (default 0, 0=disabled).\n"
 			"    --color_radius  #     Radius used to colorize polygons (default 0.05 m, 0 m with --scan). Set 0 for nearest color.\n"
 			"    --scan                Use laser scan for the point cloud.\n"
 			"    --save_in_db          Save resulting assembled point cloud or mesh in the database.\n"
@@ -123,6 +132,16 @@ void showUsage()
 	exit(1);
 }
 
+class ConsoleProgessState : public ProgressState
+{
+	virtual bool callback(const std::string & msg) const
+	{
+		if(!msg.empty())
+			printf("%s\n", msg.c_str());
+		return true;
+	}
+};
+
 int main(int argc, char * argv[])
 {
 	ULogger::setType(ULogger::kTypeConsole);
@@ -133,7 +152,7 @@ int main(int argc, char * argv[])
 		showUsage();
 	}
 
-	bool binary = false;
+	bool binary = true;
 	bool las = false;
 	bool mesh = false;
 	bool texture = false;
@@ -142,18 +161,25 @@ int main(int argc, char * argv[])
 	float gainValue = 1;
 	bool doBlending = true;
 	bool doClean = true;
+	int minCluster = 200;
 	int poissonDepth = 0;
 	float poissonSize = 0.03;
 	int maxPolygons = 300000;
 	int decimation = -1;
 	float maxRange = -1.0f;
 	float voxelSize = -1.0f;
+	float groundNormalsUp = 0.0f;
 	float noiseRadius = 0.0f;
 	int noiseMinNeighbors = 5;
+	float proportionalRadiusFactor = 0.0f;
+	float proportionalRadiusScale = 2.0f;
+	int randomSamples = 0;
 	int textureSize = 8192;
 	int textureCount = 1;
-	int textureRange = 0;
+	float textureRange = 0;
+	float textureAngle = 0;
 	float textureDepthError = 0;
+	std::vector<float> textureRoiRatios;
 	bool distanceToCamPolicy = false;
 	bool multiband = false;
 	int multibandDownScale = 2;
@@ -171,6 +197,8 @@ int main(int argc, char * argv[])
 	int highBrightnessGain = 10;
 	bool camProjection = false;
 	bool camProjectionKeepAll = false;
+	int cameraProjDecimation = 1;
+	std::string cameraProjMask;
 	bool exportPoses = false;
 	bool exportPosesCamera = false;
 	bool exportPosesScan = false;
@@ -214,7 +242,11 @@ int main(int argc, char * argv[])
 		}
 		else if(std::strcmp(argv[i], "--bin") == 0)
 		{
-			binary = true;
+			printf("No need to set --bin anymore, ply are now automatically exported in binary by default. Set --ascii to export as text.\n");
+		}
+		else if(std::strcmp(argv[i], "--ascii") == 0)
+		{
+			binary = false;
 		}
 		else if(std::strcmp(argv[i], "--las") == 0)
 		{
@@ -263,7 +295,19 @@ int main(int argc, char * argv[])
 			++i;
 			if(i<argc-1)
 			{
-				textureRange = uStr2Int(argv[i]);
+				textureRange = uStr2Float(argv[i]);
+			}
+			else
+			{
+				showUsage();
+			}
+		}
+		else if(std::strcmp(argv[i], "--texture_angle") == 0)
+		{
+			++i;
+			if(i<argc-1)
+			{
+				textureAngle = uStr2Float(argv[i])*M_PI/180.0f;
 			}
 			else
 			{
@@ -282,6 +326,46 @@ int main(int argc, char * argv[])
 				showUsage();
 			}
 		}
+		else if(std::strcmp(argv[i], "--texture_roi_ratios") == 0)
+		{
+			++i;
+			if(i<argc-1)
+			{
+				std::list<std::string> strValues = uSplit(argv[i], ' ');
+				if(strValues.size() != 4)
+				{
+					printf("The number of values must be 4 (roi=\"%s\")\n", argv[i]);
+					showUsage();
+				}
+				else
+				{
+					std::vector<float> tmpValues(4);
+					unsigned int i=0;
+					for(std::list<std::string>::iterator jter = strValues.begin(); jter!=strValues.end(); ++jter)
+					{
+						tmpValues[i] = uStr2Float(*jter);
+						++i;
+					}
+
+					if(tmpValues[0] >= 0 && tmpValues[0] < 1 && tmpValues[0] < 1.0f-tmpValues[1] &&
+						tmpValues[1] >= 0 && tmpValues[1] < 1 && tmpValues[1] < 1.0f-tmpValues[0] &&
+						tmpValues[2] >= 0 && tmpValues[2] < 1 && tmpValues[2] < 1.0f-tmpValues[3] &&
+						tmpValues[3] >= 0 && tmpValues[3] < 1 && tmpValues[3] < 1.0f-tmpValues[2])
+					{
+						textureRoiRatios = tmpValues;
+					}
+					else
+					{
+						printf("The roi ratios are not valid (roi=\"%s\")\n", argv[i]);
+						showUsage();
+					}
+				}
+			}
+			else
+			{
+				showUsage();
+			}
+		}
 		else if(std::strcmp(argv[i], "--texture_d2c") == 0)
 		{
 			distanceToCamPolicy = true;
@@ -293,6 +377,40 @@ int main(int argc, char * argv[])
 		else if(std::strcmp(argv[i], "--cam_projection_keep_all") == 0)
 		{
 			camProjectionKeepAll = true;
+		}
+		else if(std::strcmp(argv[i], "--cam_projection_decimation") == 0)
+		{
+			++i;
+			if(i<argc-1)
+			{
+				cameraProjDecimation = uStr2Int(argv[i]);
+				if(cameraProjDecimation<1)
+				{
+					printf("--cam_projection_decimation cannot be <1! value=\"%s\"\n", argv[i]);
+					showUsage();
+				}
+			}
+			else
+			{
+				showUsage();
+			}
+		}
+		else if(std::strcmp(argv[i], "--cam_projection_mask") == 0)
+		{
+			++i;
+			if(i<argc-1)
+			{
+				cameraProjMask = argv[i];
+				if(!UFile::exists(cameraProjMask))
+				{
+					printf("--cam_projection_mask is set with a file not existing or don't have permissions to open it. Path=\"%s\"\n", argv[i]);
+					showUsage();
+				}
+			}
+			else
+			{
+				showUsage();
+			}
 		}
 		else if(std::strcmp(argv[i], "--poses") == 0)
 		{
@@ -355,6 +473,18 @@ int main(int argc, char * argv[])
 		else if(std::strcmp(argv[i], "--no_clean") == 0)
 		{
 			doClean = false;
+		}
+		else if(std::strcmp(argv[i], "--min_cluster") == 0)
+		{
+			++i;
+			if(i<argc-1)
+			{
+				minCluster = uStr2Int(argv[i]);
+			}
+			else
+			{
+				showUsage();
+			}
 		}
 		else if(std::strcmp(argv[i], "--multiband") == 0)
 		{
@@ -521,6 +651,18 @@ int main(int argc, char * argv[])
 				showUsage();
 			}
 		}
+		else if(std::strcmp(argv[i], "--ground_normals_up") == 0)
+		{
+			++i;
+			if(i<argc-1)
+			{
+				groundNormalsUp = uStr2Float(argv[i]);
+			}
+			else
+			{
+				showUsage();
+			}
+		}
 		else if(std::strcmp(argv[i], "--noise_radius") == 0)
 		{
 			++i;
@@ -539,6 +681,43 @@ int main(int argc, char * argv[])
 			if(i<argc-1)
 			{
 				noiseMinNeighbors = uStr2Int(argv[i]);
+			}
+			else
+			{
+				showUsage();
+			}
+		}
+		else if(std::strcmp(argv[i], "--prop_radius_factor") == 0)
+		{
+			++i;
+			if(i<argc-1)
+			{
+				proportionalRadiusFactor = uStr2Float(argv[i]);
+			}
+			else
+			{
+				showUsage();
+			}
+		}
+		else if(std::strcmp(argv[i], "--prop_radius_scale") == 0)
+		{
+			++i;
+			if(i<argc-1)
+			{
+				proportionalRadiusScale = uStr2Float(argv[i]);
+				UASSERT_MSG(proportionalRadiusScale>=1.0f, "--prop_radius_scale should be >= 1.0");
+			}
+			else
+			{
+				showUsage();
+			}
+		}
+		else if(std::strcmp(argv[i], "--random_samples") == 0)
+		{
+			++i;
+			if(i<argc-1)
+			{
+				randomSamples = uStr2Int(argv[i]);
 			}
 			else
 			{
@@ -836,8 +1015,8 @@ int main(int argc, char * argv[])
 
 	// Construct the cloud
 	printf("Create and assemble the clouds...\n");
-	pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr mergedClouds(new pcl::PointCloud<pcl::PointXYZRGBNormal>);
-	pcl::PointCloud<pcl::PointXYZINormal>::Ptr mergedCloudsI(new pcl::PointCloud<pcl::PointXYZINormal>);
+	pcl::PointCloud<pcl::PointXYZRGB>::Ptr assembledCloud(new pcl::PointCloud<pcl::PointXYZRGB>);
+	pcl::PointCloud<pcl::PointXYZI>::Ptr assembledCloudI(new pcl::PointCloud<pcl::PointXYZI>);
 	std::map<int, rtabmap::Transform> robotPoses;
 	std::vector<std::map<int, rtabmap::Transform> > cameraPoses;
 	std::map<int, rtabmap::Transform> scanPoses;
@@ -845,6 +1024,8 @@ int main(int argc, char * argv[])
 	std::map<int, std::vector<rtabmap::CameraModel> > cameraModels;
 	std::map<int, cv::Mat> cameraDepths;
 	int imagesExported = 0;
+	std::vector<int> rawViewpointIndices;
+	std::map<int, Transform> rawViewpoints;
 	for(std::map<int, Transform>::iterator iter=optimizedPoses.lower_bound(1); iter!=optimizedPoses.end(); ++iter)
 	{
 		Signature node = nodes.find(iter->first)->second;
@@ -857,44 +1038,56 @@ int main(int argc, char * argv[])
 		pcl::IndicesPtr indices(new std::vector<int>);
 		pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud;
 		pcl::PointCloud<pcl::PointXYZI>::Ptr cloudI;
-		if(cloudFromScan)
+		if(node.getWeight() != -1)
 		{
-			cv::Mat tmpDepth;
-			LaserScan scan;
-			node.sensorData().uncompressData(exportImages?&rgb:0, (texture||exportImages)&&!node.sensorData().depthOrRightCompressed().empty()?&tmpDepth:0, &scan);
-			if(decimation>1 || maxRange)
+			if(cloudFromScan)
 			{
-				scan = util3d::commonFiltering(scan, decimation, 0, maxRange);
-			}
-			if(scan.hasRGB())
-			{
-				cloud = util3d::laserScanToPointCloudRGB(scan, scan.localTransform());
-				if(noiseRadius>0.0f && noiseMinNeighbors>0)
+				cv::Mat tmpDepth;
+				LaserScan scan;
+				node.sensorData().uncompressData(exportImages?&rgb:0, (texture||exportImages)&&!node.sensorData().depthOrRightCompressed().empty()?&tmpDepth:0, &scan);
+				if(scan.empty())
 				{
-					indices = util3d::radiusFiltering(cloud, noiseRadius, noiseMinNeighbors);
+					printf("Node %d doesn't have scan data, empty cloud is created.\n", iter->first);
+				}
+				if(decimation>1 || maxRange)
+				{
+					scan = util3d::commonFiltering(scan, decimation, 0, maxRange);
+				}
+				if(scan.hasRGB())
+				{
+					cloud = util3d::laserScanToPointCloudRGB(scan, scan.localTransform());
+					if(noiseRadius>0.0f && noiseMinNeighbors>0)
+					{
+						indices = util3d::radiusFiltering(cloud, noiseRadius, noiseMinNeighbors);
+					}
+				}
+				else
+				{
+					cloudI = util3d::laserScanToPointCloudI(scan, scan.localTransform());
+					if(noiseRadius>0.0f && noiseMinNeighbors>0)
+					{
+						indices = util3d::radiusFiltering(cloudI, noiseRadius, noiseMinNeighbors);
+					}
 				}
 			}
 			else
 			{
-				cloudI = util3d::laserScanToPointCloudI(scan, scan.localTransform());
+				node.sensorData().uncompressData(&rgb, &depth);
+				if(depth.empty())
+				{
+					printf("Node %d doesn't have depth or stereo data, empty cloud is "
+							"created (if you want to create point cloud from scan, use --scan option).\n", iter->first);
+				}
+				cloud = util3d::cloudRGBFromSensorData(
+						node.sensorData(),
+						decimation,      // image decimation before creating the clouds
+						maxRange,        // maximum depth of the cloud
+						0.0f,
+						indices.get());
 				if(noiseRadius>0.0f && noiseMinNeighbors>0)
 				{
-					indices = util3d::radiusFiltering(cloudI, noiseRadius, noiseMinNeighbors);
+					indices = util3d::radiusFiltering(cloud, indices, noiseRadius, noiseMinNeighbors);
 				}
-			}
-		}
-		else
-		{
-			node.sensorData().uncompressData(&rgb, &depth);
-			cloud = util3d::cloudRGBFromSensorData(
-					node.sensorData(),
-					decimation,      // image decimation before creating the clouds
-					maxRange,        // maximum depth of the cloud
-					0.0f,
-					indices.get());
-			if(noiseRadius>0.0f && noiseMinNeighbors>0)
-			{
-				indices = util3d::radiusFiltering(cloud, indices, noiseRadius, noiseMinNeighbors);
 			}
 		}
 
@@ -974,40 +1167,61 @@ int main(int argc, char * argv[])
 		else if(cloudI.get() && !cloudI->empty())
 			cloudI = rtabmap::util3d::transformPointCloud(cloudI, iter->second);
 
+		if(filter_ceiling != 0.0 || filter_floor != 0.0f)
+		{
+			if(cloud.get() && !cloud->empty())
+			{
+				cloud = util3d::passThrough(cloud, "z", filter_floor!=0.0f?filter_floor:(float)std::numeric_limits<int>::min(), filter_ceiling!=0.0f?filter_ceiling:(float)std::numeric_limits<int>::max());
+			}
+			if(cloudI.get() && !cloudI->empty())
+			{
+				cloudI = util3d::passThrough(cloudI, "z", filter_floor!=0.0f?filter_floor:(float)std::numeric_limits<int>::min(), filter_ceiling!=0.0f?filter_ceiling:(float)std::numeric_limits<int>::max());
+			}
+		}
 
-		Eigen::Vector3f viewpoint(iter->second.x(), iter->second.y(), iter->second.z());
 		if(cloudFromScan)
 		{
 			Transform lidarViewpoint = iter->second * node.sensorData().laserScanRaw().localTransform();
-			viewpoint = Eigen::Vector3f(iter->second.x(),  iter->second.y(),  iter->second.z());
+			rawViewpoints.insert(std::make_pair(iter->first, lidarViewpoint));
 		}
+		else if(!node.sensorData().cameraModels().empty() && !node.sensorData().cameraModels()[0].localTransform().isNull())
+		{
+			Transform cameraViewpoint = iter->second * node.sensorData().cameraModels()[0].localTransform(); // take the first camera
+			rawViewpoints.insert(std::make_pair(iter->first, cameraViewpoint));
+		}
+		else if(!node.sensorData().stereoCameraModel().localTransform().isNull())
+		{
+			Transform cameraViewpoint = iter->second * node.sensorData().stereoCameraModel().localTransform();
+			rawViewpoints.insert(std::make_pair(iter->first, cameraViewpoint));
+		}
+		else
+		{
+			rawViewpoints.insert(*iter);
+		}
+
 		if(cloud.get() && !cloud->empty())
 		{
-			pcl::PointCloud<pcl::Normal>::Ptr normals = rtabmap::util3d::computeNormals(cloud, 20, 0.0f, viewpoint);
-			pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloudWithNormals(new pcl::PointCloud<pcl::PointXYZRGBNormal>);
-			pcl::concatenateFields(*cloud, *normals, *cloudWithNormals);
-			if(mergedClouds->size() == 0)
+			if(assembledCloud->empty())
 			{
-				*mergedClouds = *cloudWithNormals;
+				*assembledCloud = *cloud;
 			}
 			else
 			{
-				*mergedClouds += *cloudWithNormals;
+				*assembledCloud += *cloud;
 			}
+			rawViewpointIndices.resize(assembledCloud->size(), iter->first);
 		}
 		else if(cloudI.get() && !cloudI->empty())
 		{
-			pcl::PointCloud<pcl::Normal>::Ptr normals = rtabmap::util3d::computeNormals(cloudI, 20, 0.0f, viewpoint);
-			pcl::PointCloud<pcl::PointXYZINormal>::Ptr cloudIWithNormals(new pcl::PointCloud<pcl::PointXYZINormal>);
-			pcl::concatenateFields(*cloudI, *normals, *cloudIWithNormals);
-			if(mergedCloudsI->size() == 0)
+			if(assembledCloudI->empty())
 			{
-				*mergedCloudsI = *cloudIWithNormals;
+				*assembledCloudI = *cloudI;
 			}
 			else
 			{
-				*mergedCloudsI += *cloudIWithNormals;
+				*assembledCloudI += *cloudI;
 			}
+			rawViewpointIndices.resize(assembledCloudI->size(), iter->first);
 		}
 
 		if(models.empty() && node.sensorData().stereoCameraModel().isValidForProjection())
@@ -1042,12 +1256,14 @@ int main(int argc, char * argv[])
 			scanPoses.insert(std::make_pair(iter->first, iter->second*node.sensorData().laserScanCompressed().localTransform()));
 		}
 	}
-	printf("Create and assemble the clouds... done (%fs, %d points).\n", timer.ticks(), !mergedClouds->empty()?(int)mergedClouds->size():(int)mergedCloudsI->size());
+	printf("Create and assemble the clouds... done (%fs, %d points).\n", timer.ticks(), !assembledCloud->empty()?(int)assembledCloud->size():(int)assembledCloudI->size());
 
 	if(imagesExported>0)
 		printf("%d images exported!\n", imagesExported);
 
-	if(!mergedClouds->empty() || !mergedCloudsI->empty())
+	ConsoleProgessState progressState;
+
+	if(!assembledCloud->empty() || !assembledCloudI->empty())
 	{
 		if(saveInDb)
 		{
@@ -1089,35 +1305,114 @@ int main(int argc, char * argv[])
 			}
 		}
 
-		pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloudToExport = mergedClouds;
-		pcl::PointCloud<pcl::PointXYZINormal>::Ptr cloudIToExport = mergedCloudsI;
-
-		if(filter_ceiling != 0.0 || filter_floor != 0.0f)
+		if(proportionalRadiusFactor>0.0f && proportionalRadiusScale>=1.0f)
 		{
-			printf("Passthrough filtering of the assembled cloud along z axis... (min=%f, max=%f, %d points)\n", filter_floor, filter_ceiling, !cloudToExport->empty()?(int)cloudToExport->size():(int)cloudIToExport->size());
-			if(!cloudToExport->empty())
+			printf("Proportional radius filtering of the assembled cloud... (factor=%f scale=%f, %d points)\n", proportionalRadiusFactor, proportionalRadiusScale, !assembledCloud->empty()?(int)assembledCloud->size():(int)assembledCloudI->size());
+			pcl::IndicesPtr indices;
+			if(!assembledCloud->empty())
 			{
-				cloudToExport = util3d::passThrough(cloudToExport, "z", filter_floor!=0.0f?filter_floor:(float)std::numeric_limits<int>::min(), filter_ceiling!=0.0f?filter_ceiling:(float)std::numeric_limits<int>::max());
+				indices = util3d::proportionalRadiusFiltering(assembledCloud, rawViewpointIndices, rawViewpoints, proportionalRadiusFactor, proportionalRadiusScale);
+				pcl::PointCloud<pcl::PointXYZRGB> tmp;
+				pcl::copyPointCloud(*assembledCloud, *indices, tmp);
+				*assembledCloud = tmp;
 			}
-			if(!cloudIToExport->empty())
+			else if(!assembledCloudI->empty())
 			{
-				cloudIToExport = util3d::passThrough(cloudIToExport, "z", filter_floor!=0.0f?filter_floor:(float)std::numeric_limits<int>::min(), filter_ceiling!=0.0f?filter_ceiling:(float)std::numeric_limits<int>::max());
+				indices = util3d::proportionalRadiusFiltering(assembledCloudI, rawViewpointIndices, rawViewpoints, proportionalRadiusFactor, proportionalRadiusScale);
+				pcl::PointCloud<pcl::PointXYZI> tmp;
+				pcl::copyPointCloud(*assembledCloudI, *indices, tmp);
+				*assembledCloudI = tmp;
 			}
-			printf("Passthrough filtering of the assembled cloud alog z axis.... done! (%fs, %d points)\n", timer.ticks(), !cloudToExport->empty()?(int)cloudToExport->size():(int)cloudIToExport->size());
+			if(indices.get())
+			{
+				std::vector<int> rawCameraIndicesTmp(indices->size());
+				for (std::size_t i = 0; i < indices->size(); ++i)
+					rawCameraIndicesTmp[i] = rawViewpointIndices[indices->at(i)];
+				rawViewpointIndices = rawCameraIndicesTmp;
+			}
+			printf("Proportional radius filtering of the assembled cloud.... done! (%fs, %d points)\n", timer.ticks(), !assembledCloud->empty()?(int)assembledCloud->size():(int)assembledCloudI->size());
 		}
+
+		pcl::PointCloud<pcl::PointXYZ>::Ptr rawAssembledCloud(new pcl::PointCloud<pcl::PointXYZ>);
+		if(!assembledCloud->empty())
+			pcl::copyPointCloud(*assembledCloud, *rawAssembledCloud); // used to adjust normal orientation
+		else if(!assembledCloudI->empty())
+			pcl::copyPointCloud(*assembledCloudI, *rawAssembledCloud); // used to adjust normal orientation
+
+		pcl::PointCloud<pcl::PointXYZ>::Ptr cloudWithoutNormals = rawAssembledCloud;
 
 		if(voxelSize>0.0f)
 		{
-			printf("Voxel grid filtering of the assembled cloud... (voxel=%f, %d points)\n", voxelSize, !cloudToExport->empty()?(int)cloudToExport->size():(int)cloudIToExport->size());
+			printf("Voxel grid filtering of the assembled cloud... (voxel=%f, %d points)\n", voxelSize, !assembledCloud->empty()?(int)assembledCloud->size():(int)assembledCloudI->size());
+			if(!assembledCloud->empty())
+			{
+				assembledCloud = util3d::voxelize(assembledCloud, voxelSize);
+				cloudWithoutNormals.reset(new pcl::PointCloud<pcl::PointXYZ>);
+				pcl::copyPointCloud(*assembledCloud, *cloudWithoutNormals);
+			}
+			else if(!assembledCloudI->empty())
+			{
+				assembledCloudI = util3d::voxelize(assembledCloudI, voxelSize);
+				cloudWithoutNormals.reset(new pcl::PointCloud<pcl::PointXYZ>);
+				pcl::copyPointCloud(*assembledCloudI, *cloudWithoutNormals);
+			}
+			printf("Voxel grid filtering of the assembled cloud.... done! (%fs, %d points)\n", timer.ticks(), !assembledCloud->empty()?(int)assembledCloud->size():(int)assembledCloudI->size());
+		}
+
+		printf("Computing normals of the assembled cloud... (k=20, %d points)\n", !assembledCloud->empty()?(int)assembledCloud->size():(int)assembledCloudI->size());
+		pcl::PointCloud<pcl::Normal>::Ptr normals = util3d::computeNormals(cloudWithoutNormals, 20, 0);
+
+		pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloudToExport(new pcl::PointCloud<pcl::PointXYZRGBNormal>);
+		pcl::PointCloud<pcl::PointXYZINormal>::Ptr cloudIToExport(new pcl::PointCloud<pcl::PointXYZINormal>);
+		if(!assembledCloud->empty())
+		{
+			UASSERT(assembledCloud->size() == normals->size());
+			pcl::concatenateFields(*assembledCloud, *normals, *cloudToExport);
+			printf("Computing normals of the assembled cloud... done! (%fs, %d points)\n", timer.ticks(), (int)assembledCloud->size());
+			assembledCloud->clear();
+
+			// adjust with point of views
+			printf("Adjust normals to viewpoints of the assembled cloud... (%d points)\n", (int)cloudToExport->size());
+			util3d::adjustNormalsToViewPoints(
+										rawViewpoints,
+										rawAssembledCloud,
+										rawViewpointIndices,
+										cloudToExport,
+										groundNormalsUp);
+			printf("Adjust normals to viewpoints of the assembled cloud... (%fs, %d points)\n", timer.ticks(), (int)cloudToExport->size());
+		}
+		else if(!assembledCloudI->empty())
+		{
+			UASSERT(assembledCloudI->size() == normals->size());
+			pcl::concatenateFields(*assembledCloudI, *normals, *cloudIToExport);
+			printf("Computing normals of the assembled cloud... done! (%fs, %d points)\n", timer.ticks(), (int)assembledCloudI->size());
+			assembledCloudI->clear();
+
+			// adjust with point of views
+			printf("Adjust normals to viewpoints of the assembled cloud... (%d points)\n", (int)cloudIToExport->size());
+			util3d::adjustNormalsToViewPoints(
+										rawViewpoints,
+										rawAssembledCloud,
+										rawViewpointIndices,
+										cloudIToExport,
+										groundNormalsUp);
+			printf("Adjust normals to viewpoints of the assembled cloud... (%fs, %d points)\n", timer.ticks(), (int)cloudIToExport->size());
+		}
+		cloudWithoutNormals->clear();
+		rawAssembledCloud->clear();
+
+		if(randomSamples>0)
+		{
+			printf("Random samples filtering of the assembled cloud... (samples=%d, %d points)\n", randomSamples, !cloudToExport->empty()?(int)cloudToExport->size():(int)cloudIToExport->size());
 			if(!cloudToExport->empty())
 			{
-				cloudToExport = util3d::voxelize(cloudToExport, voxelSize);
+				cloudToExport = util3d::randomSampling(cloudToExport, randomSamples);
 			}
 			else if(!cloudIToExport->empty())
 			{
-				cloudIToExport = util3d::voxelize(cloudIToExport, voxelSize);
+				cloudIToExport = util3d::randomSampling(cloudIToExport, randomSamples);
 			}
-			printf("Voxel grid filtering of the assembled cloud.... done! (%fs, %d points)\n", timer.ticks(), !cloudToExport->empty()?(int)cloudToExport->size():(int)cloudIToExport->size());
+			printf("Random samples filtering of the assembled cloud.... done! (%fs, %d points)\n", timer.ticks(), !cloudToExport->empty()?(int)cloudToExport->size():(int)cloudIToExport->size());
 		}
 
 		std::vector<int> pointToCamId;
@@ -1125,6 +1420,38 @@ int main(int argc, char * argv[])
 		if(camProjection && !robotPoses.empty())
 		{
 			printf("Camera projection...\n");
+			std::map<int, std::vector<rtabmap::CameraModel> > cameraModelsProj;
+			if(cameraProjDecimation>1)
+			{
+				for(std::map<int, std::vector<rtabmap::CameraModel> >::iterator iter=cameraModels.begin();
+						iter!=cameraModels.end();
+						++iter)
+				{
+					std::vector<rtabmap::CameraModel> models;
+					for(size_t i=0; i<iter->second.size(); ++i)
+					{
+						models.push_back(iter->second[i].scaled(1.0/double(cameraProjDecimation)));
+					}
+					cameraModelsProj.insert(std::make_pair(iter->first, models));
+				}
+			}
+			else
+			{
+				cameraModelsProj = cameraModels;
+			}
+
+			cv::Mat projMask;
+			if(!cameraProjMask.empty())
+			{
+				projMask = cv::imread(cameraProjMask, cv::IMREAD_GRAYSCALE);
+				if(cameraProjDecimation>1)
+				{
+					cv::Mat out = projMask;
+					cv::resize(projMask, out, cv::Size(), 1.0f/float(cameraProjDecimation), 1.0f/float(cameraProjDecimation), cv::INTER_NEAREST);
+					projMask = out;
+				}
+			}
+
 			pointToCamId.resize(!cloudToExport->empty()?cloudToExport->size():cloudIToExport->size());
 			std::vector<std::pair< std::pair<int, int>, pcl::PointXY> > pointToPixel;
 			if(!cloudToExport->empty())
@@ -1132,120 +1459,170 @@ int main(int argc, char * argv[])
 				pointToPixel = util3d::projectCloudToCameras(
 						*cloudToExport,
 						robotPoses,
-						cameraModels,
+						cameraModelsProj,
 						textureRange,
-						0,
-						std::vector<float>(),
-						distanceToCamPolicy);
+						textureAngle,
+						textureRoiRatios,
+						projMask,
+						distanceToCamPolicy,
+						&progressState);
 			}
 			else if(!cloudIToExport->empty())
 			{
 				pointToPixel = util3d::projectCloudToCameras(
 						*cloudIToExport,
 						robotPoses,
-						cameraModels,
+						cameraModelsProj,
 						textureRange,
-						0,
-						std::vector<float>(),
-						distanceToCamPolicy);
+						textureAngle,
+						textureRoiRatios,
+						projMask,
+						distanceToCamPolicy,
+						&progressState);
 				pointToCamIntensity.resize(pointToPixel.size());
 			}
 
+			printf("Camera projection... coloring the cloud\n");
 			// color the cloud
 			UASSERT(pointToPixel.empty() || pointToPixel.size() == pointToCamId.size());
-			std::map<int, cv::Mat> cachedImages;
 			pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr assembledCloudValidPoints(new pcl::PointCloud<pcl::PointXYZRGBNormal>());
 			assembledCloudValidPoints->resize(pointToCamId.size());
 
-			int oi=0;
+			int imagesDone = 1;
+			for(std::map<int, rtabmap::Transform>::iterator iter=robotPoses.begin(); iter!=robotPoses.end(); ++iter)
+			{
+				int nodeID = iter->first;
+				cv::Mat image;
+				if(uContains(nodes,nodeID) && !nodes.at(nodeID).sensorData().imageCompressed().empty())
+				{
+					nodes.at(nodeID).sensorData().uncompressDataConst(&image, 0);
+				}
+				if(!image.empty())
+				{
+					if(cameraProjDecimation>1)
+					{
+						image = util2d::decimate(image, cameraProjDecimation);
+					}
+					UASSERT(cameraModelsProj.find(nodeID) != cameraModelsProj.end());
+					int modelsSize = cameraModelsProj.at(nodeID).size();
+					for(size_t i=0; i<pointToPixel.size(); ++i)
+					{
+						int cameraIndex = pointToPixel[i].first.second;
+						if(nodeID == pointToPixel[i].first.first && cameraIndex>=0)
+						{
+							pcl::PointXYZRGBNormal pt;
+							float intensity = 0;
+							if(!cloudToExport->empty())
+							{
+								pt = cloudToExport->at(i);
+							}
+							else if(!cloudIToExport->empty())
+							{
+								pt.x = cloudIToExport->at(i).x;
+								pt.y = cloudIToExport->at(i).y;
+								pt.z = cloudIToExport->at(i).z;
+								pt.normal_x = cloudIToExport->at(i).normal_x;
+								pt.normal_y = cloudIToExport->at(i).normal_y;
+								pt.normal_z = cloudIToExport->at(i).normal_z;
+								intensity = cloudIToExport->at(i).intensity;
+							}
+
+							int subImageWidth = image.cols / modelsSize;
+							cv::Mat subImage = image(cv::Range::all(), cv::Range(cameraIndex*subImageWidth, (cameraIndex+1)*subImageWidth));
+
+							int x = pointToPixel[i].second.x * (float)subImage.cols;
+							int y = pointToPixel[i].second.y * (float)subImage.rows;
+							UASSERT(x>=0 && x<subImage.cols);
+							UASSERT(y>=0 && y<subImage.rows);
+
+							if(subImage.type()==CV_8UC3)
+							{
+								cv::Vec3b bgr = subImage.at<cv::Vec3b>(y, x);
+								pt.b = bgr[0];
+								pt.g = bgr[1];
+								pt.r = bgr[2];
+							}
+							else
+							{
+								UASSERT(subImage.type()==CV_8UC1);
+								pt.r = pt.g = pt.b = subImage.at<unsigned char>(pointToPixel[i].second.y * subImage.rows, pointToPixel[i].second.x * subImage.cols);
+							}
+
+							int exportedId = nodeID;
+							pointToCamId[i] = exportedId;
+							if(!pointToCamIntensity.empty())
+							{
+								pointToCamIntensity[i] = intensity;
+							}
+							assembledCloudValidPoints->at(i) = pt;
+						}
+					}
+				}
+				UINFO("Processed %d/%d images", imagesDone++, (int)robotPoses.size());
+			}
+
+			pcl::IndicesPtr validIndices(new std::vector<int>(pointToPixel.size()));
+			size_t oi = 0;
 			for(size_t i=0; i<pointToPixel.size(); ++i)
 			{
-				pcl::PointXYZRGBNormal pt;
-				float intensity = 0;
-				if(!cloudToExport->empty())
+				if(pointToPixel[i].first.first <=0)
 				{
-					pt = cloudToExport->at(i);
-				}
-				else if(!cloudIToExport->empty())
-				{
-					pt.x = cloudIToExport->at(i).x;
-					pt.y = cloudIToExport->at(i).y;
-					pt.z = cloudIToExport->at(i).z;
-					pt.normal_x = cloudIToExport->at(i).normal_x;
-					pt.normal_y = cloudIToExport->at(i).normal_y;
-					pt.normal_z = cloudIToExport->at(i).normal_z;
-					intensity = cloudIToExport->at(i).intensity;
-				}
-				int nodeID = pointToPixel[i].first.first;
-				int cameraIndex = pointToPixel[i].first.second;
-				if(nodeID>0 && cameraIndex>=0)
-				{
-					cv::Mat image;
-					if(uContains(cachedImages, nodeID))
+					if(camProjectionKeepAll)
 					{
-						image = cachedImages.at(nodeID);
-					}
-					else if(uContains(nodes,nodeID) && !nodes.at(nodeID).sensorData().imageCompressed().empty())
-					{
-						nodes.at(nodeID).sensorData().uncompressDataConst(&image, 0);
-						cachedImages.insert(std::make_pair(nodeID, image));
-					}
-
-					if(!image.empty())
-					{
-						int subImageWidth = image.cols / cameraModels.at(nodeID).size();
-						image = image(cv::Range::all(), cv::Range(cameraIndex*subImageWidth, (cameraIndex+1)*subImageWidth));
-
-
-						int x = pointToPixel[i].second.x * (float)image.cols;
-						int y = pointToPixel[i].second.y * (float)image.rows;
-						UASSERT(x>=0 && x<image.cols);
-						UASSERT(y>=0 && y<image.rows);
-
-						if(image.type()==CV_8UC3)
+						pcl::PointXYZRGBNormal pt;
+						float intensity = 0;
+						if(!cloudToExport->empty())
 						{
-							cv::Vec3b bgr = image.at<cv::Vec3b>(y, x);
-							pt.b = bgr[0];
-							pt.g = bgr[1];
-							pt.r = bgr[2];
+							pt = cloudToExport->at(i);
 						}
-						else
+						else if(!cloudIToExport->empty())
 						{
-							UASSERT(image.type()==CV_8UC1);
-							pt.r = pt.g = pt.b = image.at<unsigned char>(pointToPixel[i].second.y * image.rows, pointToPixel[i].second.x * image.cols);
+							pt.x = cloudIToExport->at(i).x;
+							pt.y = cloudIToExport->at(i).y;
+							pt.z = cloudIToExport->at(i).z;
+							pt.normal_x = cloudIToExport->at(i).normal_x;
+							pt.normal_y = cloudIToExport->at(i).normal_y;
+							pt.normal_z = cloudIToExport->at(i).normal_z;
+							intensity = cloudIToExport->at(i).intensity;
 						}
-					}
 
-					int exportedId = nodeID;
-					pointToCamId[oi] = exportedId;
-					if(!pointToCamIntensity.empty())
-					{
-						pointToCamIntensity[oi] = intensity;
+						pointToCamId[i] = 0; // invalid
+						pt.b = 0;
+						pt.g = 0;
+						pt.r = 255;
+						if(!pointToCamIntensity.empty())
+						{
+							pointToCamIntensity[i] = intensity;
+						}
+						assembledCloudValidPoints->at(i) = pt; // red
+						validIndices->at(oi++) = i;
 					}
-					assembledCloudValidPoints->at(oi++) = pt;
 				}
-				else if(camProjectionKeepAll)
+				else
 				{
-					pointToCamId[oi] = 0; // invalid
-					pt.b = 0;
-					pt.g = 0;
-					pt.r = 255;
-					if(!pointToCamIntensity.empty())
-					{
-						pointToCamIntensity[oi] = intensity;
-					}
-					assembledCloudValidPoints->at(oi++) = pt; // red
+					validIndices->at(oi++) = i;
 				}
 			}
 
-			assembledCloudValidPoints->resize(oi);
+			if(oi != validIndices->size())
+			{
+				validIndices->resize(oi);
+				assembledCloudValidPoints = util3d::extractIndices(assembledCloudValidPoints, validIndices, false, false);
+				std::vector<int> pointToCamIdTmp(validIndices->size());
+				std::vector<float> pointToCamIntensityTmp(validIndices->size());
+				for(size_t i=0; i<validIndices->size(); ++i)
+				{
+					pointToCamIdTmp[i] = pointToCamId[validIndices->at(i)];
+					pointToCamIntensityTmp[i] = pointToCamIntensity[validIndices->at(i)];
+				}
+				pointToCamId = pointToCamIdTmp;
+				pointToCamIntensity = pointToCamIntensityTmp;
+				pointToCamIdTmp.clear();
+				pointToCamIntensityTmp.clear();
+			}
+
 			cloudToExport = assembledCloudValidPoints;
 			cloudIToExport->clear();
-			pointToCamId.resize(oi);
-			if(!pointToCamIntensity.empty())
-			{
-				pointToCamIntensity.resize(oi);
-			}
 
 			printf("Camera projection... done! (%fs)\n", timer.ticks());
 		}
@@ -1311,14 +1688,14 @@ int main(int argc, char * argv[])
 		// Meshing...
 		if(mesh || texture)
 		{
-			if(!mergedCloudsI->empty())
+			if(!cloudIToExport->empty())
 			{
-				pcl::copyPointCloud(*mergedCloudsI, *mergedClouds);
-				mergedCloudsI->clear();
+				pcl::copyPointCloud(*cloudIToExport, *cloudToExport);
+				cloudIToExport->clear();
 			}
 
 			Eigen::Vector4f min,max;
-			pcl::getMinMax3D(*mergedClouds, min, max);
+			pcl::getMinMax3D(*cloudToExport, min, max);
 			float mapLength = uMax3(max[0]-min[0], max[1]-min[1], max[2]-min[2]);
 			int optimizedDepth = 12;
 			for(int i=6; i<12; ++i)
@@ -1339,7 +1716,7 @@ int main(int argc, char * argv[])
 			pcl::PolygonMesh::Ptr mesh(new pcl::PolygonMesh);
 			pcl::Poisson<pcl::PointXYZRGBNormal> poisson;
 			poisson.setDepth(optimizedDepth);
-			poisson.setInputCloud(mergedClouds);
+			poisson.setInputCloud(cloudToExport);
 			poisson.reconstruct(*mesh);
 			printf("Mesh reconstruction... done (%fs, %d polygons).\n", timer.ticks(), (int)mesh->polygons.size());
 
@@ -1353,11 +1730,11 @@ int main(int argc, char * argv[])
 						mesh,
 						0.0f,
 						maxPolygons,
-						mergedClouds,
+						cloudToExport,
 						colorRadius,
 						!texture,
 						doClean,
-						200);
+						minCluster);
 				printf("Mesh color transfer... done (%fs).\n", timer.ticks());
 
 				if(!texture)
@@ -1394,10 +1771,10 @@ int main(int argc, char * argv[])
 							cameraDepths,
 							textureRange,
 							textureDepthError,
-							0.0f,
+							textureAngle,
 							multiband?0:50, // Min polygons in camera view to be textured by this camera
-							std::vector<float>(),
-							0,
+							textureRoiRatios,
+							&progressState,
 							&vertexToPixels,
 							distanceToCamPolicy);
 					printf("Texturing... done (%fs).\n", timer.ticks());

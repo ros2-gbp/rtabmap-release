@@ -98,6 +98,7 @@ Memory::Memory(const ParametersMap & parameters) :
 	_laserScanVoxelSize(Parameters::defaultMemLaserScanVoxelSize()),
 	_laserScanNormalK(Parameters::defaultMemLaserScanNormalK()),
 	_laserScanNormalRadius(Parameters::defaultMemLaserScanNormalRadius()),
+	_laserScanGroundNormalsUp(Parameters::defaultIcpPointToPlaneGroundNormalsUp()),
 	_reextractLoopClosureFeatures(Parameters::defaultRGBDLoopClosureReextractFeatures()),
 	_localBundleOnLoopClosure(Parameters::defaultRGBDLocalBundleOnLoopClosure()),
 	_rehearsalMaxDistance(Parameters::defaultRGBDLinearUpdate()),
@@ -565,6 +566,7 @@ void Memory::parseParameters(const ParametersMap & parameters)
 	Parameters::parse(params, Parameters::kMemLaserScanVoxelSize(), _laserScanVoxelSize);
 	Parameters::parse(params, Parameters::kMemLaserScanNormalK(), _laserScanNormalK);
 	Parameters::parse(params, Parameters::kMemLaserScanNormalRadius(), _laserScanNormalRadius);
+	Parameters::parse(params, Parameters::kIcpPointToPlaneGroundNormalsUp(), _laserScanGroundNormalsUp);
 	Parameters::parse(params, Parameters::kRGBDLoopClosureReextractFeatures(), _reextractLoopClosureFeatures);
 	Parameters::parse(params, Parameters::kRGBDLocalBundleOnLoopClosure(), _localBundleOnLoopClosure);
 	Parameters::parse(params, Parameters::kRGBDLinearUpdate(), _rehearsalMaxDistance);
@@ -2523,6 +2525,14 @@ int Memory::getSignatureIdByLabel(const std::string & label, bool lookInDatabase
 		if(id == 0 && _dbDriver && lookInDatabase)
 		{
 			_dbDriver->getNodeIdByLabel(label, id);
+			if(_signatures.find(id) != _signatures.end())
+			{
+				// The signature is already in WM, but label was not
+				// found above. It means the label has been cleared in
+				// current session (not yet saved to database), so return
+				// not found.
+				id = 0;
+			}
 		}
 	}
 	return id;
@@ -2532,15 +2542,35 @@ bool Memory::labelSignature(int id, const std::string & label)
 {
 	// verify that this label is not used
 	int idFound=getSignatureIdByLabel(label);
+	if(idFound == 0 && label.empty() && _labels.find(id)==_labels.end())
+	{
+		UWARN("Trying to remove label from node %d but it has already no label", id);
+		return false;
+	}
 	if(idFound == 0 || idFound == id)
 	{
 		Signature * s  = this->_getSignature(id);
 		if(s)
 		{
-			uInsert(_labels, std::make_pair(s->id(), label));
+			if(label.empty())
+			{
+				UWARN("Label \"%s\" removed from node %d", _labels.at(id).c_str(), id);
+				_labels.erase(id);
+			}
+			else
+			{
+				if(_labels.find(id)!=_labels.end())
+				{
+					UWARN("Label \"%s\" set to node %d (previously labeled \"%s\")", label.c_str(), id, _labels.at(id).c_str());
+				}
+				else
+				{
+					UWARN("Label \"%s\" set to node %d", label.c_str(), id);
+				}
+				uInsert(_labels, std::make_pair(s->id(), label));
+			}
 			s->setLabel(label);
 			_linksChanged = s->isSaved(); // HACK to get label updated in Localization mode
-			UWARN("Label \"%s\" set to node %d", label.c_str(), id);
 			return true;
 		}
 		else if(_dbDriver)
@@ -2551,9 +2581,25 @@ bool Memory::labelSignature(int id, const std::string & label)
 			_dbDriver->loadSignatures(ids,signatures);
 			if(signatures.size())
 			{
-				uInsert(_labels, std::make_pair(signatures.front()->id(), label));
+				if(label.empty())
+				{
+					UWARN("Label \"%s\" removed from node %d", _labels.at(id).c_str(), id);
+					_labels.erase(id);
+				}
+				else
+				{
+					if(_labels.find(id)!=_labels.end())
+					{
+						UWARN("Label \"%s\" set to node %d (previously labeled \"%s\")", label.c_str(), id, _labels.at(id).c_str());
+					}
+					else
+					{
+						UWARN("Label \"%s\" set to node %d", label.c_str(), id);
+					}
+					uInsert(_labels, std::make_pair(id, label));
+				}
+
 				signatures.front()->setLabel(label);
-				UWARN("Label \"%s\" set to node %d", label.c_str(), id);
 				_dbDriver->asyncSave(signatures.front()); // move it again to trash
 				return true;
 			}
@@ -2565,7 +2611,7 @@ bool Memory::labelSignature(int id, const std::string & label)
 	}
 	else if(idFound)
 	{
-		UWARN("Node %d has already label \"%s\"", idFound, label.c_str());
+		UWARN("Another node %d has already label \"%s\", cannot set it to node %d", idFound, label.c_str(), id);
 	}
 	return false;
 }
@@ -2732,13 +2778,13 @@ Transform Memory::computeTransform(
 
 	// make sure we have all data needed
 	// load binary data from database if not in RAM (if image is already here, scan and userData should be or they are null)
-	if(((_reextractLoopClosureFeatures && _registrationPipeline->isImageRequired()) && fromS.sensorData().imageCompressed().empty()) ||
+	if(((_reextractLoopClosureFeatures && (_registrationPipeline->isImageRequired() || guess.isNull())) && fromS.sensorData().imageCompressed().empty()) ||
 	   (_registrationPipeline->isScanRequired() && fromS.sensorData().imageCompressed().empty() && fromS.sensorData().laserScanCompressed().isEmpty()) ||
 	   (_registrationPipeline->isUserDataRequired() && fromS.sensorData().imageCompressed().empty() && fromS.sensorData().userDataCompressed().empty()))
 	{
 		fromS.sensorData() = getNodeData(fromS.id(), true, true, true, true);
 	}
-	if(((_reextractLoopClosureFeatures && _registrationPipeline->isImageRequired()) && toS.sensorData().imageCompressed().empty()) ||
+	if(((_reextractLoopClosureFeatures && (_registrationPipeline->isImageRequired() || guess.isNull())) && toS.sensorData().imageCompressed().empty()) ||
 	   (_registrationPipeline->isScanRequired() && toS.sensorData().imageCompressed().empty() && toS.sensorData().laserScanCompressed().isEmpty()) ||
 	   (_registrationPipeline->isUserDataRequired() && toS.sensorData().imageCompressed().empty() && toS.sensorData().userDataCompressed().empty()))
 	{
@@ -2748,27 +2794,27 @@ Transform Memory::computeTransform(
 	cv::Mat imgBuf, depthBuf, userBuf;
 	LaserScan laserBuf;
 	fromS.sensorData().uncompressData(
-			(_reextractLoopClosureFeatures && _registrationPipeline->isImageRequired())?&imgBuf:0,
-			(_reextractLoopClosureFeatures && _registrationPipeline->isImageRequired())?&depthBuf:0,
+			(_reextractLoopClosureFeatures && (_registrationPipeline->isImageRequired() || guess.isNull()))?&imgBuf:0,
+			(_reextractLoopClosureFeatures && (_registrationPipeline->isImageRequired() || guess.isNull()))?&depthBuf:0,
 			_registrationPipeline->isScanRequired()?&laserBuf:0,
 			_registrationPipeline->isUserDataRequired()?&userBuf:0);
 	toS.sensorData().uncompressData(
-			(_reextractLoopClosureFeatures && _registrationPipeline->isImageRequired())?&imgBuf:0,
-			(_reextractLoopClosureFeatures && _registrationPipeline->isImageRequired())?&depthBuf:0,
+			(_reextractLoopClosureFeatures && (_registrationPipeline->isImageRequired() || guess.isNull()))?&imgBuf:0,
+			(_reextractLoopClosureFeatures && (_registrationPipeline->isImageRequired() || guess.isNull()))?&depthBuf:0,
 			_registrationPipeline->isScanRequired()?&laserBuf:0,
 			_registrationPipeline->isUserDataRequired()?&userBuf:0);
 
 
 	// compute transform fromId -> toId
 	std::vector<int> inliersV;
-	if((_reextractLoopClosureFeatures && _registrationPipeline->isImageRequired()) ||
+	if((_reextractLoopClosureFeatures && (_registrationPipeline->isImageRequired() || guess.isNull())) ||
 		(fromS.getWords().size() && toS.getWords().size()) ||
 		(!guess.isNull() && !_registrationPipeline->isImageRequired()))
 	{
 		Signature tmpFrom = fromS;
 		Signature tmpTo = toS;
 
-		if(_reextractLoopClosureFeatures && _registrationPipeline->isImageRequired())
+		if(_reextractLoopClosureFeatures && (_registrationPipeline->isImageRequired() || guess.isNull()))
 		{
 			UDEBUG("");
 			tmpFrom.removeAllWords();
@@ -4666,6 +4712,7 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 			{
 				if(!imagesRectified && decimatedData.cameraModels().size())
 				{
+					UASSERT_MSG((int)keypoints.size() == descriptors.rows, uFormat("%d vs %d", (int)keypoints.size(), descriptors.rows).c_str());
 					std::vector<cv::KeyPoint> keypointsValid;
 					keypointsValid.reserve(keypoints.size());
 					cv::Mat descriptorsValid;
@@ -4858,6 +4905,144 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 
 			UASSERT_MSG(imagesRectified, "Cannot extract descriptors on not rectified image from keypoints which assumed to be undistorted");
 			descriptors = _feature2D->generateDescriptors(imageMono, keypoints);
+		}
+		else if(!imagesRectified && !data.cameraModels().empty())
+		{
+			std::vector<cv::KeyPoint> keypointsValid;
+			keypointsValid.reserve(keypoints.size());
+			cv::Mat descriptorsValid;
+			descriptorsValid.reserve(descriptors.rows);
+			std::vector<cv::Point3f> keypoints3DValid;
+			keypoints3DValid.reserve(keypoints3D.size());
+
+			//undistort keypoints before projection (RGB-D)
+			if(data.cameraModels().size() == 1)
+			{
+				std::vector<cv::Point2f> pointsIn, pointsOut;
+				cv::KeyPoint::convert(keypoints,pointsIn);
+				if(data.cameraModels()[0].D_raw().cols == 6)
+				{
+#if CV_MAJOR_VERSION > 2 or (CV_MAJOR_VERSION == 2 and (CV_MINOR_VERSION >4 or (CV_MINOR_VERSION == 4 and CV_SUBMINOR_VERSION >=10)))
+					// Equidistant / FishEye
+					// get only k parameters (k1,k2,p1,p2,k3,k4)
+					cv::Mat D(1, 4, CV_64FC1);
+					D.at<double>(0,0) = data.cameraModels()[0].D_raw().at<double>(0,0);
+					D.at<double>(0,1) = data.cameraModels()[0].D_raw().at<double>(0,1);
+					D.at<double>(0,2) = data.cameraModels()[0].D_raw().at<double>(0,4);
+					D.at<double>(0,3) = data.cameraModels()[0].D_raw().at<double>(0,5);
+					cv::fisheye::undistortPoints(pointsIn, pointsOut,
+							data.cameraModels()[0].K_raw(),
+							D,
+							data.cameraModels()[0].R(),
+							data.cameraModels()[0].P());
+				}
+				else
+#else
+					UWARN("Too old opencv version (%d,%d,%d) to support fisheye model (min 2.4.10 required)!",
+							CV_MAJOR_VERSION, CV_MINOR_VERSION, CV_SUBMINOR_VERSION);
+				}
+#endif
+				{
+					//RadialTangential
+					cv::undistortPoints(pointsIn, pointsOut,
+							data.cameraModels()[0].K_raw(),
+							data.cameraModels()[0].D_raw(),
+							data.cameraModels()[0].R(),
+							data.cameraModels()[0].P());
+				}
+				UASSERT(pointsOut.size() == keypoints.size());
+				for(unsigned int i=0; i<pointsOut.size(); ++i)
+				{
+					if(pointsOut.at(i).x>=0 && pointsOut.at(i).x<data.cameraModels()[0].imageWidth() &&
+					   pointsOut.at(i).y>=0 && pointsOut.at(i).y<data.cameraModels()[0].imageHeight())
+					{
+						keypointsValid.push_back(keypoints.at(i));
+						keypointsValid.back().pt.x = pointsOut.at(i).x;
+						keypointsValid.back().pt.y = pointsOut.at(i).y;
+						descriptorsValid.push_back(descriptors.row(i));
+						if(!keypoints3D.empty())
+						{
+							keypoints3DValid.push_back(keypoints3D.at(i));
+						}
+					}
+				}
+			}
+			else
+			{
+				float subImageWidth;
+				if(!data.imageRaw().empty())
+				{
+					UASSERT(int((data.imageRaw().cols/data.cameraModels().size())*data.cameraModels().size()) == data.imageRaw().cols);
+					subImageWidth = data.imageRaw().cols/data.cameraModels().size();
+				}
+				else
+				{
+					UASSERT(data.cameraModels()[0].imageWidth()>0);
+					subImageWidth = data.cameraModels()[0].imageWidth();
+				}
+
+				for(unsigned int i=0; i<keypoints.size(); ++i)
+				{
+					int cameraIndex = int(keypoints.at(i).pt.x / subImageWidth);
+					UASSERT_MSG(cameraIndex >= 0 && cameraIndex < (int)data.cameraModels().size(),
+							uFormat("cameraIndex=%d, models=%d, kpt.x=%f, subImageWidth=%f (Camera model image width=%d)",
+									cameraIndex, (int)data.cameraModels().size(), keypoints[i].pt.x, subImageWidth, data.cameraModels()[0].imageWidth()).c_str());
+
+					std::vector<cv::Point2f> pointsIn, pointsOut;
+					pointsIn.push_back(cv::Point2f(keypoints.at(i).pt.x-subImageWidth*cameraIndex, keypoints.at(i).pt.y));
+					if(data.cameraModels()[cameraIndex].D_raw().cols == 6)
+					{
+#if CV_MAJOR_VERSION > 2 or (CV_MAJOR_VERSION == 2 and (CV_MINOR_VERSION >4 or (CV_MINOR_VERSION == 4 and CV_SUBMINOR_VERSION >=10)))
+						// Equidistant / FishEye
+						// get only k parameters (k1,k2,p1,p2,k3,k4)
+						cv::Mat D(1, 4, CV_64FC1);
+						D.at<double>(0,0) = data.cameraModels()[cameraIndex].D_raw().at<double>(0,0);
+						D.at<double>(0,1) = data.cameraModels()[cameraIndex].D_raw().at<double>(0,1);
+						D.at<double>(0,2) = data.cameraModels()[cameraIndex].D_raw().at<double>(0,4);
+						D.at<double>(0,3) = data.cameraModels()[cameraIndex].D_raw().at<double>(0,5);
+						cv::fisheye::undistortPoints(pointsIn, pointsOut,
+								data.cameraModels()[cameraIndex].K_raw(),
+								D,
+								data.cameraModels()[cameraIndex].R(),
+								data.cameraModels()[cameraIndex].P());
+					}
+					else
+#else
+						UWARN("Too old opencv version (%d,%d,%d) to support fisheye model (min 2.4.10 required)!",
+								CV_MAJOR_VERSION, CV_MINOR_VERSION, CV_SUBMINOR_VERSION);
+					}
+#endif
+					{
+						//RadialTangential
+						cv::undistortPoints(pointsIn, pointsOut,
+								data.cameraModels()[cameraIndex].K_raw(),
+								data.cameraModels()[cameraIndex].D_raw(),
+								data.cameraModels()[cameraIndex].R(),
+								data.cameraModels()[cameraIndex].P());
+					}
+
+					if(pointsOut[0].x>=0 && pointsOut[0].x<data.cameraModels()[cameraIndex].imageWidth() &&
+					   pointsOut[0].y>=0 && pointsOut[0].y<data.cameraModels()[cameraIndex].imageHeight())
+					{
+						keypointsValid.push_back(keypoints.at(i));
+						keypointsValid.back().pt.x = pointsOut[0].x + subImageWidth*cameraIndex;
+						keypointsValid.back().pt.y = pointsOut[0].y;
+						descriptorsValid.push_back(descriptors.row(i));
+						if(!keypoints3D.empty())
+						{
+							keypoints3DValid.push_back(keypoints3D.at(i));
+						}
+					}
+				}
+			}
+
+			keypoints = keypointsValid;
+			descriptors = descriptorsValid;
+			keypoints3D = keypoints3DValid;
+
+			t = timer.ticks();
+			if(stats) stats->addStatistic(Statistics::kTimingMemRectification(), t*1000.0f);
+			UDEBUG("time rectification = %fs", t);
 		}
 		t = timer.ticks();
 		if(stats) stats->addStatistic(Statistics::kTimingMemDescriptors_extraction(), t*1000.0f);
@@ -5297,7 +5482,8 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 				0,
 				_laserScanVoxelSize,
 				_laserScanNormalK,
-				_laserScanNormalRadius);
+				_laserScanNormalRadius,
+				_laserScanGroundNormalsUp);
 		t = timer.ticks();
 		if(stats) stats->addStatistic(Statistics::kTimingMemScan_filtering(), t*1000.0f);
 		UDEBUG("time normals scan = %fs", t);
@@ -5648,7 +5834,24 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
                 }
                 
             }
-			Link landmark(s->id(), landmarkId, Link::kLandmark, iter->second.pose(), iter->second.covariance().inv(), landmarkSize);
+
+			Transform landmarkPose = iter->second.pose();
+			if(_registrationPipeline->force3DoF())
+			{
+				// For 2D slam, make sure the landmark z axis is up
+				rtabmap::Transform tx = landmarkPose.rotation() * rtabmap::Transform(1,0,0,0,0,0);
+				rtabmap::Transform ty = landmarkPose.rotation() * rtabmap::Transform(0,1,0,0,0,0);
+				if(fabs(tx.z()) > 0.9)
+				{
+					landmarkPose*=rtabmap::Transform(0,0,0,0,(tx.z()>0?1:-1)*M_PI/2,0);
+				}
+				else if(fabs(ty.z()) > 0.9)
+				{
+					landmarkPose*=rtabmap::Transform(0,0,0,(ty.z()>0?-1:1)*M_PI/2,0,0);
+				}
+			}
+
+			Link landmark(s->id(), landmarkId, Link::kLandmark, landmarkPose, iter->second.covariance().inv(), landmarkSize);
 			s->addLandmark(landmark);
 
 			// Update landmark index

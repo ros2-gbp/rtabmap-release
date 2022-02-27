@@ -67,6 +67,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/core/Compression.h"
 #include "rtabmap/core/Graph.h"
 #include "rtabmap/core/Stereo.h"
+#include "rtabmap/core/StereoDense.h"
 #include "rtabmap/core/Optimizer.h"
 #include "rtabmap/core/RegistrationVis.h"
 #include "rtabmap/core/RegistrationIcp.h"
@@ -393,6 +394,7 @@ DatabaseViewer::DatabaseViewer(const QString & ini, QWidget * parent) :
 	connect(ui_->doubleSpinBox_voxelSize, SIGNAL(valueChanged(double)), this, SLOT(updateConstraintView()));
 	connect(ui_->doubleSpinBox_voxelSize, SIGNAL(valueChanged(double)), this, SLOT(update3dView()));
 	connect(ui_->checkBox_cameraProjection, SIGNAL(stateChanged(int)), this, SLOT(update3dView()));
+	connect(ui_->checkBox_showDisparityInsteadOfRight, SIGNAL(stateChanged(int)), this, SLOT(update3dView()));
 	connect(ui_->spinBox_decimation, SIGNAL(valueChanged(int)), this, SLOT(updateConstraintView()));
 	connect(ui_->spinBox_decimation, SIGNAL(valueChanged(int)), this, SLOT(update3dView()));
 	connect(ui_->groupBox_posefiltering, SIGNAL(clicked(bool)), this, SLOT(updateGraphView()));
@@ -421,6 +423,7 @@ DatabaseViewer::DatabaseViewer(const QString & ini, QWidget * parent) :
 	connect(ui_->doubleSpinBox_gainCompensationRadius, SIGNAL(valueChanged(double)), this, SLOT(configModified()));
 	connect(ui_->doubleSpinBox_voxelSize, SIGNAL(valueChanged(double)), this, SLOT(configModified()));
 	connect(ui_->checkBox_cameraProjection, SIGNAL(stateChanged(int)), this, SLOT(configModified()));
+	connect(ui_->checkBox_showDisparityInsteadOfRight, SIGNAL(stateChanged(int)), this, SLOT(configModified()));
 	connect(ui_->spinBox_decimation, SIGNAL(valueChanged(int)), this, SLOT(configModified()));
 	connect(ui_->groupBox_posefiltering, SIGNAL(clicked(bool)), this, SLOT(configModified()));
 	connect(ui_->doubleSpinBox_posefilteringRadius, SIGNAL(valueChanged(double)), this, SLOT(configModified()));
@@ -553,7 +556,7 @@ void DatabaseViewer::readSettings()
 	ui_->doubleSpinBox_voxelSize->setValue(settings.value("voxelSize", ui_->doubleSpinBox_voxelSize->value()).toDouble());
 	ui_->spinBox_decimation->setValue(settings.value("decimation", ui_->spinBox_decimation->value()).toInt());
 	ui_->checkBox_cameraProjection->setChecked(settings.value("camProj", ui_->checkBox_cameraProjection->isChecked()).toBool());
-
+	ui_->checkBox_showDisparityInsteadOfRight->setChecked(settings.value("showDisp", ui_->checkBox_showDisparityInsteadOfRight->isChecked()).toBool());
 	settings.endGroup();
 
 	settings.beginGroup("grid");
@@ -641,6 +644,7 @@ void DatabaseViewer::writeSettings()
 	settings.setValue("voxelSize", ui_->doubleSpinBox_voxelSize->value());
 	settings.setValue("decimation", ui_->spinBox_decimation->value());
 	settings.setValue("camProj", ui_->checkBox_cameraProjection->isChecked());
+	settings.setValue("showDisp", ui_->checkBox_showDisparityInsteadOfRight->isChecked());
 	settings.endGroup();
 
 	// save Grid settings
@@ -731,6 +735,7 @@ void DatabaseViewer::restoreDefaultSettings()
 	ui_->doubleSpinBox_voxelSize->setValue(0.0);
 	ui_->spinBox_decimation->setValue(1);
 	ui_->checkBox_cameraProjection->setChecked(false);
+	ui_->checkBox_showDisparityInsteadOfRight->setChecked(false);
 
 	ui_->groupBox_posefiltering->setChecked(false);
 	ui_->doubleSpinBox_posefilteringRadius->setValue(0.1);
@@ -1826,11 +1831,11 @@ void DatabaseViewer::updateIds()
 				infoReducedGraph_ = true;
 			}
 
-			std::multimap<int, Link>::iterator invertedLinkIter = graph::findLink(links, jter->second.to(), jter->second.from(), false);
+			std::multimap<int, Link>::iterator invertedLinkIter = graph::findLink(links, jter->second.to(), jter->second.from(), false, jter->second.type());
 			if(	jter->second.isValid() && // null transform means a rehearsed location
 				ids.find(jter->second.from()) != ids.end() &&
 				(ids.find(jter->second.to()) != ids.end() || jter->second.to()<0) && // to add landmark links
-				graph::findLink(links_, jter->second.from(), jter->second.to()) == links_.end() &&
+				graph::findLink(links_, jter->second.from(), jter->second.to(), false, jter->second.type()) == links_.end() &&
 				invertedLinkIter != links.end() &&
 				w != -9)
 			{
@@ -1905,7 +1910,6 @@ void DatabaseViewer::updateIds()
 	if(!gpsValues_.empty())
 	{
 		ui_->menuExport_GPS->setEnabled(true);
-		ui_->actionPoses_KML->setEnabled(groundTruthPoses_.empty());
 	}
 
 	float xMin, yMin, cellSize;
@@ -2380,6 +2384,10 @@ void DatabaseViewer::exportPoses(int format)
 	QStringList types;
 	types.push_back("Map's graph (see Graph View)");
 	types.push_back("Odometry");
+	if(!groundTruthPoses_.empty())
+	{
+		types.push_back("Ground Truth");
+	}
 	bool ok;
 	QString type = QInputDialog::getItem(this, tr("Which poses?"), tr("Poses:"), types, 0, false, &ok);
 	if(!ok)
@@ -2387,8 +2395,14 @@ void DatabaseViewer::exportPoses(int format)
 		return;
 	}
 	bool odometry = type.compare("Odometry") == 0;
+	bool groundTruth = type.compare("Ground Truth") == 0;
 
-	if(!odometry && graphes_.empty())
+	if(groundTruth && groundTruthPoses_.empty())
+	{
+		QMessageBox::warning(this, tr("Cannot export poses"), tr("No ground truth poses in database?!"));
+		return;
+	}
+	else if(!odometry && graphes_.empty())
 	{
 		this->updateGraphView();
 		if(graphes_.empty() || ui_->horizontalSlider_iterations->maximum() != (int)graphes_.size()-1)
@@ -2412,7 +2426,11 @@ void DatabaseViewer::exportPoses(int format)
 		else
 		{
 			std::map<int, rtabmap::Transform> graph;
-			if(odometry)
+			if(groundTruth)
+			{
+				graph = groundTruthPoses_;
+			}
+			else if(odometry)
 			{
 				graph = odomPoses_;
 			}
@@ -2512,7 +2530,7 @@ void DatabaseViewer::exportPoses(int format)
 	}
 
 	std::map<int, Transform> optimizedPoses;
-	if(ui_->checkBox_alignScansCloudsWithGroundTruth->isChecked() && !groundTruthPoses_.empty())
+	if(groundTruth)
 	{
 		optimizedPoses = groundTruthPoses_;
 	}
@@ -2684,6 +2702,16 @@ void DatabaseViewer::exportPoses(int format)
 			}
 		}
 
+		if(format != 4 && !poses.empty() && poses.begin()->first<0) // not g2o, landmark not supported
+		{
+			UWARN("Only g2o format (4) can export landmarks, they are ignored with format %d", format);
+			std::map<int, Transform>::iterator iter=poses.begin();
+			while(iter!=poses.end() && iter->first < 0)
+			{
+				poses.erase(iter++);
+			}
+		}
+
 		std::map<int, double> stamps;
 		if(format == 1 || format == 10 || format == 11)
 		{
@@ -2711,7 +2739,7 @@ void DatabaseViewer::exportPoses(int format)
 		}
 
 		QString output = pathDatabase_ + QDir::separator() + (format==3?"toro%1.graph":format==4?"poses%1.g2o":"poses%1.txt");
-		QString suffix = odometry?"_odom":"";
+		QString suffix = odometry?"_odom":groundTruth?"_gt":"";
 		output = output.arg(suffix);
 
 		QString path = QFileDialog::getSaveFileName(
@@ -4398,7 +4426,7 @@ void DatabaseViewer::update(int value,
 				data.uncompressData();
 				if(!data.imageRaw().empty())
 				{
-					img = uCvMat2QImage(ui_->label_indexB==labelIndex?data.imageRaw():data.imageRaw());
+					img = uCvMat2QImage(data.imageRaw());
 				}
 				if(!data.depthOrRightRaw().empty())
 				{
@@ -4409,6 +4437,15 @@ void DatabaseViewer::update(int value,
 						{
 							depth = util2d::fillDepthHoles(depth, ui_->spinBox_mesh_fillDepthHoles->value(), float(ui_->spinBox_mesh_depthError->value())/100.0f);
 						}
+					}
+					if( !data.imageRaw().empty() &&
+						!data.rightRaw().empty() &&
+						data.stereoCameraModel().isValidForProjection() &&
+						ui_->checkBox_showDisparityInsteadOfRight->isChecked())
+					{
+						rtabmap::StereoDense * denseStereo = rtabmap::StereoDense::create(ui_->parameters_toolbox->getParameters());
+						depth = util2d::depthFromDisparity(denseStereo->computeDisparity(data.imageRaw(), data.rightRaw()), data.stereoCameraModel().left().fx(), data.stereoCameraModel().baseline(), CV_32FC1);
+						delete denseStereo;
 					}
 					imgDepth = depth;
 				}
@@ -5025,9 +5062,9 @@ void DatabaseViewer::update(int value,
 								float xMin=0.0f, yMin=0.0f;
 								cv::Mat map8S;
 								ParametersMap parameters = ui_->parameters_toolbox->getParameters();
-								parameters = Parameters::filterParameters(parameters, "GridGlobal", true);
 								float gridCellSize = Parameters::defaultGridCellSize();
 								Parameters::parse(parameters, Parameters::kGridCellSize(), gridCellSize);
+								parameters = Parameters::filterParameters(parameters, "GridGlobal", true);
 #ifdef RTABMAP_OCTOMAP
 								if(octomap)
 								{
@@ -5606,16 +5643,13 @@ void DatabaseViewer::sliderBMoved(int value)
 
 void DatabaseViewer::update3dView()
 {
-	if(ui_->dockWidget_view3d->isVisible())
+	if(lastSliderIndexBrowsed_ == ui_->horizontalSlider_B->value())
 	{
-		if(lastSliderIndexBrowsed_ == ui_->horizontalSlider_B->value())
-		{
-			sliderBValueChanged(ui_->horizontalSlider_B->value());
-		}
-		else
-		{
-			sliderAValueChanged(ui_->horizontalSlider_A->value());
-		}
+		sliderBValueChanged(ui_->horizontalSlider_B->value());
+	}
+	else
+	{
+		sliderAValueChanged(ui_->horizontalSlider_A->value());
 	}
 }
 
@@ -6194,24 +6228,27 @@ void DatabaseViewer::updateConstraintView(
 						if(poses.size() != posesOut.size())
 						{
 							UWARN("Scan poses input and output are different! %d vs %d", (int)poses.size(), (int)posesOut.size());
-							UWARN("Input poses: ");
-							for(std::map<int, Transform>::iterator iter=poses.begin(); iter!=poses.end(); ++iter)
-							{
-								UWARN(" %d", iter->first);
-							}
-							UWARN("Input links: ");
-							std::multimap<int, Link> modifiedLinks = updateLinksWithModifications(links_);
-							for(std::multimap<int, Link>::iterator iter=modifiedLinks.begin(); iter!=modifiedLinks.end(); ++iter)
-							{
-								UWARN(" %d->%d", iter->second.from(), iter->second.to());
-							}
 						}
 
+						UDEBUG("Input poses: ");
+						for(std::map<int, Transform>::iterator iter=posesOut.begin(); iter!=posesOut.end(); ++iter)
+						{
+							UDEBUG(" %d=%s", iter->first, iter->second.prettyPrint().c_str());
+						}
+						UDEBUG("Input links: ");
+						for(std::multimap<int, Link>::iterator iter=linksOut.begin(); iter!=linksOut.end(); ++iter)
+						{
+							UDEBUG(" %d->%d (type=%s) %s", iter->second.from(), iter->second.to(), iter->second.typeName().c_str(), iter->second.transform().prettyPrint().c_str());
+						}
 
-						QTime time;
-						time.start();
 						std::map<int, rtabmap::Transform> finalPoses = optimizer->optimize(link.to(), posesOut, linksOut);
 						delete optimizer;
+
+						UDEBUG("Output poses: ");
+						for(std::map<int, Transform>::iterator iter=finalPoses.begin(); iter!=finalPoses.end(); ++iter)
+						{
+							UDEBUG(" %d=%s", iter->first, iter->second.prettyPrint().c_str());
+						}
 
 						// transform local poses in loop referential
 						Transform u = t * finalPoses.at(link.to()).inverse();
@@ -7730,32 +7767,30 @@ void DatabaseViewer::refineConstraint(int from, int to, bool silent)
 						ui_->doubleSpinBox_icp_minDepth->value(),
 						0,
 						ui_->parameters_toolbox->getParameters());
-				int maxLaserScans = cloudFrom->size();
-				fromS->sensorData().setLaserScan(LaserScan(util3d::laserScanFromPointCloud(*util3d::removeNaNFromPointCloud(cloudFrom), Transform()), maxLaserScans, 0));
-				toS->sensorData().setLaserScan(LaserScan(util3d::laserScanFromPointCloud(*util3d::removeNaNFromPointCloud(cloudTo), Transform()), maxLaserScans, 0));
 
-				if(!fromS->sensorData().laserScanCompressed().isEmpty() && !toS->sensorData().laserScanCompressed().isEmpty())
+				if(cloudFrom->empty() && cloudTo->empty())
+				{
+					std::string msg = "Option to generate scan from depth is checked (GUI Parameters->Refine), but "
+									  "resulting clouds from depth are empty. Transformation estimation will likely "
+									  "fails. Uncheck the parameter to use laser scans.";
+					UWARN(msg.c_str());
+					if(!silent)
+					{
+						QMessageBox::warning(this,
+											tr("Refine link"),
+											tr("%1").arg(msg.c_str()));
+					}
+				}
+				else if(!fromS->sensorData().laserScanCompressed().isEmpty() || !toS->sensorData().laserScanCompressed().isEmpty())
 				{
 					UWARN("There are laser scans in data, but generate laser scan from "
 						  "depth image option is activated (GUI Parameters->Refine). "
 						  "Ignoring saved laser scans...");
 				}
-				else
-				{
-					QString msg = tr("Generating laser scan from depth image is checked "
-							"(GUI Parameters->Refine), but selected nodes don't contain "
-							"depth data. Empty laser scans are generated, so transform "
-							"estimation will likely fail. Uncheck to use laser scans instead "
-							"(if there are some).");
-					if(!silent)
-					{
 
-						QMessageBox::warning(this,
-								tr("Refine a link"),
-								msg);
-					}
-					UWARN(msg.toStdString().c_str());
-				}
+				int maxLaserScans = cloudFrom->size();
+				fromS->sensorData().setLaserScan(LaserScan(util3d::laserScanFromPointCloud(*util3d::removeNaNFromPointCloud(cloudFrom), Transform()), maxLaserScans, 0));
+				toS->sensorData().setLaserScan(LaserScan(util3d::laserScanFromPointCloud(*util3d::removeNaNFromPointCloud(cloudTo), Transform()), maxLaserScans, 0));
 			}
 			else
 			{
@@ -8009,25 +8044,46 @@ bool DatabaseViewer::addConstraint(int from, int to, bool silent)
 						ui_->doubleSpinBox_icp_minDepth->value(),
 						0,
 						ui_->parameters_toolbox->getParameters());
+
+				if(cloudFrom->empty() && cloudTo->empty())
+				{
+					std::string msg = "Option to generate scan from depth is checked (GUI Parameters->Refine), but "
+									  "resulting clouds from depth are empty. Transformation estimation will likely "
+									  "fails. Uncheck the parameter to use laser scans.";
+					UWARN(msg.c_str());
+					if(!silent)
+					{
+						QMessageBox::warning(this,
+											tr("Add link"),
+											tr("%1").arg(msg.c_str()));
+					}
+				}
+				else if(!fromS->sensorData().laserScanCompressed().isEmpty() || !toS->sensorData().laserScanCompressed().isEmpty())
+				{
+					UWARN("There are laser scans in data, but generate laser scan from "
+						  "depth image option is activated (GUI Parameters->Refine). Ignoring saved laser scans...");
+				}
+
 				int maxLaserScans = cloudFrom->size();
 				fromS->sensorData().setLaserScan(LaserScan(util3d::laserScanFromPointCloud(*util3d::removeNaNFromPointCloud(cloudFrom), Transform()), maxLaserScans, 0));
 				toS->sensorData().setLaserScan(LaserScan(util3d::laserScanFromPointCloud(*util3d::removeNaNFromPointCloud(cloudTo), Transform()), maxLaserScans, 0));
-
-				if(!fromS->sensorData().laserScanCompressed().isEmpty() || !toS->sensorData().laserScanCompressed().isEmpty())
-				{
-					UWARN("There are laser scans in data, but generate laser scan from "
-						  "depth image option is activated. Ignoring saved laser scans...");
-				}
 			}
 		}
 		else if(!reextractVisualFeatures && fromS->getWords().empty() && toS->getWords().empty())
 		{
-			UWARN("\"%s\" is false and signatures (%d and %d) don't have words, "
+			std::string msg = uFormat("\"%s\" is false and signatures (%d and %d) don't have words, "
 					"registration will not be possible. Set \"%s\" to true.",
 					Parameters::kRGBDLoopClosureReextractFeatures().c_str(),
 					fromS->id(),
 					toS->id(),
 					Parameters::kRGBDLoopClosureReextractFeatures().c_str());
+			UWARN(msg.c_str());
+			if(!silent)
+			{
+				QMessageBox::warning(this,
+									tr("Add link"),
+									tr("%1").arg(msg.c_str()));
+			}
 		}
 
 		Transform guess;

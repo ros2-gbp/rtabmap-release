@@ -137,6 +137,28 @@ bool OptimizerG2O::isCholmodAvailable()
 #endif
 }
 
+OptimizerG2O::OptimizerG2O(const ParametersMap & parameters) :
+		Optimizer(parameters),
+		solver_(Parameters::defaultg2oSolver()),
+		optimizer_(Parameters::defaultg2oOptimizer()),
+		pixelVariance_(Parameters::defaultg2oPixelVariance()),
+		robustKernelDelta_(Parameters::defaultg2oRobustKernelDelta()),
+		baseline_(Parameters::defaultg2oBaseline())
+{
+#ifdef RTABMAP_G2O
+	// Issue on android, have to explicitly register this type when using fixed root prior below
+	if(!g2o::Factory::instance()->knowsTag("CACHE_SE3_OFFSET"))
+	{
+#if defined(RTABMAP_G2O_CPP11) and RTABMAP_G2O_CPP11 == 1
+		g2o::Factory::instance()->registerType("CACHE_SE3_OFFSET", g2o::make_unique<g2o::HyperGraphElementCreator<g2o::CacheSE3Offset> >());
+#else
+		g2o::Factory::instance()->registerType("CACHE_SE3_OFFSET", new g2o::HyperGraphElementCreator<g2o::CacheSE3Offset>);
+#endif
+	}
+#endif
+	parseParameters(parameters);
+}
+
 void OptimizerG2O::parseParameters(const ParametersMap & parameters)
 {
 	Optimizer::parseParameters(parameters);
@@ -310,14 +332,28 @@ std::map<int, Transform> OptimizerG2O::optimize(
 		}
 #endif
 		// detect if there is a global pose prior set, if so remove rootId
-		if(!priorsIgnored())
+		bool hasGravityConstraints = false;
+		if(!priorsIgnored() || (!isSlam2d() && gravitySigma() > 0))
 		{
 			for(std::multimap<int, Link>::const_iterator iter=edgeConstraints.begin(); iter!=edgeConstraints.end(); ++iter)
 			{
-				if(iter->second.from() == iter->second.to() && iter->second.type() == Link::kPosePrior)
+				if(iter->second.from() == iter->second.to())
 				{
-					rootId = 0;
-					break;
+					if(!priorsIgnored() && iter->second.type() == Link::kPosePrior)
+					{
+						rootId = 0;
+						break;
+					}
+					else if(!isSlam2d() &&
+							gravitySigma() > 0 &&
+							iter->second.type() == Link::kGravity)
+					{
+						hasGravityConstraints = true;
+						if(priorsIgnored())
+						{
+							break;
+						}
+					}
 				}
 			}
 		}
@@ -325,7 +361,7 @@ std::map<int, Transform> OptimizerG2O::optimize(
 		int landmarkVertexOffset = poses.rbegin()->first+1;
 		std::map<int, bool> isLandmarkWithRotation;
 
-		UDEBUG("fill poses to g2o...");
+		UDEBUG("fill poses to g2o... (rootId=%d hasGravityConstraints=%d isSlam2d=%d)", rootId, hasGravityConstraints?1:0, isSlam2d()?1:0);
 		for(std::map<int, Transform>::const_iterator iter = poses.begin(); iter!=poses.end(); ++iter)
 		{
 			UASSERT(!iter->second.isNull());
@@ -339,6 +375,7 @@ std::map<int, Transform> OptimizerG2O::optimize(
 					v2->setEstimate(g2o::SE2(iter->second.x(), iter->second.y(), iter->second.theta()));
 					if(id == rootId)
 					{
+						UDEBUG("Set %d fixed", id);
 						v2->setFixed(true);
 					}
 					vertex = v2;
@@ -361,6 +398,11 @@ std::map<int, Transform> OptimizerG2O::optimize(
 					{
 						g2o::VertexSE2 * v2 = new g2o::VertexSE2();
 						v2->setEstimate(g2o::SE2(iter->second.x(), iter->second.y(), iter->second.theta()));
+						if(id == rootId)
+						{
+							UDEBUG("Set %d fixed", id);
+							v2->setFixed(true);
+						}
 						vertex = v2;
 						isLandmarkWithRotation.insert(std::make_pair(id, true));
 						id = landmarkVertexOffset - id;
@@ -382,8 +424,9 @@ std::map<int, Transform> OptimizerG2O::optimize(
 					pose = a.linear();
 					pose.translation() = a.translation();
 					v3->setEstimate(pose);
-					if(id == rootId)
+					if(id == rootId && !hasGravityConstraints)
 					{
+						UDEBUG("Set %d fixed", id);
 						v3->setFixed(true);
 					}
 					vertex = v3;
@@ -412,6 +455,11 @@ std::map<int, Transform> OptimizerG2O::optimize(
 						pose = a.linear();
 						pose.translation() = a.translation();
 						v3->setEstimate(pose);
+						if(id == rootId && !hasGravityConstraints)
+						{
+							UDEBUG("Set %d fixed", id);
+							v3->setFixed(true);
+						}
 						vertex = v3;
 						isLandmarkWithRotation.insert(std::make_pair(id, true));
 						id = landmarkVertexOffset - id;
@@ -422,8 +470,50 @@ std::map<int, Transform> OptimizerG2O::optimize(
 					continue;
 				}
 			}
-			vertex->setId(id);
-			UASSERT_MSG(optimizer.addVertex(vertex), uFormat("cannot insert vertex %d!?", iter->first).c_str());
+			if(vertex == 0)
+			{
+				UERROR("Could not create vertex for node %d", id);
+			}
+			else
+			{
+				vertex->setId(id);
+				UASSERT_MSG(optimizer.addVertex(vertex), uFormat("cannot insert vertex %d!?", iter->first).c_str());
+			}
+		}
+
+		// Setup root prior (fixed x,y,z,yaw)
+		if(!isSlam2d() && rootId !=0 && hasGravityConstraints)
+		{
+			g2o::VertexSE3* v1 = dynamic_cast<g2o::VertexSE3*>(optimizer.vertex(rootId));
+			if(v1)
+			{
+				g2o::EdgeSE3Prior * e = new g2o::EdgeSE3Prior();
+				e->setVertex(0, v1);
+				Eigen::Affine3d a = poses.at(rootId).toEigen3d();
+				Eigen::Isometry3d pose;
+				pose = a.linear();
+				pose.translation() = a.translation();
+				e->setMeasurement(pose);
+				e->setParameterId(0, PARAM_OFFSET);
+				Eigen::Matrix<double, 6, 6> information = Eigen::Matrix<double, 6, 6>::Identity()*10e6;
+				// pitch and roll not fixed
+				information(3,3) = information(4,4) = 1;
+				e->setInformation(information);
+				if (!optimizer.addEdge(e))
+				{
+					delete e;
+					UERROR("Map: Failed adding fixed constraint of rootid %d, set as fixed instead", rootId);
+					v1->setFixed(true);
+				}
+				else
+				{
+					UDEBUG("Set %d fixed with prior (have gravity constraints)", rootId);
+				}
+			}
+			else
+			{
+				UERROR("Map: Failed adding fixed constraint of rootid %d (not found in added vertices)", rootId);
+			}
 		}
 
 		UDEBUG("fill edges to g2o...");
