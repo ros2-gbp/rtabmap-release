@@ -93,6 +93,7 @@ SET(SRC_FILES
     odometry/OdometryMSCKF.cpp
     odometry/OdometryVINS.cpp
     odometry/OdometryOpenVINS.cpp
+    odometry/OdometryOpen3D.cpp
     
     IMU.cpp
     IMUThread.cpp
@@ -142,6 +143,7 @@ IF(MSVC)
 ENDIF(MSVC)
 
 SET(INCLUDE_DIRS
+    ${CMAKE_CURRENT_BINARY_DIR}/../include
     ${PROJECT_SOURCE_DIR}/utilite/include
 	${CMAKE_CURRENT_SOURCE_DIR}/../include
 	${CMAKE_CURRENT_SOURCE_DIR}
@@ -193,7 +195,7 @@ IF(TORCH_FOUND)
 	)
 ENDIF(TORCH_FOUND)
 
-IF(Python3_FOUND)
+IF(WITH_PYTHON AND Python3_FOUND)
 	SET(LIBRARIES
 		${LIBRARIES}
 		Python3::Python
@@ -209,7 +211,7 @@ IF(Python3_FOUND)
 	    ${CMAKE_CURRENT_SOURCE_DIR}/python
 		${INCLUDE_DIRS}
 	)
-ENDIF(Python3_FOUND)
+ENDIF(WITH_PYTHON AND Python3_FOUND)
 
 
 
@@ -371,18 +373,22 @@ ENDIF(WITH_TORO)
 
 IF(G2O_FOUND)
 	IF(g2o_FOUND)
-	  SET(LIBRARIES
-             ${LIBRARIES}
+	  SET(LIBRARIES ${LIBRARIES}
 	     g2o::core
-	     g2o::solver_cholmod
 	     g2o::solver_eigen
 	     g2o::solver_pcg
-	     g2o::solver_csparse
-	     g2o::csparse_extension
 	     g2o::types_slam2d
 	     g2o::types_slam3d
-	     g2o::types_sba
-	  )
+	     g2o::types_sba)
+	  IF(TARGET g2o::solver_csparse)
+	    SET(LIBRARIES ${LIBRARIES}
+          g2o::solver_csparse
+          g2o::csparse_extension)
+      ENDIF(TARGET g2o::solver_csparse)
+      IF(TARGET g2o::solver_cholmod)
+        SET(LIBRARIES ${LIBRARIES} 
+          g2o::solver_cholmod)
+      ENDIF(TARGET g2o::solver_cholmod)
 	ELSE()
 	  SET(INCLUDE_DIRS 
 		${INCLUDE_DIRS} 
@@ -393,13 +399,11 @@ IF(G2O_FOUND)
 		${G2O_LIBRARIES}
 	  )
 	ENDIF()
-	SET(SRC_FILES
-    		${SRC_FILES}
+	SET(SRC_FILES ${SRC_FILES}
 		optimizer/g2o/edge_se3_xyzprior.cpp
 	)
 	IF(WITH_VERTIGO)
-		SET(SRC_FILES
-    			${SRC_FILES}
+		SET(SRC_FILES ${SRC_FILES}
 			optimizer/vertigo/g2o/edge_se2Switchable.cpp
 			optimizer/vertigo/g2o/edge_se3Switchable.cpp
 			optimizer/vertigo/g2o/edge_switchPrior.cpp
@@ -420,7 +424,7 @@ IF(cvsba_FOUND)
 	)
 ENDIF(cvsba_FOUND)
 
-IF(CERES_FOUND)
+IF(WITH_CERES AND CERES_FOUND)
 	SET(INCLUDE_DIRS 
 		${INCLUDE_DIRS} 
 		${CERES_INCLUDE_DIRS}
@@ -429,7 +433,7 @@ IF(CERES_FOUND)
 		${LIBRARIES}
 		${CERES_LIBRARIES}
 	)
-ENDIF(CERES_FOUND)
+ENDIF(WITH_CERES AND CERES_FOUND)
 
 IF(libpointmatcher_FOUND)
 	SET(INCLUDE_DIRS 
@@ -448,6 +452,13 @@ IF(CCCoreLib_FOUND)
 		CCCoreLib::CCCoreLib
 	)
 ENDIF(CCCoreLib_FOUND)
+
+IF(Open3D_FOUND)
+    SET(LIBRARIES
+        ${LIBRARIES}
+        Open3D::Open3D
+    )
+ENDIF(Open3D_FOUND)
 
 IF(FastCV_FOUND)
 	SET(INCLUDE_DIRS 
@@ -709,10 +720,10 @@ endforeach(arg ${RESOURCES})
 #MESSAGE(STATUS "RESOURCES = ${RESOURCES}")
 #MESSAGE(STATUS "RESOURCES_HEADERS = ${RESOURCES_HEADERS}")
 
-IF(ANDROID)
+IF(ANDROID OR IOS)
 
    IF(NOT RTABMAP_RES_TOOL)
-      find_host_program(RTABMAP_RES_TOOL rtabmap-res_tool PATHS ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+      find_host_program(RTABMAP_RES_TOOL rtabmap-res_tool PATHS ${PROJECT_BINARY_DIR}/../bin)
       IF(NOT RTABMAP_RES_TOOL)
          MESSAGE( FATAL_ERROR "RTABMAP_RES_TOOL is not defined (it is the path to \"rtabmap-res_tool\" application created by a non-Android build)." )
       ENDIF(NOT RTABMAP_RES_TOOL)
@@ -765,4 +776,11 @@ install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../include/
 		COMPONENT devel 
 		FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp" 
 		PATTERN ".svn" EXCLUDE)
+		
+# For generated Version.h
+install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../include/ 
+        DESTINATION "${INSTALL_INCLUDE_DIR}"
+        COMPONENT devel 
+        FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp" 
+        PATTERN ".svn" EXCLUDE)
 

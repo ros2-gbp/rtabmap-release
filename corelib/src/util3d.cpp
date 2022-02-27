@@ -2823,7 +2823,13 @@ void fillProjectedCloudHoles(cv::Mat & registeredDepth, bool verticalDirection, 
 	}
 }
 
-struct ProjectionInfo {
+class ProjectionInfo {
+public:
+	ProjectionInfo():
+		nodeID(-1),
+		cameraIndex(-1),
+		distance(-1)
+	{}
 	int nodeID;
 	int cameraIndex;
 	pcl::PointXY uv;
@@ -2842,9 +2848,18 @@ std::vector<std::pair< std::pair<int, int>, pcl::PointXY> > projectCloudToCamera
 		float maxDistance,
 		float maxAngle,
 		const std::vector<float> & roiRatios,
+		const cv::Mat & projMask,
 		bool distanceToCamPolicy,
 		const ProgressState * state)
 {
+	UINFO("cloud=%d points", (int)cloud.size());
+	UINFO("cameraPoses=%d", (int)cameraPoses.size());
+	UINFO("cameraModels=%d", (int)cameraModels.size());
+	UINFO("maxDistance=%f", maxDistance);
+	UINFO("maxAngle=%f", maxAngle);
+	UINFO("distanceToCamPolicy=%s", distanceToCamPolicy?"true":"false");
+	UINFO("roiRatios=%s", roiRatios.size() == 4?uFormat("%f %f %f %f", roiRatios[0], roiRatios[1], roiRatios[2], roiRatios[3]):"");
+	UINFO("projMask=%dx%d", projMask.cols, projMask.rows);
 	std::vector<std::pair< std::pair<int, int>, pcl::PointXY> > pointToPixel;
 
 	if (cloud.empty() || cameraPoses.empty() || cameraModels.empty())
@@ -2859,20 +2874,48 @@ std::vector<std::pair< std::pair<int, int>, pcl::PointXY> > projectCloudToCamera
 		return pointToPixel;
 	}
 
-	std::vector<std::vector<ProjectionInfo> > invertedIndex(cloud.size()); // For each point: list of cameras
+	std::vector<ProjectionInfo> invertedIndex(cloud.size()); // For each point: list of cameras
 	int cameraProcessed = 0;
+	bool wrongMaskFormatWarned = false;
 	for(std::map<int, Transform>::const_iterator pter = cameraPoses.lower_bound(0); pter!=cameraPoses.end(); ++pter)
 	{
 		std::map<int, std::vector<CameraModel> >::const_iterator iter=cameraModels.find(pter->first);
 		if(iter!=cameraModels.end() && !iter->second.empty())
 		{
-			for(size_t i=0; i<iter->second.size(); ++i)
+			cv::Mat validProjMask;
+			if(!projMask.empty())
 			{
-				Transform cameraTransform = (pter->second * iter->second[i].localTransform());
+				if(projMask.type() != CV_8UC1)
+				{
+					if(!wrongMaskFormatWarned)
+						UERROR("Wrong camera projection mask type %d, should be CV_8UC1", projMask.type());
+					wrongMaskFormatWarned = true;
+				}
+				else if(projMask.cols == iter->second[0].imageWidth() * (int)iter->second.size() &&
+				        projMask.rows == iter->second[0].imageHeight())
+				{
+					validProjMask = projMask;
+				}
+				else
+				{
+					UWARN("Camera projection mask (%dx%d) is not valid for current "
+						   "camera model(s) (count=%ld, image size=%dx%d). It will be "
+						   "ignored for node %d",
+						   projMask.cols, projMask.rows,
+						   iter->second.size(),
+						   iter->second[0].imageWidth(),
+						   iter->second[0].imageHeight(),
+						   pter->first);
+				}
+			}
+
+			for(size_t camIndex=0; camIndex<iter->second.size(); ++camIndex)
+			{
+				Transform cameraTransform = (pter->second * iter->second[camIndex].localTransform());
 				UASSERT(!cameraTransform.isNull());
-				cv::Mat cameraMatrixK = iter->second[i].K();
+				cv::Mat cameraMatrixK = iter->second[camIndex].K();
 				UASSERT(cameraMatrixK.type() == CV_64FC1 && cameraMatrixK.cols == 3 && cameraMatrixK.cols == 3);
-				const cv::Size & imageSize = iter->second[i].imageSize();
+				const cv::Size & imageSize = iter->second[camIndex].imageSize();
 
 				float fx = cameraMatrixK.at<double>(0,0);
 				float fy = cameraMatrixK.at<double>(1,1);
@@ -2899,7 +2942,7 @@ std::vector<std::pair< std::pair<int, int>, pcl::PointXY> > projectCloudToCamera
 					// re-project in camera frame
 					float z = ptScan.z;
 					bool set = false;
-					if(z > 0.0f)
+					if(z > 0.0f && (maxDistance<=0 || z<maxDistance))
 					{
 						float invZ = 1.0f/z;
 						float dx = (fx*ptScan.x)*invZ + cx;
@@ -2909,7 +2952,8 @@ std::vector<std::pair< std::pair<int, int>, pcl::PointXY> > projectCloudToCamera
 						int dx_high = dx + 0.5f;
 						int dy_high = dy + 0.5f;
 						int zMM = z * 1000;
-						if(uIsInBounds(dx_low, roi.x, roi.x+roi.width) && uIsInBounds(dy_low, roi.y, roi.y+roi.height))
+						if(uIsInBounds(dx_low, roi.x, roi.x+roi.width) && uIsInBounds(dy_low, roi.y, roi.y+roi.height) &&
+						   (validProjMask.empty() || validProjMask.at<unsigned char>(dy_low, imageSize.width*camIndex+dx_low) > 0))
 						{
 							set = true;
 							cv::Vec2i &zReg = registered.at<cv::Vec2i>(dy_low, dx_low);
@@ -2920,7 +2964,8 @@ std::vector<std::pair< std::pair<int, int>, pcl::PointXY> > projectCloudToCamera
 							}
 						}
 						if((dx_low != dx_high || dy_low != dy_high) &&
-							uIsInBounds(dx_high, roi.x, roi.x+roi.width) && uIsInBounds(dy_high, roi.y, roi.y+roi.height))
+							uIsInBounds(dx_high, roi.x, roi.x+roi.width) && uIsInBounds(dy_high, roi.y, roi.y+roi.height) &&
+							(validProjMask.empty() || validProjMask.at<unsigned char>(dy_high, imageSize.width*camIndex+dx_high) > 0))
 						{
 							set = true;
 							cv::Vec2i &zReg = registered.at<cv::Vec2i>(dy_high, dx_high);
@@ -2939,11 +2984,11 @@ std::vector<std::pair< std::pair<int, int>, pcl::PointXY> > projectCloudToCamera
 				if(count == 0)
 				{
 					registered = cv::Mat();
-					UINFO("No points projected in camera %d/%d", pter->first, i);
+					UINFO("No points projected in camera %d/%d", pter->first, camIndex);
 				}
 				else
 				{
-					UDEBUG("%d points projected in camera %d/%d", count, pter->first, i);
+					UDEBUG("%d points projected in camera %d/%d", count, pter->first, camIndex);
 				}
 				for(int u=0; u<registered.cols; ++u)
 				{
@@ -2954,11 +2999,42 @@ std::vector<std::pair< std::pair<int, int>, pcl::PointXY> > projectCloudToCamera
 						{
 							ProjectionInfo info;
 							info.nodeID = pter->first;
-							info.cameraIndex = i;
+							info.cameraIndex = camIndex;
 							info.uv.x = float(u)/float(imageSize.width);
 							info.uv.y = float(v)/float(imageSize.height);
-							info.distance = zReg[0]/1000.0f;
-							invertedIndex[zReg[1]].push_back(info);
+							const Transform & cam = cameraPoses.at(info.nodeID);
+							const PointT & pt = cloud.at(zReg[1]);
+							Eigen::Vector4f camDir(cam.x()-pt.x, cam.y()-pt.y, cam.z()-pt.z, 0);
+							Eigen::Vector4f normal(pt.normal_x, pt.normal_y, pt.normal_z, 0);
+							float angleToCam = maxAngle<=0?0:pcl::getAngle3D(normal, camDir);
+							float distanceToCam = zReg[0]/1000.0f;
+							if( (maxAngle<=0 || (camDir.dot(normal) > 0 && angleToCam < maxAngle)) && // is facing camera? is point normal perpendicular to camera?
+								(maxDistance<=0 || distanceToCam<maxDistance)) // is point not too far from camera?
+							{
+								float vx = info.uv.x-0.5f;
+								float vy = info.uv.y-0.5f;
+
+								float distanceToCenter = vx*vx+vy*vy;
+								float distance = distanceToCenter;
+								if(distanceToCamPolicy)
+								{
+									distance = distanceToCam;
+								}
+
+								info.distance = distance;
+
+								if(invertedIndex[zReg[1]].distance != -1.0f)
+								{
+									if(distance <= invertedIndex[zReg[1]].distance)
+									{
+										invertedIndex[zReg[1]] = info;
+									}
+								}
+								else
+								{
+									invertedIndex[zReg[1]] = info;
+								}
+							}
 						}
 					}
 				}
@@ -2991,50 +3067,14 @@ std::vector<std::pair< std::pair<int, int>, pcl::PointXY> > projectCloudToCamera
 	// For each point
 	for(size_t i=0; i<invertedIndex.size(); ++i)
 	{
-		if((i+1)%10000 == 0)
-		{
-			UDEBUG("Point %d/%d", i+1, (int)cloud.size());
-			if(state && !state->callback(uFormat("%d/%d points projected to cameras (out of %d points)", colorized, i+1, (int)cloud.size())))
-			{
-				//cancelled!
-				UWARN("Projecting to camera cancelled!");
-				pointToPixel.clear();
-				return pointToPixel;
-			}
-		}
-
-		const PointT & pt = cloud.at(i);
 		int nodeID = -1;
 		int cameraIndex = -1;
-		float smallestWeight = std::numeric_limits<float>::max();
 		pcl::PointXY uv_coords;
-		for (size_t j = 0; j<invertedIndex[i].size(); ++j)
+		if(invertedIndex[i].distance > -1.0f)
 		{
-			const Transform & cam = cameraPoses.at(invertedIndex[i][j].nodeID);
-			Eigen::Vector4f camDir(cam.x()-pt.x, cam.y()-pt.y, cam.z()-pt.z, 0);
-			Eigen::Vector4f normal(pt.normal_x, pt.normal_y, pt.normal_z, 0);
-			float angleToCam = maxAngle<=0?0:pcl::getAngle3D(normal, camDir);
-			float distanceToCam = invertedIndex[i][j].distance;
-			if( (maxAngle<=0 || (camDir.dot(normal) > 0 && angleToCam < maxAngle)) && // is facing camera? is point normal perpendicular to camera?
-				(maxDistance<=0 || distanceToCam<maxDistance)) // is point not too far from camera?
-			{
-				float vx = invertedIndex[i][j].uv.x-0.5f;
-				float vy = invertedIndex[i][j].uv.y-0.5f;
-
-				float distanceToCenter = vx*vx+vy*vy;
-				float distance = distanceToCenter;
-				if(distanceToCamPolicy)
-				{
-					distance = distanceToCam;
-				}
-				if(distance <= smallestWeight)
-				{
-					nodeID = invertedIndex[i][j].nodeID;
-					cameraIndex = invertedIndex[i][j].cameraIndex;
-					smallestWeight = distance;
-					uv_coords = invertedIndex[i][j].uv;
-				}
-			}
+			nodeID = invertedIndex[i].nodeID;
+			cameraIndex = invertedIndex[i].cameraIndex;
+			uv_coords = invertedIndex[i].uv;
 		}
 
 		if(nodeID>-1 && cameraIndex> -1)
@@ -3046,7 +3086,12 @@ std::vector<std::pair< std::pair<int, int>, pcl::PointXY> > projectCloudToCamera
 		}
 	}
 
-	UINFO("Process %d points...done! (%d [%d%%] projected in cameras)", (int)cloud.size(), colorized, colorized*100/cloud.size());
+	msg = uFormat("Process %d points...done! (%d [%d%%] projected in cameras)", (int)cloud.size(), colorized, colorized*100/cloud.size());
+	UINFO(msg.c_str());
+	if(state)
+	{
+		state->callback(msg);
+	}
 
 	return pointToPixel;
 }
@@ -3058,6 +3103,7 @@ std::vector<std::pair< std::pair<int, int>, pcl::PointXY> > projectCloudToCamera
 		float maxDistance,
 		float maxAngle,
 		const std::vector<float> & roiRatios,
+		const cv::Mat & projMask,
 		bool distanceToCamPolicy,
 		const ProgressState * state)
 {
@@ -3067,6 +3113,7 @@ std::vector<std::pair< std::pair<int, int>, pcl::PointXY> > projectCloudToCamera
 			maxDistance,
 			maxAngle,
 			roiRatios,
+			projMask,
 			distanceToCamPolicy,
 			state);
 }
@@ -3078,6 +3125,7 @@ std::vector<std::pair< std::pair<int, int>, pcl::PointXY> > projectCloudToCamera
 		float maxDistance,
 		float maxAngle,
 		const std::vector<float> & roiRatios,
+		const cv::Mat & projMask,
 		bool distanceToCamPolicy,
 		const ProgressState * state)
 {
@@ -3087,6 +3135,7 @@ std::vector<std::pair< std::pair<int, int>, pcl::PointXY> > projectCloudToCamera
 			maxDistance,
 			maxAngle,
 			roiRatios,
+			projMask,
 			distanceToCamPolicy,
 			state);
 }
