@@ -1,3 +1,26 @@
+## rtabmap (noetic) - 0.20.18-3
+
+The packages in the `rtabmap` repository were released into the `noetic` distro by running `/usr/bin/bloom-release --track noetic --rosdistro noetic rtabmap` on `Thu, 03 Mar 2022 20:13:18 -0000`
+
+The `rtabmap` package was released.
+
+Version of package(s) in repository `rtabmap`:
+
+- upstream repository: https://github.com/introlab/rtabmap.git
+- release repository: https://github.com/introlab/rtabmap-release.git
+- rosdistro version: `0.20.18-2`
+- old version: `0.20.18-2`
+- new version: `0.20.18-3`
+
+Versions of tools used:
+
+- bloom version: `0.10.7`
+- catkin_pkg version: `0.4.24`
+- rosdep version: `0.21.0`
+- rosdistro version: `0.8.3`
+- vcstools version: `0.1.42`
+
+
 ## rtabmap (melodic) - 0.20.18-4
 
 The packages in the `rtabmap` repository were released into the `melodic` distro by running `/usr/bin/bloom-release --track melodic --rosdistro melodic rtabmap` on `Thu, 03 Mar 2022 20:06:59 -0000`
