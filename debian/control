@@ -2,12 +2,12 @@ Source: ros-melodic-rtabmap
 Section: misc
 Priority: optional
 Maintainer: Mathieu Labbe <matlabbe@gmail.com>
-Build-Depends: debhelper (>= 9.0.0), cmake, libfreenect-dev, libopenni-dev, libpcl-dev, libproj-dev, libsqlite3-dev, ros-melodic-cv-bridge, ros-melodic-libg2o, ros-melodic-libpointmatcher, ros-melodic-octomap, ros-melodic-qt-gui-cpp, zlib1g-dev
+Build-Depends: debhelper (>= 9.0.0), cmake, libfreenect-dev, libopenni-dev, libpcl-dev, libproj-dev, libsqlite3-dev, ros-melodic-cv-bridge, ros-melodic-libg2o, ros-melodic-libpointmatcher [!armhf], ros-melodic-octomap, ros-melodic-qt-gui-cpp, zlib1g-dev
 Homepage: http://introlab.github.io/rtabmap
 Standards-Version: 3.9.2
 
 Package: ros-melodic-rtabmap
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}, libfreenect-dev, libopenni-dev, libpcl-dev, libsqlite3-dev, ros-melodic-cv-bridge, ros-melodic-libg2o, ros-melodic-libpointmatcher, ros-melodic-octomap, ros-melodic-qt-gui-cpp, zlib1g-dev
+Depends: ${shlibs:Depends}, ${misc:Depends}, libfreenect-dev, libopenni-dev, libpcl-dev, libsqlite3-dev, ros-melodic-cv-bridge, ros-melodic-libg2o, ros-melodic-libpointmatcher [!armhf], ros-melodic-octomap, ros-melodic-qt-gui-cpp, zlib1g-dev
 Description: RTAB-Map's standalone library.
  RTAB-Map is a RGB-D SLAM approach with real-time constraints.
