@@ -55,6 +55,7 @@ class Statistics;
 class Registration;
 class RegistrationInfo;
 class RegistrationIcp;
+class RegistrationVis;
 class Stereo;
 class OccupancyGrid;
 class MarkerDetector;
@@ -205,7 +206,7 @@ public:
 			std::vector<GlobalDescriptor> & globalDescriptors) const;
 	void getNodeCalibration(int nodeId,
 			std::vector<CameraModel> & models,
-			StereoCameraModel & stereoModel) const;
+			std::vector<StereoCameraModel> & stereoModels) const;
 	std::set<int> getAllSignatureIds(bool ignoreChildren = true) const;
 	bool memoryChanged() const {return _memoryChanged;}
 	bool isIncremental() const {return _incrementalMemory;}
@@ -323,6 +324,7 @@ private:
 	float _laserScanGroundNormalsUp;
 	bool _reextractLoopClosureFeatures;
 	bool _localBundleOnLoopClosure;
+	bool _invertedReg;
 	float _rehearsalMaxDistance;
 	float _rehearsalMaxAngle;
 	bool _rehearsalWeightIgnoredWhileMoving;
@@ -347,7 +349,7 @@ private:
 	bool _allNodesInWM;
 	GPS _gpsOrigin;
 	std::vector<CameraModel> _rectCameraModels;
-	StereoCameraModel _rectStereoCameraModel;
+	std::vector<StereoCameraModel> _rectStereoCameraModels;
 	std::vector<double> _odomMaxInf;
 
 	std::map<int, Signature *> _signatures; // TODO : check if a signature is already added? although it is not supposed to occur...
@@ -367,6 +369,7 @@ private:
 
 	Registration * _registrationPipeline;
 	RegistrationIcp * _registrationIcpMulti;
+	RegistrationVis * _registrationVis;
 
 	OccupancyGrid * _occupancy;
 
