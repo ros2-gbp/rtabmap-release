@@ -199,6 +199,7 @@ IF(WITH_PYTHON AND Python3_FOUND)
 	SET(LIBRARIES
 		${LIBRARIES}
 		Python3::Python
+		Python3::NumPy
 	)
 	SET(SRC_FILES
 		${SRC_FILES}
@@ -399,9 +400,6 @@ IF(G2O_FOUND)
 		${G2O_LIBRARIES}
 	  )
 	ENDIF()
-	SET(SRC_FILES ${SRC_FILES}
-		optimizer/g2o/edge_se3_xyzprior.cpp
-	)
 	IF(WITH_VERTIGO)
 		SET(SRC_FILES ${SRC_FILES}
 			optimizer/vertigo/g2o/edge_se2Switchable.cpp
@@ -424,16 +422,16 @@ IF(cvsba_FOUND)
 	)
 ENDIF(cvsba_FOUND)
 
-IF(WITH_CERES AND CERES_FOUND)
-	SET(INCLUDE_DIRS 
-		${INCLUDE_DIRS} 
-		${CERES_INCLUDE_DIRS}
+IF(CERES_FOUND)
+	SET(INCLUDE_DIRS
+	  ${INCLUDE_DIRS}
+	  ${CERES_INCLUDE_DIRS}
 	)
 	SET(LIBRARIES
-		${LIBRARIES}
-		${CERES_LIBRARIES}
+	  ${LIBRARIES}
+	  ${CERES_LIBRARIES}
 	)
-ENDIF(WITH_CERES AND CERES_FOUND)
+ENDIF(CERES_FOUND)
 
 IF(libpointmatcher_FOUND)
 	SET(INCLUDE_DIRS 
@@ -470,6 +468,13 @@ IF(FastCV_FOUND)
 		${FastCV_LIBRARIES}
 	)
 ENDIF(FastCV_FOUND)
+
+IF(opengv_FOUND)
+    SET(LIBRARIES
+        ${LIBRARIES}
+        opengv
+    )
+ENDIF(opengv_FOUND)
 
 IF(PDAL_FOUND)
 	SET(INCLUDE_DIRS
@@ -720,29 +725,12 @@ endforeach(arg ${RESOURCES})
 #MESSAGE(STATUS "RESOURCES = ${RESOURCES}")
 #MESSAGE(STATUS "RESOURCES_HEADERS = ${RESOURCES_HEADERS}")
 
-IF(ANDROID OR IOS)
-
-   IF(NOT RTABMAP_RES_TOOL)
-      find_host_program(RTABMAP_RES_TOOL rtabmap-res_tool PATHS ${PROJECT_BINARY_DIR}/../bin)
-      IF(NOT RTABMAP_RES_TOOL)
-         MESSAGE( FATAL_ERROR "RTABMAP_RES_TOOL is not defined (it is the path to \"rtabmap-res_tool\" application created by a non-Android build)." )
-      ENDIF(NOT RTABMAP_RES_TOOL)
-   ENDIF(NOT RTABMAP_RES_TOOL)
-
-   ADD_CUSTOM_COMMAND(
-      OUTPUT ${RESOURCES_HEADERS}
-      COMMAND ${RTABMAP_RES_TOOL} -n rtabmap -p ${CMAKE_CURRENT_BINARY_DIR} ${RESOURCES}
-      COMMENT "[Creating resources]"
-      DEPENDS ${RESOURCES}
-   )
-ELSE()
-   ADD_CUSTOM_COMMAND(
-      OUTPUT ${RESOURCES_HEADERS}
-      COMMAND ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/rtabmap-res_tool -n rtabmap -p ${CMAKE_CURRENT_BINARY_DIR} ${RESOURCES}
-      COMMENT "[Creating resources]"
-      DEPENDS ${RESOURCES} res_tool
-   )
-ENDIF()
+ADD_CUSTOM_COMMAND(
+	OUTPUT ${RESOURCES_HEADERS}
+	COMMAND res_tool -n rtabmap -p ${CMAKE_CURRENT_BINARY_DIR} ${RESOURCES}
+	COMMENT "[Creating resources]"
+	DEPENDS ${RESOURCES}
+)
 
 ####################################
 # Generate resources files END

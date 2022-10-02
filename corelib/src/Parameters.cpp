@@ -188,7 +188,8 @@ rtabmap::ParametersMap Parameters::getDefaultOdometryParameters(bool stereo, boo
 			group.compare("GTSAM") == 0 ||
 			(vis && (group.compare("Vis") == 0 || group.compare("PyMatcher") == 0 || group.compare("GMS") == 0)) ||
 			iter->first.compare(kRtabmapPublishRAMUsage())==0 ||
-			iter->first.compare(kRtabmapImagesAlreadyRectified())==0)
+			iter->first.compare(kRtabmapImagesAlreadyRectified())==0 ||
+			iter->first.compare(kKpByteToFloat())==0)
 		{
 			odomParameters.insert(*iter);
 		}
@@ -657,6 +658,12 @@ ParametersMap Parameters::parseArguments(int argc, char * argv[], bool onlyParam
 #endif
 				str = "With FastCV:";
 #ifdef RTABMAP_FASTCV
+				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
+#endif
+				str = "With OpenGV:";
+#ifdef RTABMAP_OPENGV
 				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
 #else
 				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;

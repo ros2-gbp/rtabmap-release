@@ -69,6 +69,7 @@ void showUsage()
 			"    --texture_depth_error # Maximum depth error between reprojected mesh and depth image to texture a face (-1=disabled, 0=edge length is used, default=0).\n"
 			"    --texture_roi_ratios \"# # # #\" Region of interest from images to texture or to color scans. Format is \"left right top bottom\" (e.g. \"0 0 0 0.1\" means 10%% of the image bottom not used).\n"
 			"    --texture_d2c         Distance to camera policy.\n"
+			"    --texture_blur #      Motion blur threshold (default 0: disabled). Below this threshold, the image is considered blurred. 0 means disabled. 50 can be good default.\n"
 			"    --cam_projection      Camera projection on assembled cloud and export node ID on each point (in PointSourceId field).\n"
 			"    --cam_projection_keep_all  Keep not colored points from cameras (node ID will be 0 and color will be red).\n"
 			"    --cam_projection_decimation  Decimate images before projecting the points.\n"
@@ -106,6 +107,7 @@ void showUsage()
 			"    --poisson_depth #     Set Poisson depth for mesh reconstruction.\n"
 			"    --poisson_size  #     Set target polygon size when computing Poisson's depth for mesh reconstruction (default 0.03 m).\n"
 			"    --max_polygons  #     Maximum polygons when creating a mesh (default 300000, set 0 for no limit).\n"
+			"    --min_range     #     Minimum range of the created clouds (default 0 m).\n"
 			"    --max_range     #     Maximum range of the created clouds (default 4 m, 0 m with --scan).\n"
 			"    --decimation    #     Depth image decimation before creating the clouds (default 4, 1 with --scan).\n"
 			"    --voxel         #     Voxel size of the created clouds (default 0.01 m, 0 m with --scan).\n"
@@ -166,6 +168,7 @@ int main(int argc, char * argv[])
 	float poissonSize = 0.03;
 	int maxPolygons = 300000;
 	int decimation = -1;
+	float minRange = 0.0f;
 	float maxRange = -1.0f;
 	float voxelSize = -1.0f;
 	float groundNormalsUp = 0.0f;
@@ -181,6 +184,7 @@ int main(int argc, char * argv[])
 	float textureDepthError = 0;
 	std::vector<float> textureRoiRatios;
 	bool distanceToCamPolicy = false;
+	int laplacianThr = 0;
 	bool multiband = false;
 	int multibandDownScale = 2;
 	std::string multibandNbContrib = "1 5 10 0";
@@ -369,6 +373,18 @@ int main(int argc, char * argv[])
 		else if(std::strcmp(argv[i], "--texture_d2c") == 0)
 		{
 			distanceToCamPolicy = true;
+		}
+		else if(std::strcmp(argv[i], "--texture_blur") == 0)
+		{
+			++i;
+			if(i<argc-1)
+			{
+				laplacianThr = uStr2Int(argv[i]);
+			}
+			else
+			{
+				showUsage();
+			}
 		}
 		else if(std::strcmp(argv[i], "--cam_projection") == 0)
 		{
@@ -609,6 +625,18 @@ int main(int argc, char * argv[])
 			if(i<argc-1)
 			{
 				maxPolygons = uStr2Int(argv[i]);
+			}
+			else
+			{
+				showUsage();
+			}
+		}
+		else if(std::strcmp(argv[i], "--min_range") == 0)
+		{
+			++i;
+			if(i<argc-1)
+			{
+				minRange = uStr2Float(argv[i]);
 			}
 			else
 			{
@@ -1032,6 +1060,7 @@ int main(int argc, char * argv[])
 
 		// uncompress data
 		std::vector<CameraModel> models = node.sensorData().cameraModels();
+		std::vector<StereoCameraModel> stereoModels = node.sensorData().stereoCameraModels();
 		cv::Mat rgb;
 		cv::Mat depth;
 
@@ -1049,9 +1078,9 @@ int main(int argc, char * argv[])
 				{
 					printf("Node %d doesn't have scan data, empty cloud is created.\n", iter->first);
 				}
-				if(decimation>1 || maxRange)
+				if(decimation>1 || minRange>0.0f || maxRange)
 				{
-					scan = util3d::commonFiltering(scan, decimation, 0, maxRange);
+					scan = util3d::commonFiltering(scan, decimation, minRange, maxRange);
 				}
 				if(scan.hasRGB())
 				{
@@ -1082,7 +1111,7 @@ int main(int argc, char * argv[])
 						node.sensorData(),
 						decimation,      // image decimation before creating the clouds
 						maxRange,        // maximum depth of the cloud
-						0.0f,
+						minRange,
 						indices.get());
 				if(noiseRadius>0.0f && noiseMinNeighbors>0)
 				{
@@ -1142,16 +1171,19 @@ int main(int argc, char * argv[])
 				}
 				model.save(dir);
 			}
-			if(node.sensorData().stereoCameraModel().isValidForProjection())
+			for(size_t i=0; i<stereoModels.size(); ++i)
 			{
-				StereoCameraModel model = node.sensorData().stereoCameraModel();
+				StereoCameraModel model = stereoModels[i];
 				std::string modelName = (exportImagesId?uNumber2Str(iter->first):uFormat("%f",node.getStamp()));
+				if(stereoModels.size() > 1) {
+					modelName += "_" + uNumber2Str((int)i);
+				}
 				model.setName(modelName, "left", "right");
 				std::string dir = outputDirectory+"/"+baseName+"_calib";
 				if(!UDirectory::exists(dir)) {
 					UDirectory::makeDir(dir);
 				}
-				node.sensorData().stereoCameraModel().save(dir);
+				model.save(dir);
 			}
 		}
 
@@ -1189,9 +1221,9 @@ int main(int argc, char * argv[])
 			Transform cameraViewpoint = iter->second * node.sensorData().cameraModels()[0].localTransform(); // take the first camera
 			rawViewpoints.insert(std::make_pair(iter->first, cameraViewpoint));
 		}
-		else if(!node.sensorData().stereoCameraModel().localTransform().isNull())
+		else if(!node.sensorData().stereoCameraModels().empty() && !node.sensorData().stereoCameraModels()[0].localTransform().isNull())
 		{
-			Transform cameraViewpoint = iter->second * node.sensorData().stereoCameraModel().localTransform();
+			Transform cameraViewpoint = iter->second * node.sensorData().stereoCameraModels()[0].localTransform();
 			rawViewpoints.insert(std::make_pair(iter->first, cameraViewpoint));
 		}
 		else
@@ -1224,16 +1256,27 @@ int main(int argc, char * argv[])
 			rawViewpointIndices.resize(assembledCloudI->size(), iter->first);
 		}
 
-		if(models.empty() && node.sensorData().stereoCameraModel().isValidForProjection())
+		if(models.empty())
 		{
-			models.push_back(node.sensorData().stereoCameraModel().left());
+			for(size_t i=0; i<node.sensorData().stereoCameraModels().size(); ++i)
+			{
+				models.push_back(node.sensorData().stereoCameraModels()[i].left());
+			}
 		}
 
 		robotPoses.insert(std::make_pair(iter->first, iter->second));
 		cameraStamps.insert(std::make_pair(iter->first, node.getStamp()));
+		if(models.empty() && node.getWeight() == -1 && !cameraModels.empty())
+		{
+			// For intermediate nodes, use latest models
+			models = cameraModels.rbegin()->second;
+		}
 		if(!models.empty())
 		{
-			cameraModels.insert(std::make_pair(iter->first, models));
+			if(!node.sensorData().imageCompressed().empty())
+			{
+				cameraModels.insert(std::make_pair(iter->first, models));
+			}
 			if(exportPosesCamera)
 			{
 				if(cameraPoses.empty())
@@ -1762,11 +1805,46 @@ int main(int argc, char * argv[])
 				}
 				else
 				{
-					printf("Texturing %d polygons... robotPoses=%d, cameraDepths=%d\n", (int)mesh->polygons.size(), (int)robotPoses.size(), (int)cameraDepths.size());
+					// Camera filtering for texturing
+					std::map<int, rtabmap::Transform> robotPosesFiltered;
+					if(laplacianThr>0)
+					{
+						printf("Filtering %ld images from texturing...\n", robotPoses.size());
+						for(std::map<int, rtabmap::Transform>::iterator iter=robotPoses.begin(); iter!=robotPoses.end(); ++iter)
+						{
+							UASSERT(nodes.find(iter->first) != nodes.end());
+							cv::Mat img;
+							nodes.find(iter->first)->second.sensorData().uncompressDataConst(&img, 0);
+							if(!img.empty())
+							{
+								cv::Mat imgLaplacian;
+								cv::Laplacian(img, imgLaplacian, CV_16S);
+								cv::Mat m, s;
+								cv::meanStdDev(imgLaplacian, m, s);
+								double stddev_pxl = s.at<double>(0);
+								double var = stddev_pxl*stddev_pxl;
+								if(var < (double)laplacianThr)
+								{
+									printf("Camera's image %d is detected as blurry (var=%f < thr=%d), camera is ignored for texturing.\n", iter->first, var, laplacianThr);
+								}
+								else
+								{
+									robotPosesFiltered.insert(*iter);
+								}
+							}
+						}
+						printf("Filtered %ld/%ld images from texturing", robotPosesFiltered.size(), robotPoses.size());
+					}
+					else
+					{
+						robotPosesFiltered = robotPoses;
+					}
+
+					printf("Texturing %d polygons... robotPoses=%d, cameraModels=%d, cameraDepths=%d\n", (int)mesh->polygons.size(), (int)robotPosesFiltered.size(), (int)cameraModels.size(), (int)cameraDepths.size());
 					std::vector<std::map<int, pcl::PointXY> > vertexToPixels;
 					pcl::TextureMeshPtr textureMesh = rtabmap::util3d::createTextureMesh(
 							mesh,
-							robotPoses,
+							robotPosesFiltered,
 							cameraModels,
 							cameraDepths,
 							textureRange,
@@ -1885,7 +1963,7 @@ int main(int argc, char * argv[])
 							if(util3d::multiBandTexturing(outputPath,
 									textureMesh->cloud,
 									textureMesh->tex_polygons[0],
-									robotPoses,
+									robotPosesFiltered,
 									vertexToPixels,
 									std::map<int, cv::Mat >(),
 									std::map<int, std::vector<CameraModel> >(),
