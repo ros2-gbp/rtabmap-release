@@ -130,11 +130,11 @@ bool exportPoses(
 						// header
 						if(format == 11)
 						{
-							fprintf(fout, "# timestamp x y z qx qy qz qw id\n");
+							fprintf(fout, "#timestamp x y z qx qy qz qw id\n");
 						}
 						else
 						{
-							fprintf(fout, "# timestamp x y z qx qy qz qw\n");
+							fprintf(fout, "#timestamp x y z qx qy qz qw\n");
 						}
 					}
 
@@ -523,7 +523,10 @@ bool exportGPS(
 			std::string values;
 			for(std::map<int, GPS>::const_iterator iter=gpsValues.begin(); iter!=gpsValues.end(); ++iter)
 			{
-				values += uFormat("%f,%f,%f ", iter->second.longitude(), iter->second.latitude(), iter->second.altitude());
+				values += uFormat("%s,%s,%s ",
+                                  uReplaceChar(uNumber2Str(iter->second.longitude()), ',', '.').c_str(),
+                                  uReplaceChar(uNumber2Str(iter->second.latitude()), ',', '.').c_str(),
+                                  uReplaceChar(uNumber2Str(iter->second.altitude()), ',', '.').c_str());
 			}
 
 			// switch argb (Qt format) -> abgr

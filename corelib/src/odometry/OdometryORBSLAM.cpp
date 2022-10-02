@@ -808,14 +808,16 @@ public:
 
 		mpLoopCloser->SetTracker(mpTracker);
 		mpLoopCloser->SetLocalMapper(mpLocalMapper);
-#if RTABMAP_ORB_SLAM == 3
-		if(ULogger::level() > ULogger::kInfo)
-			Verbose::SetTh(Verbose::VERBOSITY_QUIET);
-#endif
 
 		// Reset all static variables
 		Frame::mbInitialComputations = true;
+
+#if RTABMAP_ORB_SLAM == 3
+		if(ULogger::level() > ULogger::kInfo)
+			Verbose::SetTh(Verbose::VERBOSITY_QUIET);
+
 		mpTracker->Reset(true);
+#endif
 
 		return true;
 	}
@@ -997,9 +999,8 @@ Transform OdometryORBSLAM::computeTransform(
 
 	if(!((data.cameraModels().size() == 1 &&
 			data.cameraModels()[0].isValidForReprojection()) ||
-		(data.stereoCameraModel().isValidForProjection() &&
-			data.stereoCameraModel().left().isValidForReprojection() &&
-			data.stereoCameraModel().right().isValidForReprojection())))
+		(data.stereoCameraModels().size() == 1 &&
+			data.stereoCameraModels()[0].isValidForProjection())))
 	{
 		UERROR("Invalid camera model!");
 		return t;
@@ -1016,8 +1017,8 @@ Transform OdometryORBSLAM::computeTransform(
 	cv::Mat covariance;
 	if(orbslam_->mpTracker == 0)
 	{
-		CameraModel model = data.cameraModels().size()==1?data.cameraModels()[0]:data.stereoCameraModel().left();
-		if(!orbslam_->init(model, stereo, data.stereoCameraModel().baseline(), imuLocalTransform_))
+		CameraModel model = data.cameraModels().size()==1?data.cameraModels()[0]:data.stereoCameraModels()[0].left();
+		if(!orbslam_->init(model, stereo, data.stereoCameraModels()[0].baseline(), imuLocalTransform_))
 		{
 			return t;
 		}
@@ -1027,7 +1028,7 @@ Transform OdometryORBSLAM::computeTransform(
 	Transform localTransform;
 	if(stereo)
 	{
-		localTransform = data.stereoCameraModel().localTransform();
+		localTransform = data.stereoCameraModels()[0].localTransform();
 		Tcw = ((Tracker*)orbslam_->mpTracker)->GrabImageStereo(data.imageRaw(), data.rightRaw(), data.stamp());
 	}
 	else
@@ -1077,7 +1078,7 @@ Transform OdometryORBSLAM::computeTransform(
 		}
 		else
 		{
-			float baseline = data.stereoCameraModel().baseline();
+			float baseline = data.stereoCameraModels()[0].baseline();
 			if(baseline <= 0.0f)
 			{
 				baseline = rtabmap::Parameters::defaultOdomORBSLAMBf();
