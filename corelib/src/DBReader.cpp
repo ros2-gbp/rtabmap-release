@@ -51,7 +51,8 @@ DBReader::DBReader(const std::string & databasePath,
 				   int cameraIndex,
 				   int stopId,
 				   bool intermediateNodesIgnored,
-				   bool landmarksIgnored) :
+				   bool landmarksIgnored,
+				   bool featuresIgnored) :
 	Camera(frameRate),
 	_paths(uSplit(databasePath, ';')),
 	_odometryIgnored(odometryIgnored),
@@ -62,6 +63,7 @@ DBReader::DBReader(const std::string & databasePath,
 	_cameraIndex(cameraIndex),
 	_intermediateNodesIgnored(intermediateNodesIgnored),
 	_landmarksIgnored(landmarksIgnored),
+	_featuresIgnored(featuresIgnored),
 	_dbDriver(0),
 	_currentId(_ids.end()),
 	_previousMapId(-1),
@@ -84,7 +86,8 @@ DBReader::DBReader(const std::list<std::string> & databasePaths,
 				   int cameraIndex,
 				   int stopId,
 				   bool intermediateNodesIgnored,
-				   bool landmarksIgnored) :
+				   bool landmarksIgnored,
+				   bool featuresIgnored) :
 	Camera(frameRate),
    _paths(databasePaths),
 	_odometryIgnored(odometryIgnored),
@@ -95,6 +98,7 @@ DBReader::DBReader(const std::list<std::string> & databasePaths,
 	_cameraIndex(cameraIndex),
 	_intermediateNodesIgnored(intermediateNodesIgnored),
 	_landmarksIgnored(landmarksIgnored),
+	_featuresIgnored(featuresIgnored),
 	_dbDriver(0),
 	_currentId(_ids.end()),
 	_previousMapId(-1),
@@ -182,8 +186,8 @@ bool DBReader::init(
 	if(_ids.size())
 	{
 		std::vector<CameraModel> models;
-		StereoCameraModel stereoModel;
-		if(_dbDriver->getCalibration(*_ids.begin(), models, stereoModel))
+		std::vector<StereoCameraModel> stereoModels;
+		if(_dbDriver->getCalibration(*_ids.begin(), models, stereoModels))
 		{
 			if(models.size())
 			{
@@ -204,7 +208,7 @@ bool DBReader::init(
 					}
 				}
 			}
-			else if(stereoModel.isValidForProjection())
+			else if(stereoModels.size() && stereoModels.at(0).isValidForProjection())
 			{
 				_calibrated = true;
 			}
@@ -433,20 +437,31 @@ SensorData DBReader::getNextData(CameraInfo * info)
 					infMatrix = links.begin()->second.infMatrix();
 					_previousInfMatrix = infMatrix;
 				}
-				else if(_previousMapId != s->mapId())
-				{
-					// first node, set high variance to make rtabmap trigger a new map
-					infMatrix /= 9999.0;
-					UDEBUG("First node of map %d, variance set to 9999", s->mapId());
-				}
 				else
 				{
-					if(_previousInfMatrix.empty())
+					// if localization data saved in database, covariance will be set in a prior link
+					_dbDriver->loadLinks(*_currentId, links, Link::kPosePrior);
+					if(links.size())
 					{
-						_previousInfMatrix = cv::Mat::eye(6,6,CV_64FC1);
+						// assume the first is the backward neighbor, take its variance
+						infMatrix = links.begin()->second.infMatrix();
+						_previousInfMatrix = infMatrix;
 					}
-					// we have a node not linked to map, use last variance
-					infMatrix = _previousInfMatrix;
+					else if(_previousMapId != s->mapId())
+					{
+						// first node, set high variance to make rtabmap trigger a new map
+						infMatrix /= 9999.0;
+						UDEBUG("First node of map %d, variance set to 9999", s->mapId());
+					}
+					else
+					{
+						if(_previousInfMatrix.empty())
+						{
+							_previousInfMatrix = cv::Mat::eye(6,6,CV_64FC1);
+						}
+						// we have a node not linked to map, use last variance
+						infMatrix = _previousInfMatrix;
+					}
 				}
 				_previousMapId = s->mapId();
 			}
@@ -558,13 +573,14 @@ SensorData DBReader::getNextData(CameraInfo * info)
 			cv::Mat descriptors = s->getWordsDescriptors().clone();
 			const std::vector<cv::KeyPoint> & keypoints = s->getWordsKpts();
 			const std::vector<cv::Point3f> & keypoints3D = s->getWords3();
-			if(!keypoints.empty() &&
+			if(!_featuresIgnored &&
+				!keypoints.empty() &&
 			   (keypoints3D.empty() || keypoints.size() == keypoints3D.size()) &&
 			   (descriptors.empty() || (int)keypoints.size() == descriptors.rows))
 			{
 				data.setFeatures(keypoints, keypoints3D, descriptors);
 			}
-			else if(!keypoints.empty() && (!keypoints3D.empty() || !descriptors.empty()))
+			else if(!_featuresIgnored && !keypoints.empty() && (!keypoints3D.empty() || !descriptors.empty()))
 			{
 				UERROR("Missing feature data, features won't be published.");
 			}
