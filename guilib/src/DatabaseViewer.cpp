@@ -1398,7 +1398,7 @@ void DatabaseViewer::exportDatabase()
 							scan,
 							rgb,
 							depth,
-							data.stereoCameraModel(),
+							data.stereoCameraModels(),
 							id,
 							stamps.at(id),
 							userData);
@@ -1464,7 +1464,7 @@ void DatabaseViewer::extractImages()
 	QString ext = format.split('.').back();
 	bool useStamp = format.split('.').front().compare("timestamp") == 0;
 	bool directoriesCreated = false;
-	QString path = QFileDialog::getExistingDirectory(this, tr("Select directory where to save images..."), QDir::homePath());
+	QString path = QFileDialog::getExistingDirectory(this, tr("Select directory where to save images..."), pathDatabase_);
 	if(!path.isEmpty())
 	{
 		rtabmap::ProgressDialog * progressDialog = new rtabmap::ProgressDialog(this);
@@ -1541,33 +1541,40 @@ void DatabaseViewer::extractImages()
 					{
 						UERROR("Cannot save calibration file, database name is empty!");
 					}
-					else if(data.stereoCameraModel().isValidForProjection())
+					else if(data.stereoCameraModels().size()>=1 && data.stereoCameraModels().front().isValidForProjection())
 					{
-						std::string cameraName = id.toStdString();
-						StereoCameraModel model(
-								cameraName,
-								data.imageRaw().size(),
-								data.stereoCameraModel().left().K(),
-								data.stereoCameraModel().left().D(),
-								data.stereoCameraModel().left().R(),
-								data.stereoCameraModel().left().P(),
-								data.rightRaw().size(),
-								data.stereoCameraModel().right().K(),
-								data.stereoCameraModel().right().D(),
-								data.stereoCameraModel().right().R(),
-								data.stereoCameraModel().right().P(),
-								data.stereoCameraModel().R(),
-								data.stereoCameraModel().T(),
-								data.stereoCameraModel().E(),
-								data.stereoCameraModel().F(),
-								data.stereoCameraModel().left().localTransform());
-						if(model.save(path.toStdString() + "/calib"))
+						for(size_t i=0; i<data.stereoCameraModels().size(); ++i)
 						{
-							UINFO("Saved stereo calibration \"%s\"", (path.toStdString()+"/calib/"+cameraName+".yaml").c_str());
-						}
-						else
-						{
-							UERROR("Failed saving calibration \"%s\"", (path.toStdString()+"/calib/"+cameraName+".yaml").c_str());
+							std::string cameraName = id.toStdString();
+							if(data.stereoCameraModels().size()>1)
+							{
+								cameraName+="_"+uNumber2Str((int)i);
+							}
+							StereoCameraModel model(
+									cameraName,
+									data.imageRaw().size(),
+									data.stereoCameraModels()[i].left().K(),
+									data.stereoCameraModels()[i].left().D(),
+									data.stereoCameraModels()[i].left().R(),
+									data.stereoCameraModels()[i].left().P(),
+									data.rightRaw().size(),
+									data.stereoCameraModels()[i].right().K(),
+									data.stereoCameraModels()[i].right().D(),
+									data.stereoCameraModels()[i].right().R(),
+									data.stereoCameraModels()[i].right().P(),
+									data.stereoCameraModels()[i].R(),
+									data.stereoCameraModels()[i].T(),
+									data.stereoCameraModels()[i].E(),
+									data.stereoCameraModels()[i].F(),
+									data.stereoCameraModels()[i].left().localTransform());
+							if(model.save(path.toStdString() + "/calib"))
+							{
+								UINFO("Saved stereo calibration \"%s\"", (path.toStdString()+"/calib/"+cameraName+".yaml").c_str());
+							}
+							else
+							{
+								UERROR("Failed saving calibration \"%s\"", (path.toStdString()+"/calib/"+cameraName+".yaml").c_str());
+							}
 						}
 					}
 				}
@@ -1910,6 +1917,7 @@ void DatabaseViewer::updateIds()
 	if(!gpsValues_.empty())
 	{
 		ui_->menuExport_GPS->setEnabled(true);
+        ui_->actionPoses_KML->setEnabled(true);
 	}
 
 	float xMin, yMin, cellSize;
@@ -2253,15 +2261,10 @@ void DatabaseViewer::updateStatistics()
 		std::map<std::string, std::pair<std::vector<qreal>, std::vector<qreal> > > allData;
 		std::map<std::string, int > allDataOi;
 
-		for(int i=0; i<ids_.size(); ++i)
+		for(std::map<int, std::pair<std::map<std::string, float>, double> >::iterator jter=allStats.begin(); jter!=allStats.end(); ++jter)
 		{
-			double stamp=0.0;
-			std::map<std::string, float> statistics;
-			if(allStats.find(ids_[i]) != allStats.end())
-			{
-				statistics = allStats.at(ids_[i]).first;
-				stamp = allStats.at(ids_[i]).second;
-			}
+			double stamp=jter->second.second;
+			std::map<std::string, float> & statistics = jter->second.first;
 			if(firstStamp==0.0)
 			{
 				firstStamp = stamp;
@@ -2271,12 +2274,12 @@ void DatabaseViewer::updateStatistics()
 				if(allData.find(iter->first) == allData.end())
 				{
 					//initialize data vectors
-					allData.insert(std::make_pair(iter->first, std::make_pair(std::vector<qreal>(ids_.size(), 0.0f), std::vector<qreal>(ids_.size(), 0.0f) )));
+					allData.insert(std::make_pair(iter->first, std::make_pair(std::vector<qreal>(allStats.size(), 0.0f), std::vector<qreal>(allStats.size(), 0.0f) )));
 					allDataOi.insert(std::make_pair(iter->first, 0));
 				}
 
 				int & oi = allDataOi.at(iter->first);
-				allData.at(iter->first).first[oi] = ui_->checkBox_timeStats->isChecked()?qreal(stamp-firstStamp):ids_[i];
+				allData.at(iter->first).first[oi] = ui_->checkBox_timeStats->isChecked()?qreal(stamp-firstStamp):jter->first;
 				allData.at(iter->first).second[oi] = iter->second;
 				++oi;
 			}
@@ -2618,17 +2621,18 @@ void DatabaseViewer::exportPoses(int format)
 				if(cameraFrame)
 				{
 					std::vector<CameraModel> models;
-					StereoCameraModel stereoModel;
-					if(dbDriver_->getCalibration(iter->first, models, stereoModel))
+					std::vector<StereoCameraModel> stereoModels;
+					if(dbDriver_->getCalibration(iter->first, models, stereoModels))
 					{
 						if((models.size() == 1 &&
 							!models.at(0).localTransform().isNull()))
 						{
 							localTransform = models.at(0).localTransform();
 						}
-						else if(!stereoModel.localTransform().isNull())
+						else if(stereoModels.size() == 1 &&
+							    !stereoModels[0].localTransform().isNull())
 						{
-							localTransform = stereoModel.localTransform();
+							localTransform = stereoModels[0].localTransform();
 						}
 						else if(models.size()>1)
 						{
@@ -3066,7 +3070,8 @@ void DatabaseViewer::editSaved2DMap()
 						if(scan.angleIncrement()!=0)
 						{
 							// copy meta data
-							scan = LaserScan(									cv::Mat(filtered, cv::Range::all(), cv::Range(0, oi)),
+							scan = LaserScan(
+									cv::Mat(filtered, cv::Range::all(), cv::Range(0, oi)),
 									scan.format(),
 									scan.rangeMin(),
 									scan.rangeMax(),
@@ -3078,7 +3083,8 @@ void DatabaseViewer::editSaved2DMap()
 						else
 						{
 							// copy meta data
-							scan = LaserScan(									cv::Mat(filtered, cv::Range::all(), cv::Range(0, oi)),
+							scan = LaserScan(
+									cv::Mat(filtered, cv::Range::all(), cv::Range(0, oi)),
 									scan.maxPoints(),
 									scan.rangeMax(),
 									scan.format(),
@@ -3750,10 +3756,27 @@ void DatabaseViewer::regenerateLocalMaps()
 							viewpoint.z /= sum;
 						}
 					}
-					else
+					else if(s.sensorData().cameraModels().size())
 					{
-						const Transform & t = s.sensorData().stereoCameraModel().localTransform();
-						viewpoint = cv::Point3f(t.x(), t.y(), t.z());
+						// average of all local transforms
+						float sum = 0;
+						for(unsigned int i=0; i<s.sensorData().stereoCameraModels().size(); ++i)
+						{
+							const Transform & t = s.sensorData().stereoCameraModels()[i].localTransform();
+							if(!t.isNull())
+							{
+								viewpoint.x += t.x();
+								viewpoint.y += t.y();
+								viewpoint.z += t.z();
+								sum += 1.0f;
+							}
+						}
+						if(sum > 0.0f)
+						{
+							viewpoint.x /= sum;
+							viewpoint.y /= sum;
+							viewpoint.z /= sum;
+						}
 					}
 
 					grid.createLocalMap(util3d::laserScanFromPointCloud(*cloud), s.getPose(), ground, obstacles, empty, viewpoint);
@@ -3873,10 +3896,27 @@ void DatabaseViewer::regenerateCurrentLocalMaps()
 							viewpoint.z /= sum;
 						}
 					}
-					else
+					else if(s.sensorData().stereoCameraModels().size())
 					{
-						const Transform & t = s.sensorData().stereoCameraModel().localTransform();
-						viewpoint = cv::Point3f(t.x(), t.y(), t.z());
+						// average of all local transforms
+						float sum = 0;
+						for(unsigned int i=0; i<s.sensorData().stereoCameraModels().size(); ++i)
+						{
+							const Transform & t = s.sensorData().stereoCameraModels()[i].localTransform();
+							if(!t.isNull())
+							{
+								viewpoint.x += t.x();
+								viewpoint.y += t.y();
+								viewpoint.z += t.z();
+								sum += 1.0f;
+							}
+						}
+						if(sum > 0.0f)
+						{
+							viewpoint.x /= sum;
+							viewpoint.y /= sum;
+							viewpoint.z /= sum;
+						}
 					}
 
 					grid.createLocalMap(util3d::laserScanFromPointCloud(*cloud), s.getPose(), ground, obstacles, empty, viewpoint);
@@ -4346,6 +4386,7 @@ void DatabaseViewer::sliderAValueChanged(int value)
 			ui_->label_scanA,
 			ui_->label_gravityA,
 			ui_->label_gpsA,
+			ui_->label_gtA,
 			ui_->label_sensorsA,
 			true);
 }
@@ -4368,6 +4409,7 @@ void DatabaseViewer::sliderBValueChanged(int value)
 			ui_->label_scanB,
 			ui_->label_gravityB,
 			ui_->label_gpsB,
+			ui_->label_gtB,
 			ui_->label_sensorsB,
 			true);
 }
@@ -4388,6 +4430,7 @@ void DatabaseViewer::update(int value,
 						QLabel * labelScan,
 						QLabel * labelGravity,
 						QLabel * labelGps,
+						QLabel * labelGt,
 						QLabel * labelSensors,
 						bool updateConstraintView)
 {
@@ -4407,6 +4450,7 @@ void DatabaseViewer::update(int value,
 	labelScan ->clear();
 	labelGravity->clear();
 	labelGps->clear();
+	labelGt->clear();
 	labelSensors->clear();
 	if(value >= 0 && value < ids_.size())
 	{
@@ -4440,11 +4484,12 @@ void DatabaseViewer::update(int value,
 					}
 					if( !data.imageRaw().empty() &&
 						!data.rightRaw().empty() &&
-						data.stereoCameraModel().isValidForProjection() &&
+						data.stereoCameraModels().size()==1 &&  // Multiple stereo cameras not implemented
+						data.stereoCameraModels()[0].isValidForProjection() &&
 						ui_->checkBox_showDisparityInsteadOfRight->isChecked())
 					{
 						rtabmap::StereoDense * denseStereo = rtabmap::StereoDense::create(ui_->parameters_toolbox->getParameters());
-						depth = util2d::depthFromDisparity(denseStereo->computeDisparity(data.imageRaw(), data.rightRaw()), data.stereoCameraModel().left().fx(), data.stereoCameraModel().baseline(), CV_32FC1);
+						depth = util2d::depthFromDisparity(denseStereo->computeDisparity(data.imageRaw(), data.rightRaw()), data.stereoCameraModels()[0].left().fx(), data.stereoCameraModels()[0].baseline(), CV_32FC1);
 						delete denseStereo;
 					}
 					imgDepth = depth;
@@ -4538,6 +4583,10 @@ void DatabaseViewer::update(int value,
 					labelGps->setText(QString("stamp=%1 longitude=%2 latitude=%3 altitude=%4m error=%5m bearing=%6deg").arg(QString::number(gps.stamp(), 'f')).arg(gps.longitude()).arg(gps.latitude()).arg(gps.altitude()).arg(gps.error()).arg(gps.bearing()));
 					labelGps->setToolTip(QDateTime::fromMSecsSinceEpoch(gps.stamp()*1000.0).toString("dd.MM.yyyy hh:mm:ss.zzz"));
 				}
+				if(!g.isNull())
+				{
+					labelGt->setText(QString("%1").arg(g.prettyPrint().c_str()));
+				}
 				if(sensors.size())
 				{
 					QString sensorsStr;
@@ -4585,7 +4634,7 @@ void DatabaseViewer::update(int value,
 					labelSensors->setText(sensorsStr);
 					labelSensors->setToolTip(tooltipStr);
 				}
-				if(data.cameraModels().size() || data.stereoCameraModel().isValidForProjection())
+				if(data.cameraModels().size() || data.stereoCameraModels().size())
 				{
 					std::stringstream calibrationDetails;
 					if(data.cameraModels().size())
@@ -4634,38 +4683,40 @@ void DatabaseViewer::update(int value,
 						}
 
 					}
-					else
+					else if(data.stereoCameraModels().size())
 					{
 						//stereo
 						labelCalib->setText(tr("%1x%2 fx=%3 fy=%4 cx=%5 cy=%6 baseline=%7m T=%8 [%9 %10 %11 %12; %13 %14 %15 %16; %17 %18 %19 %20]")
-									.arg(data.stereoCameraModel().left().imageWidth()>0?data.stereoCameraModel().left().imageWidth():data.imageRaw().cols)
-									.arg(data.stereoCameraModel().left().imageHeight()>0?data.stereoCameraModel().left().imageHeight():data.imageRaw().rows)
-									.arg(data.stereoCameraModel().left().fx())
-									.arg(data.stereoCameraModel().left().fy())
-									.arg(data.stereoCameraModel().left().cx())
-									.arg(data.stereoCameraModel().left().cy())
-									.arg(data.stereoCameraModel().baseline())
-									.arg(data.stereoCameraModel().localTransform().prettyPrint().c_str())
-									.arg(data.stereoCameraModel().localTransform().r11()).arg(data.stereoCameraModel().localTransform().r12()).arg(data.stereoCameraModel().localTransform().r13()).arg(data.stereoCameraModel().localTransform().o14())
-									.arg(data.stereoCameraModel().localTransform().r21()).arg(data.stereoCameraModel().localTransform().r22()).arg(data.stereoCameraModel().localTransform().r23()).arg(data.stereoCameraModel().localTransform().o24())
-									.arg(data.stereoCameraModel().localTransform().r31()).arg(data.stereoCameraModel().localTransform().r32()).arg(data.stereoCameraModel().localTransform().r33()).arg(data.stereoCameraModel().localTransform().o34()));
+									.arg(data.stereoCameraModels()[0].left().imageWidth()>0?data.stereoCameraModels()[0].left().imageWidth():data.imageRaw().cols)
+									.arg(data.stereoCameraModels()[0].left().imageHeight()>0?data.stereoCameraModels()[0].left().imageHeight():data.imageRaw().rows)
+									.arg(data.stereoCameraModels()[0].left().fx())
+									.arg(data.stereoCameraModels()[0].left().fy())
+									.arg(data.stereoCameraModels()[0].left().cx())
+									.arg(data.stereoCameraModels()[0].left().cy())
+									.arg(data.stereoCameraModels()[0].baseline())
+									.arg(data.stereoCameraModels()[0].localTransform().prettyPrint().c_str())
+									.arg(data.stereoCameraModels()[0].localTransform().r11()).arg(data.stereoCameraModels()[0].localTransform().r12()).arg(data.stereoCameraModels()[0].localTransform().r13()).arg(data.stereoCameraModels()[0].localTransform().o14())
+									.arg(data.stereoCameraModels()[0].localTransform().r21()).arg(data.stereoCameraModels()[0].localTransform().r22()).arg(data.stereoCameraModels()[0].localTransform().r23()).arg(data.stereoCameraModels()[0].localTransform().o24())
+									.arg(data.stereoCameraModels()[0].localTransform().r31()).arg(data.stereoCameraModels()[0].localTransform().r32()).arg(data.stereoCameraModels()[0].localTransform().r33()).arg(data.stereoCameraModels()[0].localTransform().o34()));
 
-						calibrationDetails << "Left:" << " Size=" << data.stereoCameraModel().left().imageWidth() << "x" << data.stereoCameraModel().left().imageHeight() << std::endl;
-						if( data.stereoCameraModel().left().K_raw().total()) calibrationDetails << "K=" << data.stereoCameraModel().left().K_raw() << std::endl;
-						if( data.stereoCameraModel().left().D_raw().total()) calibrationDetails << "D=" << data.stereoCameraModel().left().D_raw() << std::endl;
-						if( data.stereoCameraModel().left().R().total()) calibrationDetails << "R=" << data.stereoCameraModel().left().R() << std::endl;
-						if( data.stereoCameraModel().left().P().total()) calibrationDetails << "P=" << data.stereoCameraModel().left().P() << std::endl;
-						calibrationDetails << std::endl;
-						calibrationDetails << "Right:" << " Size=" << data.stereoCameraModel().right().imageWidth() << "x" << data.stereoCameraModel().right().imageHeight() << std::endl;
-						if( data.stereoCameraModel().right().K_raw().total()) calibrationDetails << "K=" << data.stereoCameraModel().right().K_raw() << std::endl;
-						if( data.stereoCameraModel().right().D_raw().total()) calibrationDetails << "D=" << data.stereoCameraModel().right().D_raw() << std::endl;
-						if( data.stereoCameraModel().right().R().total()) calibrationDetails << "R=" << data.stereoCameraModel().right().R() << std::endl;
-						if( data.stereoCameraModel().right().P().total()) calibrationDetails << "P=" << data.stereoCameraModel().right().P() << std::endl;
-						calibrationDetails << std::endl;
-						if( data.stereoCameraModel().R().total()) calibrationDetails << "R=" << data.stereoCameraModel().R() << std::endl;
-						if( data.stereoCameraModel().T().total()) calibrationDetails << "T=" << data.stereoCameraModel().T() << std::endl;
-						if( data.stereoCameraModel().F().total()) calibrationDetails << "F=" << data.stereoCameraModel().F() << std::endl;
-						if( data.stereoCameraModel().E().total()) calibrationDetails << "E=" << data.stereoCameraModel().E() << std::endl;
+						for(unsigned int i=0; i<data.stereoCameraModels().size();++i)
+						{
+							calibrationDetails << "Id: " << i << std::endl;
+							calibrationDetails << " Left:" << " Size=" << data.stereoCameraModels()[i].left().imageWidth() << "x" << data.stereoCameraModels()[i].left().imageHeight() << std::endl;
+							if( data.stereoCameraModels()[i].left().K_raw().total()) calibrationDetails << " K=" << data.stereoCameraModels()[i].left().K_raw() << std::endl;
+							if( data.stereoCameraModels()[i].left().D_raw().total()) calibrationDetails << " D=" << data.stereoCameraModels()[i].left().D_raw() << std::endl;
+							if( data.stereoCameraModels()[i].left().R().total()) calibrationDetails << " R=" << data.stereoCameraModels()[i].left().R() << std::endl;
+							if( data.stereoCameraModels()[i].left().P().total()) calibrationDetails << " P=" << data.stereoCameraModels()[i].left().P() << std::endl;
+							calibrationDetails << " Right:" << " Size=" << data.stereoCameraModels()[i].right().imageWidth() << "x" << data.stereoCameraModels()[i].right().imageHeight() << std::endl;
+							if( data.stereoCameraModels()[i].right().K_raw().total()) calibrationDetails << " K=" << data.stereoCameraModels()[i].right().K_raw() << std::endl;
+							if( data.stereoCameraModels()[i].right().D_raw().total()) calibrationDetails << " D=" << data.stereoCameraModels()[i].right().D_raw() << std::endl;
+							if( data.stereoCameraModels()[i].right().R().total()) calibrationDetails << " R=" << data.stereoCameraModels()[i].right().R() << std::endl;
+							if( data.stereoCameraModels()[i].right().P().total()) calibrationDetails << " P=" << data.stereoCameraModels()[i].right().P() << std::endl;
+							if( data.stereoCameraModels()[i].R().total()) calibrationDetails << " R=" << data.stereoCameraModels()[i].R() << std::endl;
+							if( data.stereoCameraModels()[i].T().total()) calibrationDetails << " T=" << data.stereoCameraModels()[i].T() << std::endl;
+							if( data.stereoCameraModels()[i].F().total()) calibrationDetails << " F=" << data.stereoCameraModels()[i].F() << std::endl;
+							if( data.stereoCameraModels()[i].E().total()) calibrationDetails << " E=" << data.stereoCameraModels()[i].E() << std::endl;
+						}
 					}
 					labelCalib->setToolTip(calibrationDetails.str().c_str());
 
@@ -4677,7 +4728,7 @@ void DatabaseViewer::update(int value,
 
 				if(data.laserScanRaw().size())
 				{
-					labelScan->setText(tr("Format=%1 Points=%2 [max=%3] Range=[%4->%5 m] Angle=[%6->%7 rad inc=%8] Has [Color=%9 2D=%10 Normals=%11 Intensity=%12]")
+					labelScan->setText(tr("Format=%1 Points=%2 [max=%3] Range=[%4->%5 m] Angle=[%6->%7 rad inc=%8] Has [Color=%9 2D=%10 Normals=%11 Intensity=%12] %13")
 							.arg(data.laserScanRaw().formatName().c_str())
 							.arg(data.laserScanRaw().size())
 							.arg(data.laserScanRaw().maxPoints())
@@ -4689,7 +4740,8 @@ void DatabaseViewer::update(int value,
 							.arg(data.laserScanRaw().hasRGB()?1:0)
 							.arg(data.laserScanRaw().is2d()?1:0)
 							.arg(data.laserScanRaw().hasNormals()?1:0)
-							.arg(data.laserScanRaw().hasIntensity()?1:0));
+							.arg(data.laserScanRaw().hasIntensity()?1:0)
+							.arg(data.laserScanRaw().localTransform().prettyPrint().c_str()));
 				}
 
 				//stereo
@@ -4784,12 +4836,16 @@ void DatabaseViewer::update(int value,
 					{
 						pcl::PointCloud<pcl::PointXYZINormal>::Ptr cloud = util3d::laserScanToPointCloudINormal(laserScanRaw, laserScanRaw.localTransform());
 						std::vector<CameraModel> models = data.cameraModels();
-						if(data.stereoCameraModel().isValidForProjection())
+						if(!data.stereoCameraModels().empty())
 						{
 							models.clear();
-							models.push_back(data.stereoCameraModel().left());
+							for(size_t i=0; i<data.stereoCameraModels().size(); ++i)
+							{
+								models.push_back(data.stereoCameraModels()[i].left());
+							}
 						}
-						else if(!models.empty() && !models[0].isValidForProjection())
+
+						if(!models.empty() && !models[0].isValidForProjection())
 						{
 							models.clear();
 						}
@@ -4915,11 +4971,11 @@ void DatabaseViewer::update(int value,
 											viewpoint[1] = data.cameraModels()[0].localTransform().y();
 											viewpoint[2] = data.cameraModels()[0].localTransform().z();
 										}
-										else if(!data.stereoCameraModel().localTransform().isNull())
+										else if(data.stereoCameraModels().size() && !data.stereoCameraModels()[0].localTransform().isNull())
 										{
-											viewpoint[0] = data.stereoCameraModel().localTransform().x();
-											viewpoint[1] = data.stereoCameraModel().localTransform().y();
-											viewpoint[2] = data.stereoCameraModel().localTransform().z();
+											viewpoint[0] = data.stereoCameraModels()[0].localTransform().x();
+											viewpoint[1] = data.stereoCameraModels()[0].localTransform().y();
+											viewpoint[2] = data.stereoCameraModels()[0].localTransform().z();
 										}
 										std::vector<pcl::Vertices> polygons = util3d::organizedFastMesh(
 												cloud,
@@ -4988,7 +5044,7 @@ void DatabaseViewer::update(int value,
 						}
 						else
 						{
-							cloudViewer_->updateCameraFrustum(pose, data.stereoCameraModel());
+							cloudViewer_->updateCameraFrustums(pose, data.stereoCameraModels());
 						}
 					}
 
@@ -5358,7 +5414,8 @@ void DatabaseViewer::updateStereo(const SensorData * data)
 		!data->imageRaw().empty() &&
 		!data->depthOrRightRaw().empty() &&
 		data->depthOrRightRaw().type() == CV_8UC1 &&
-		data->stereoCameraModel().isValidForProjection())
+		data->stereoCameraModels().size()==1 && // Not implemented for multiple stereo cameras
+		data->stereoCameraModels()[0].isValidForProjection())
 	{
 		cv::Mat leftMono;
 		if(data->imageRaw().channels() == 3)
@@ -5426,11 +5483,11 @@ void DatabaseViewer::updateStereo(const SensorData * data)
 					cv::Point3f tmpPt = util3d::projectDisparityTo3D(
 							leftCorners[i],
 							disparity,
-							data->stereoCameraModel());
+							data->stereoCameraModels()[0]);
 
 					if(util3d::isFinite(tmpPt))
 					{
-						pt = util3d::transformPoint(tmpPt, data->stereoCameraModel().left().localTransform());
+						pt = util3d::transformPoint(tmpPt, data->stereoCameraModels()[0].left().localTransform());
 						status[i] = 100; //blue
 						++inliers;
 						cloud->at(oi++) = pcl::PointXYZ(pt.x, pt.y, pt.z);
@@ -5929,6 +5986,7 @@ void DatabaseViewer::updateConstraintView(
 						ui_->label_scanA,
 						ui_->label_gravityA,
 						ui_->label_gpsA,
+						ui_->label_gtA,
 						ui_->label_sensorsA,
 						false); // don't update constraints view!
 		if(link.to()>0)
@@ -5949,6 +6007,7 @@ void DatabaseViewer::updateConstraintView(
 						ui_->label_scanB,
 						ui_->label_gravityB,
 						ui_->label_gpsB,
+						ui_->label_gtB,
 						ui_->label_sensorsB,
 						false); // don't update constraints view!
 		}
@@ -6383,6 +6442,32 @@ void DatabaseViewer::updateConstraintView(
 					constraintsViewer_->setCloudColorIndex("scan1", 2);
 				}
 			}
+		}
+
+		//frustums
+		constraintsViewer_->removeAllFrustums();
+		if(constraintsViewer_->isFrustumShown())
+		{
+			CameraModel model;
+			if(dataFrom.cameraModels().size())
+			{
+				model = dataFrom.cameraModels()[0];
+			}
+			else if(dataFrom.stereoCameraModels().size())
+			{
+				model = dataFrom.stereoCameraModels()[0].left();
+			}
+			constraintsViewer_->addOrUpdateFrustum("frustum_from", pose, model.localTransform(), constraintsViewer_->getFrustumScale(), constraintsViewer_->getFrustumColor(), model.fovX(), model.fovY());
+			model = CameraModel();
+			if(dataTo.cameraModels().size())
+			{
+				model = dataTo.cameraModels()[0];
+			}
+			else if(dataTo.stereoCameraModels().size())
+			{
+				model = dataTo.stereoCameraModels()[0].left();
+			}
+			constraintsViewer_->addOrUpdateFrustum("frustum_to", pose*t, model.localTransform(), constraintsViewer_->getFrustumScale(), constraintsViewer_->getFrustumColor(), model.fovX(), model.fovY());
 		}
 
 		//update coordinate
