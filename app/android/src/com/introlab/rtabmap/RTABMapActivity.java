@@ -125,7 +125,7 @@ public class RTABMapActivity extends FragmentActivity implements OnClickListener
 	public static final String RTABMAP_TMP_DB = "rtabmap.tmp.db";
 	public static final String RTABMAP_TMP_DIR = "tmp";
 	public static final String RTABMAP_TMP_FILENAME = "map";
-	public static final String RTABMAP_SDCARD_PATH = "/sdcard/";
+	public static final String RTABMAP_SDCARD_PATH = "/Internal storage/";
 	public static final String RTABMAP_EXPORT_DIR = "Export/";
 
 	public static final String RTABMAP_AUTH_TOKEN_KEY = "com.introlab.rtabmap.AUTH_TOKEN";
@@ -303,7 +303,7 @@ public class RTABMapActivity extends FragmentActivity implements OnClickListener
 		}
 
 		public void onServiceDisconnected(ComponentName name) {
-			// Handle this if you need to gracefully shutsaveDatabasedown/retry
+			// Handle this if you need to gracefully shutdown/retry
 			// in the event that Tango itself crashes/gets upgraded while running.
 			mToast.makeText(getApplicationContext(), 
 					String.format("Tango disconnected!"), mToast.LENGTH_LONG).show();
@@ -504,10 +504,28 @@ public class RTABMapActivity extends FragmentActivity implements OnClickListener
 		mTotalLoopClosures = 0;
 		mLastFastMovementNotificationStamp = System.currentTimeMillis()/1000;
 		
+		
+		int targetSdkVersion= 0;
+		try {
+	        ApplicationInfo app = this.getPackageManager().getApplicationInfo("com.introlab.rtabmap", 0);        
+	        targetSdkVersion = app.targetSdkVersion;
+	    } catch (NameNotFoundException e) {
+	        e.printStackTrace();
+	    }
+	
 		if(Environment.getExternalStorageState().compareTo(Environment.MEDIA_MOUNTED)==0 && 
-				getActivity().getExternalFilesDirs(null).length >=1)
+			(targetSdkVersion < 30 || getActivity().getExternalFilesDirs(null).length >=1))
 		{
-			File extStore = getActivity().getExternalFilesDirs(null)[0];
+			File extStore;
+			if(targetSdkVersion < 30)
+			{
+				extStore = Environment.getExternalStorageDirectory();
+			}
+			else // >= android30
+			{
+				extStore = getActivity().getExternalFilesDirs(null)[0];
+			}
+			
 			mWorkingDirectory = extStore.getAbsolutePath() + "/" + getString(R.string.app_name) + "/";
 			extStore = new File(mWorkingDirectory);
 			extStore.mkdirs();
@@ -3603,22 +3621,7 @@ public class RTABMapActivity extends FragmentActivity implements OnClickListener
 				File exportDir = new File(mWorkingDirectory + RTABMAP_EXPORT_DIR);
 				exportDir.mkdirs();
 				
-				// cleanup old zip
-				fileNames = Util.loadFileList(mWorkingDirectory + RTABMAP_EXPORT_DIR, false);
-				if(!DISABLE_LOG) Log.i(TAG, String.format("Deleting %d files in \"%s\"", fileNames.length, mWorkingDirectory + RTABMAP_EXPORT_DIR));
-				for(int i=0; i<fileNames.length; ++i)
-				{
-					File f = new File(mWorkingDirectory + RTABMAP_EXPORT_DIR + "/" + fileNames[i]);
-					if(f.delete())
-					{
-						if(!DISABLE_LOG) Log.i(TAG, String.format("Deleted \"%s\"", f.getPath()));
-					}
-					else
-					{
-						if(!DISABLE_LOG) Log.i(TAG, String.format("Failed deleting \"%s\"", f.getPath()));
-					}
-				}
-
+				final String pathHuman = mWorkingDirectoryHuman + RTABMAP_EXPORT_DIR + fileName + ".zip";
 				final String zipOutput = mWorkingDirectory+RTABMAP_EXPORT_DIR+fileName+".zip";
 				if(RTABMapLib.writeExportedMesh(nativeApplication, mWorkingDirectory + RTABMAP_TMP_DIR, RTABMAP_TMP_FILENAME))
 				{							
@@ -3660,41 +3663,30 @@ public class RTABMapActivity extends FragmentActivity implements OnClickListener
 							final File f = new File(zipOutput);
 							final int fileSizeMB = (int)f.length()/(1024 * 1024);
 
-							// Save to public Documents/RTAB-Map folder
-							/*ContentValues values = new ContentValues();
-				            values.put(MediaStore.MediaColumns.DISPLAY_NAME, fileName); //file name                     
-				            values.put(MediaStore.MediaColumns.MIME_TYPE, "application/zip");        //file extension, will automatically add to file
-				            values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOCUMENTS + "/RTAB-Map");     //end "/" is not mandatory
-				            Uri uri = getContentResolver().insert(MediaStore.Files.getContentUri("external"),values);
-				            if (uri != null) {
-				            	OutputStream out;
-								try {
-									out = getApplicationContext().getContentResolver().openOutputStream(uri);
-									
-									InputStream in = new FileInputStream(zipOutput);
-					        		byte[] buf = new byte[1024];
-					        		int len;
-					        		while ((len = in.read(buf)) > 0) {
-					        			out.write(buf, 0, len);
-					        		}
-					        		in.close();
-					        		out.close();
-					        		
-					        		f.delete(); // remove private file
-								} catch (IOException e) {
-									Log.e(TAG, e.getMessage());
-								}
-				            } */
+							AlertDialog d = new AlertDialog.Builder(getActivity())
+									.setCancelable(false)
+									.setTitle("Mesh Saved!")
+									.setMessage(String.format("Mesh \"%s\" (%d MB) successfully exported! Share it?", pathHuman, fileSizeMB))
+									.setPositiveButton("Yes", new DialogInterface.OnClickListener() {
+										public void onClick(DialogInterface dialog, int which) {
+											// Send to...
+											Intent shareIntent = new Intent();
+											shareIntent.setAction(Intent.ACTION_SEND);
+											shareIntent.putExtra(Intent.EXTRA_STREAM, FileProvider.getUriForFile(getActivity(), getActivity().getApplicationContext().getPackageName() + ".provider", f));
+											shareIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+											shareIntent.setType("application/zip");
+											startActivity(Intent.createChooser(shareIntent, "Sharing..."));
 
-							// Send to...
-							Intent shareIntent = new Intent();
-							shareIntent.setAction(Intent.ACTION_SEND);
-							shareIntent.putExtra(Intent.EXTRA_STREAM, FileProvider.getUriForFile(getActivity(), getActivity().getApplicationContext().getPackageName() + ".provider", f));
-							shareIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-							shareIntent.setType("application/zip");
-							startActivity(Intent.createChooser(shareIntent, "Sharing..."));
-
-							resetNoTouchTimer(true);
+											resetNoTouchTimer(true);
+										}
+									})
+									.setNegativeButton("No", new DialogInterface.OnClickListener() {
+										public void onClick(DialogInterface dialog, int which) {
+											resetNoTouchTimer(true);
+										}
+									}).create();
+							d.setCanceledOnTouchOutside(false);
+							d.show();
 						}
 					});
 				}

@@ -49,6 +49,7 @@ class Memory;
 class BayesFilter;
 class Signature;
 class Optimizer;
+class PythonInterface;
 
 class RTABMAP_EXP Rtabmap
 {
@@ -323,6 +324,8 @@ private:
 	bool _loopGPS;
 	int _maxOdomCacheSize;
 	bool _createGlobalScanMap;
+	float _markerPriorsLinearVariance;
+	float _markerPriorsAngularVariance;
 
 	std::pair<int, float> _loopClosureHypothesis;
 	std::pair<int, float> _highestHypothesis;
@@ -363,6 +366,7 @@ private:
 	std::map<int, Transform> _odomCachePoses;       // used in localization mode to reject loop closures
 	std::multimap<int, Link> _odomCacheConstraints; // used in localization mode to reject loop closures
 	std::vector<float> _odomCorrectionAcc;
+	std::map<int, Transform> _markerPriors;
 
 	// Planning stuff
 	int _pathStatus;
@@ -373,6 +377,10 @@ private:
 	Transform _pathTransformToGoal;
 	int _pathStuckCount;
 	float _pathStuckDistance;
+
+#ifdef RTABMAP_PYTHON
+	PythonInterface * _python;
+#endif
 
 };
 
