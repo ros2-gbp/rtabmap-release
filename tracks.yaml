@@ -283,4 +283,5 @@ tracks:
     ros_distro: rolling
     vcs_type: git
     vcs_uri: https://github.com/introlab/rtabmap.git
-    version: :{auto}
+    version: 0.20.23
+    version_saved: :{auto}
