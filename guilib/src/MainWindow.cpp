@@ -2212,7 +2212,9 @@ void MainWindow::processStats(const rtabmap::Statistics & stat)
 			UDEBUG("time= %d ms (update detection ui)", time.restart());
 
 			//update image views
-			if(!signature.sensorData().imageRaw().empty() || signature.getWords().size())
+			if(!signature.sensorData().imageRaw().empty() ||
+			   !loopSignature.sensorData().imageRaw().empty() ||
+			   signature.getWords().size())
 			{
 				cv::Mat refImage = signature.sensorData().imageRaw();
 				cv::Mat loopImage = loopSignature.sensorData().imageRaw();
@@ -2393,7 +2395,10 @@ void MainWindow::processStats(const rtabmap::Statistics & stat)
 		//======================
 		// RGB-D Mapping stuff
 		//======================
-		_odometryCorrection = stat.mapCorrection();
+		if(!stat.mapCorrection().isNull())
+		{
+			_odometryCorrection = stat.mapCorrection();
+		}
 		// update clouds
 		if(stat.poses().size())
 		{
@@ -5843,27 +5848,20 @@ void MainWindow::startDetection()
 					_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcImages) &&
 				   !_preferencesDialog->getIMUPath().isEmpty())
 				{
-					if( odomStrategy != Odometry::kTypeOkvis &&
-						odomStrategy != Odometry::kTypeMSCKF &&
-						odomStrategy != Odometry::kTypeVINS &&
-						odomStrategy != Odometry::kTypeOpenVINS)
+					_imuThread = new IMUThread(_preferencesDialog->getIMURate(), _preferencesDialog->getIMULocalTransform());
+					if(_preferencesDialog->getIMUFilteringStrategy()>0)
+					{
+						_imuThread->enableIMUFiltering(_preferencesDialog->getIMUFilteringStrategy()-1, parameters, _preferencesDialog->getIMUFilteringBaseFrameConversion());
+					}
+					if(!_imuThread->init(_preferencesDialog->getIMUPath().toStdString()))
 					{
 						QMessageBox::warning(this, tr("Source IMU Path"),
-								tr("IMU path is set but odometry chosen doesn't support asynchronous IMU, ignoring IMU..."), QMessageBox::Ok);
-					}
-					else
-					{
-						_imuThread = new IMUThread(_preferencesDialog->getIMURate(), _preferencesDialog->getIMULocalTransform());
-						if(!_imuThread->init(_preferencesDialog->getIMUPath().toStdString()))
-						{
-							QMessageBox::warning(this, tr("Source IMU Path"),
-								tr("Initialization of IMU data has failed! Path=%1.").arg(_preferencesDialog->getIMUPath()), QMessageBox::Ok);
-							delete _camera;
-							_camera = 0;
-							delete _imuThread;
-							_imuThread = 0;
-							return;
-						}
+							tr("Initialization of IMU data has failed! Path=%1.").arg(_preferencesDialog->getIMUPath()), QMessageBox::Ok);
+						delete _camera;
+						_camera = 0;
+						delete _imuThread;
+						_imuThread = 0;
+						return;
 					}
 				}
 				Odometry * odom = Odometry::create(odomParameters);
@@ -7211,6 +7209,11 @@ void MainWindow::updateCacheFromDatabase(const QString & path)
 			{
 				signatures.insert(std::make_pair((*iter)->id(), *(*iter)));
 				delete *iter;
+			}
+			if(_currentPosesMap.empty() && _currentLinksMap.empty())
+			{
+				_currentPosesMap = driver->loadOptimizedPoses();
+				driver->getAllLinks(_currentLinksMap, true, true);
 			}
 			RtabmapEvent3DMap event(signatures, _currentPosesMap, _currentLinksMap);
 			processRtabmapEvent3DMap(event);
