@@ -20,7 +20,7 @@ SET(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake_modules")
 #######################
 SET(RTABMAP_MAJOR_VERSION 0)
 SET(RTABMAP_MINOR_VERSION 21)
-SET(RTABMAP_PATCH_VERSION 1)
+SET(RTABMAP_PATCH_VERSION 2)
 SET(RTABMAP_VERSION
   ${RTABMAP_MAJOR_VERSION}.${RTABMAP_MINOR_VERSION}.${RTABMAP_PATCH_VERSION})
   
@@ -218,7 +218,7 @@ option(WITH_OPENVINS      "Include OpenVINS support"             OFF)
 option(WITH_MADGWICK      "Include Madgwick IMU filtering support" ON)
 option(WITH_FASTCV        "Include FastCV support"               ON)
 option(WITH_OPENMP        "Include OpenMP support"               ON)
-option(WITH_OPENGV        "Include OpenGV support"               OFF)
+option(WITH_OPENGV        "Include OpenGV support"               ON)
 IF(MOBILE_BUILD)
 option(PCL_OMP            "With PCL OMP implementations"         OFF)
 ELSE()
@@ -228,7 +228,7 @@ ENDIF()
 set(RTABMAP_QT_VERSION AUTO CACHE STRING "Force a specific Qt version.")
 set_property(CACHE RTABMAP_QT_VERSION PROPERTY STRINGS AUTO 4 5 6)
 
-FIND_PACKAGE(OpenCV REQUIRED QUIET COMPONENTS core calib3d imgproc highgui stitching photo video OPTIONAL_COMPONENTS aruco xfeatures2d nonfree gpu cudafeatures2d)
+FIND_PACKAGE(OpenCV REQUIRED QUIET COMPONENTS core calib3d imgproc highgui stitching photo video videoio OPTIONAL_COMPONENTS aruco xfeatures2d nonfree gpu cudafeatures2d)
 
 IF(WITH_QT)
 FIND_PACKAGE(PCL 1.7 REQUIRED QUIET COMPONENTS common io kdtree search surface filters registration sample_consensus segmentation visualization)
@@ -777,8 +777,8 @@ IF(NOT MSVC)
         message(STATUS "The compiler ${CMAKE_CXX_COMPILER} has no C++17 support. Please use a different C++ compiler if you want to use Qt6.")
       ENDIF()
     ENDIF()
-    IF((NOT (${CMAKE_CXX_STANDARD} STREQUAL "17")) AND ((NOT WITH_MSCKF_VIO OR NOT msckf_vio_FOUND) AND (loam_velodyne_FOUND OR floam_FOUND OR PCL_VERSION VERSION_GREATER "1.9.1" OR TORCH_FOUND OR G2O_FOUND OR CCCoreLib_FOUND OR Open3D_FOUND)))
-     #LOAM, PCL>=1.10, latest g2o and CCCoreLib require c++14, but MSCKF_VIO requires c++11
+    IF((NOT (${CMAKE_CXX_STANDARD} STREQUAL "17")) AND (msckf_vio_FOUND OR loam_velodyne_FOUND OR floam_FOUND OR PCL_VERSION VERSION_GREATER "1.9.1" OR TORCH_FOUND OR G2O_FOUND OR CCCoreLib_FOUND OR Open3D_FOUND))
+     #MSCKF_VIO, LOAM, PCL>=1.10, latest g2o and CCCoreLib require c++14
      include(CheckCXXCompilerFlag)
       CHECK_CXX_COMPILER_FLAG("-std=c++14" COMPILER_SUPPORTS_CXX14)
       IF(COMPILER_SUPPORTS_CXX14)
@@ -801,7 +801,6 @@ IF(NOT MSVC)
            ORB_SLAM_FOUND OR
            okvis_FOUND OR
            open_chisel_FOUND OR
-           msckf_vio_FOUND OR
            vins_FOUND OR
            ov_msckf_FOUND OR
            libpointmatcher_FOUND))
@@ -977,10 +976,10 @@ IF(NOT mynteye_FOUND)
    SET(MYNTEYE "//")
 ENDIF(NOT mynteye_FOUND)
 IF(NOT depthai_FOUND)
-   SET(CONF_DEPTH_AI OFF)
+   SET(CONF_WITH_DEPTH_AI 0)
    SET(DEPTHAI "//")
 ELSE()
-   SET(CONF_DEPTH_AI ON) 
+   SET(CONF_WITH_DEPTH_AI 1)
 ENDIF()
 IF(NOT octomap_FOUND)
    SET(OCTOMAP "//")
@@ -1029,6 +1028,9 @@ IF(NOT TORCH_FOUND)
 ENDIF()
 IF(NOT WITH_PYTHON OR NOT Python3_FOUND)
    SET(PYTHON "//")
+   SET(CONF_WITH_PYTHON 0)
+ELSE()
+   SET(CONF_WITH_PYTHON 1)
 ENDIF()
 IF(ADD_VTK_GUI_SUPPORT_QT_TO_CONF)
    SET(CONF_VTK_QT true)
