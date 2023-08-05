@@ -1,3 +1,26 @@
+## rtabmap (iron) - 0.21.2-1
+
+The packages in the `rtabmap` repository were released into the `iron` distro by running `/usr/bin/bloom-release rtabmap --track iron --rosdistro iron --new-track` on `Sat, 05 Aug 2023 22:17:19 -0000`
+
+The `rtabmap` package was released.
+
+Version of package(s) in repository `rtabmap`:
+
+- upstream repository: https://github.com/introlab/rtabmap.git
+- release repository: https://github.com/ros2-gbp/rtabmap-release.git
+- rosdistro version: `0.21.1-3`
+- old version: `0.21.1-3`
+- new version: `0.21.2-1`
+
+Versions of tools used:
+
+- bloom version: `0.11.2`
+- catkin_pkg version: `0.5.2`
+- rosdep version: `0.22.2`
+- rosdistro version: `0.9.0`
+- vcstools version: `0.1.42`
+
+
 ## rtabmap (humble) - 0.21.1-1
 
 The packages in the `rtabmap` repository were released into the `humble` distro by running `/usr/bin/bloom-release rtabmap --rosdistro humble` on `Sun, 09 Apr 2023 22:19:12 -0000`
