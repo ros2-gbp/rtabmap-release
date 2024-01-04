@@ -60,9 +60,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/core/optimizer/OptimizerG2O.h"
 #include <pcl/io/pcd_io.h>
 #include <pcl/common/common.h>
-#include <rtabmap/core/OccupancyGrid.h>
 #include <rtabmap/core/MarkerDetector.h>
 #include <opencv2/imgproc/types_c.h>
+#include <rtabmap/core/LocalGridMaker.h>
 
 namespace rtabmap {
 
@@ -153,7 +153,7 @@ Memory::Memory(const ParametersMap & parameters) :
 	}
 	_registrationIcpMulti = new RegistrationIcp(paramsMulti);
 
-	_occupancy = new OccupancyGrid(parameters);
+	_localMapMaker = new LocalGridMaker(parameters);
 	_markerDetector = new MarkerDetector(parameters);
 	this->parseParameters(parameters);
 }
@@ -283,6 +283,10 @@ void Memory::loadDataFromDb(bool postInitClosingEvents)
                                           -landmarkId, inserted.first->second, landmarkSize.at<float>(0,0));
                                 }
                             }
+							else
+							{
+								UDEBUG("Caching landmark size %f for %d", landmarkSize.at<float>(0,0), -landmarkId);
+							}
                         }
 
                         std::map<int, std::set<int> >::iterator nter = _landmarksIndex.find(landmarkId);
@@ -541,7 +545,7 @@ Memory::~Memory()
 	delete _registrationPipeline;
 	delete _registrationIcpMulti;
 	delete _registrationVis;
-	delete _occupancy;
+	delete _localMapMaker;
 }
 
 void Memory::parseParameters(const ParametersMap & parameters)
@@ -745,9 +749,9 @@ void Memory::parseParameters(const ParametersMap & parameters)
 		}
 	}
 
-	if(_occupancy)
+	if(_localMapMaker)
 	{
-		_occupancy->parseParameters(params);
+		_localMapMaker->parseParameters(params);
 	}
 
 	if(_markerDetector)
@@ -3702,7 +3706,7 @@ unsigned long Memory::getMemoryUsed() const
 	memoryUsage += sizeof(Feature2D) + _feature2D->getParameters().size()*(sizeof(std::string)*2+sizeof(ParametersMap::iterator)) + sizeof(ParametersMap);
 	memoryUsage += sizeof(Registration);
 	memoryUsage += sizeof(RegistrationIcp);
-	memoryUsage += _occupancy->getMemoryUsed();
+	memoryUsage += sizeof(LocalGridMaker);
 	memoryUsage += sizeof(MarkerDetector);
 	memoryUsage += sizeof(DBDriver);
 
@@ -4966,6 +4970,10 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 					if(stats) stats->addStatistic(Statistics::kTimingMemKeypoints_3D(), t*1000.0f);
 					UDEBUG("time keypoints 3D (%d) = %fs", (int)keypoints3D.size(), t);
 				}
+				if(depthMask.empty() && (_feature2D->getMinDepth() > 0.0f || _feature2D->getMaxDepth() > 0.0f))
+				{
+					_feature2D->filterKeypointsByDepth(keypoints, descriptors, keypoints3D, _feature2D->getMinDepth(), _feature2D->getMaxDepth());
+				}
 			}
 		}
 		else if(data.imageRaw().empty())
@@ -5834,14 +5842,14 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 	// Occupancy grid map stuff
 	if(_createOccupancyGrid && !isIntermediateNode)
 	{
-		if( (_occupancy->isGridFromDepth() && !data.depthOrRightRaw().empty()) ||
-			(!_occupancy->isGridFromDepth() && !data.laserScanRaw().empty()))
+		if( (_localMapMaker->isGridFromDepth() && !data.depthOrRightRaw().empty()) ||
+			(!_localMapMaker->isGridFromDepth() && !data.laserScanRaw().empty()))
 		{
 			cv::Mat ground, obstacles, empty;
 			float cellSize = 0.0f;
 			cv::Point3f viewPoint(0,0,0);
-			_occupancy->createLocalMap(*s, ground, obstacles, empty, viewPoint);
-			cellSize = _occupancy->getCellSize();
+			_localMapMaker->createLocalMap(*s, ground, obstacles, empty, viewPoint);
+			cellSize = _localMapMaker->getCellSize();
 			s->sensorData().setOccupancyGrid(ground, obstacles, empty, cellSize, viewPoint);
 
 			t = timer.ticks();
