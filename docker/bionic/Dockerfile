@@ -5,7 +5,7 @@ FROM ros:melodic-perception
 # Install build dependencies
 RUN apt-get update && \
     apt-get install -y git software-properties-common ros-melodic-rtabmap-ros && \
-    apt-get remove -y ros-melodic-rtabmap && \
+    apt-get remove -y ros-melodic-rtabmap* && \
     apt-get clean && rm -rf /var/lib/apt/lists/
 
 WORKDIR /root/
@@ -15,10 +15,10 @@ RUN add-apt-repository ppa:borglab/gtsam-release-4.0 -y
 RUN apt-get update && apt install libgtsam-dev libgtsam-unstable-dev -y && \
     apt-get clean && rm -rf /var/lib/apt/lists/
 
-# MRPT
-RUN add-apt-repository ppa:joseluisblancoc/mrpt-stable -y
-RUN apt-get update && apt install libmrpt-poses-dev -y && \
-    apt-get clean && rm -rf /var/lib/apt/lists/
+# MRPT # build failed: https://github.com/introlab/rtabmap/actions/runs/7259315306/job/19776230419
+#RUN add-apt-repository ppa:joseluisblancoc/mrpt-stable -y
+#RUN apt-get update && apt install libmrpt-poses-dev -y && \
+#    apt-get clean && rm -rf /var/lib/apt/lists/
 
 ARG TARGETPLATFORM
 ENV TARGETPLATFORM=${TARGETPLATFORM:-linux/amd64}
@@ -48,6 +48,9 @@ RUN git clone https://github.com/laurentkneip/opengv.git && \
     make install && \
     cd && \
     rm -r opengv
+
+# Will be used to read/store databases on host
+RUN mkdir -p /root/Documents/RTAB-Map
 
 RUN rm /bin/sh && ln -s /bin/bash /bin/sh
 
