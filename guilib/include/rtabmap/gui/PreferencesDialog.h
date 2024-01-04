@@ -227,6 +227,7 @@ public:
 	double getSubtractFilteringAngle() const;
 
 	bool getGridMapShown() const;
+	int getElevationMapShown() const;
 	int getGridMapSensor() const;
 	bool projMapFrame() const;
 	double projMaxGroundAngle() const;
@@ -264,6 +265,8 @@ public:
 	double getBilateralSigmaS() const;
 	double getBilateralSigmaR() const;
 	int getSourceImageDecimation() const;
+	int getSourceHistogramMethod() const;
+	bool isSourceFeatureDetection() const;
 	bool isSourceStereoDepthGenerated() const;
 	bool isSourceStereoExposureCompensation() const;
 	bool isSourceScanFromDepth() const;
@@ -348,6 +351,8 @@ private Q_SLOTS:
 	void changeOdometryORBSLAMVocabulary();
 	void changeOdometryOKVISConfigPath();
 	void changeOdometryVINSConfigPath();
+	void changeOdometryOpenVINSLeftMask();
+	void changeOdometryOpenVINSRightMask();
 	void changeIcpPMConfigPath();
 	void changeSuperPointModelPath();
 	void changePyMatcherPath();
@@ -380,6 +385,7 @@ private Q_SLOTS:
 	void selectSourceMKVPath();
 	void selectSourceSvoPath();
 	void selectSourceRealsense2JsonPath();
+	void selectSourceDepthaiBlobPath();
 	void updateSourceGrpVisibility();
 	void testOdometry();
 	void testCamera();
