@@ -231,6 +231,7 @@ class RTABMAP_CORE_EXPORT Parameters
     RTABMAP_PARAM(Mem, UseOdomFeatures,             bool, true,     "Use odometry features instead of regenerating them.");
     RTABMAP_PARAM(Mem, UseOdomGravity,              bool, false,    uFormat("Use odometry instead of IMU orientation to add gravity links to new nodes created. We assume that odometry is already aligned with gravity (e.g., we are using a VIO approach). Gravity constraints are used by graph optimization only if \"%s\" is not zero.", kOptimizerGravitySigma().c_str()));
     RTABMAP_PARAM(Mem, CovOffDiagIgnored,           bool, true,     "Ignore off diagonal values of the covariance matrix.");
+    RTABMAP_PARAM(Mem, RotateImagesUpsideUp,        bool, false,    "Rotate images so that upside is up if they are not already. This can be useful in case the robots don't have all same camera orientation but are using the same map, so that not rotation-invariant visual features can still be used across the fleet.");
 
     // KeypointMemory (Keypoint-based)
     RTABMAP_PARAM(Kp, NNStrategy,               int, 1,       "kNNFlannNaive=0, kNNFlannKdTree=1, kNNFlannLSH=2, kNNBruteForce=3, kNNBruteForceGPU=4");
@@ -670,6 +671,7 @@ class RTABMAP_CORE_EXPORT Parameters
     RTABMAP_PARAM(Vis, PnPVarianceMedianRatio,   int,    4,     uFormat("[%s = 1] Ratio used to compute variance of the estimated transformation if 3D correspondences are provided (should be > 1). The higher it is, the smaller the covariance will be. With accurate depth estimation, this could be set to 2. For depth estimated by stereo, 4 or more maybe used to ignore large errors of very far points.", kVisEstimationType().c_str()));
     RTABMAP_PARAM(Vis, PnPMaxVariance,           float,  0.0,   uFormat("[%s = 1] Max linear variance between 3D point correspondences after PnP. 0 means disabled.", kVisEstimationType().c_str()));
     RTABMAP_PARAM(Vis, PnPSamplingPolicy, unsigned int,  1,     uFormat("[%s = 1] Multi-camera random sampling policy: 0=AUTO, 1=ANY, 2=HOMOGENEOUS. With HOMOGENEOUS policy, RANSAC will be done uniformly against all cameras, so at least 2 matches per camera are required. With ANY policy, RANSAC is not constraint to sample on all cameras at the same time. AUTO policy will use HOMOGENEOUS if there are at least 2 matches per camera, otherwise it will fallback to ANY policy.", kVisEstimationType().c_str()).c_str());
+    RTABMAP_PARAM(Vis, PnPSplitLinearCovComponents, bool,  false, uFormat("[%s = 1] Compute variance for each linear component instead of using the combined XYZ variance for all linear components.", kVisEstimationType().c_str()).c_str());
 
     RTABMAP_PARAM(Vis, EpipolarGeometryVar,      float,  0.1,   uFormat("[%s = 2] Epipolar geometry maximum variance to accept the transformation.", kVisEstimationType().c_str()));
     RTABMAP_PARAM(Vis, MinInliers,               int,    20,    "Minimum feature correspondences to compute/accept the transformation.");
