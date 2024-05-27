@@ -1,3 +1,26 @@
+## rtabmap (rolling) - 0.21.5-1
+
+The packages in the `rtabmap` repository were released into the `rolling` distro by running `/usr/bin/bloom-release rtabmap --rosdistro rolling --track rolling --new-track` on `Mon, 27 May 2024 18:45:25 -0000`
+
+The `rtabmap` package was released.
+
+Version of package(s) in repository `rtabmap`:
+
+- upstream repository: https://github.com/introlab/rtabmap.git
+- release repository: https://github.com/ros2-gbp/rtabmap-release.git
+- rosdistro version: `0.21.1-3`
+- old version: `0.21.1-3`
+- new version: `0.21.5-1`
+
+Versions of tools used:
+
+- bloom version: `0.12.0`
+- catkin_pkg version: `1.0.0`
+- rosdep version: `0.22.2`
+- rosdistro version: `0.9.0`
+- vcstools version: `0.1.42`
+
+
 ## rtabmap (jazzy) - 0.21.5-1
 
 The packages in the `rtabmap` repository were released into the `jazzy` distro by running `/usr/bin/bloom-release rtabmap --rosdistro jazzy --track jazzy --new-track` on `Mon, 27 May 2024 17:55:56 -0000`
