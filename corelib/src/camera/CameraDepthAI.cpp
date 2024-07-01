@@ -58,12 +58,15 @@ CameraDepthAI::CameraDepthAI(
 	confThreshold_(200),
 	lrcThreshold_(5),
 	resolution_(resolution),
+	extendedDisparity_(false),
+	subpixelFractionalBits_(0),
+	compandingWidth_(0),
 	useSpecTranslation_(false),
 	alphaScaling_(0.0),
 	imuPublished_(true),
 	publishInterIMU_(false),
-	dotProjectormA_(0.0),
-	floodLightmA_(200.0),
+	dotIntensity_(0.0),
+	floodIntensity_(0.0),
 	detectFeatures_(0),
 	useHarrisDetector_(false),
 	minDistance_(7.0),
@@ -107,11 +110,64 @@ void CameraDepthAI::setDepthProfile(int confThreshold, int lrcThreshold)
 #endif
 }
 
-void CameraDepthAI::setRectification(bool useSpecTranslation, float alphaScaling)
+void CameraDepthAI::setExtendedDisparity(bool extendedDisparity)
+{
+#ifdef RTABMAP_DEPTHAI
+	extendedDisparity_ = extendedDisparity;
+	if(extendedDisparity_)
+	{
+		if(subpixelFractionalBits_>0)
+		{
+			UWARN("Extended disparity has been enabled while subpixel being also enabled, disabling subpixel...");
+			subpixelFractionalBits_ = 0;
+		}
+		if(compandingWidth_>0)
+		{
+			UWARN("Extended disparity has been enabled while companding being also enabled, disabling companding...");
+			compandingWidth_ = 0;
+		}
+	}
+#else
+	UERROR("CameraDepthAI: RTAB-Map is not built with depthai-core support!");
+#endif
+}
+
+void CameraDepthAI::setSubpixelMode(bool enabled, int fractionalBits)
+{
+#ifdef RTABMAP_DEPTHAI
+	UASSERT(fractionalBits>=3 && fractionalBits<=5);
+	subpixelFractionalBits_ = enabled?fractionalBits:0;
+	if(subpixelFractionalBits_ != 0 && extendedDisparity_)
+	{
+		UWARN("Subpixel has been enabled while extended disparity being also enabled, disabling extended disparity...");
+		extendedDisparity_ = false;
+	}
+#else
+	UERROR("CameraDepthAI: RTAB-Map is not built with depthai-core support!");
+#endif
+}
+
+void CameraDepthAI::setCompanding(bool enabled, int width)
+{
+#ifdef RTABMAP_DEPTHAI
+	UASSERT(width == 64 || width == 96);
+	compandingWidth_ = enabled?width:0;
+	if(compandingWidth_ != 0 && extendedDisparity_)
+	{
+		UWARN("Companding has been enabled while extended disparity being also enabled, disabling extended disparity...");
+		extendedDisparity_ = false;
+	}
+#else
+	UERROR("CameraDepthAI: RTAB-Map is not built with depthai-core support!");
+#endif
+}
+
+void CameraDepthAI::setRectification(bool useSpecTranslation, float alphaScaling, bool enabled)
 {
 #ifdef RTABMAP_DEPTHAI
 	useSpecTranslation_ = useSpecTranslation;
 	alphaScaling_ = alphaScaling;
+	imagesRectified_ = enabled;
 #else
 	UERROR("CameraDepthAI: RTAB-Map is not built with depthai-core support!");
 #endif
@@ -127,11 +183,11 @@ void CameraDepthAI::setIMU(bool imuPublished, bool publishInterIMU)
 #endif
 }
 
-void CameraDepthAI::setIrBrightness(float dotProjectormA, float floodLightmA)
+void CameraDepthAI::setIrIntensity(float dotIntensity, float floodIntensity)
 {
 #ifdef RTABMAP_DEPTHAI
-	dotProjectormA_ = dotProjectormA;
-	floodLightmA_ = floodLightmA;
+	dotIntensity_ = dotIntensity;
+	floodIntensity_ = floodIntensity;
 #else
 	UERROR("CameraDepthAI: RTAB-Map is not built with depthai-core support!");
 #endif
@@ -219,11 +275,15 @@ bool CameraDepthAI::init(const std::string & calibrationFolder, const std::strin
 	dai::Pipeline p;
 	auto monoLeft  = p.create<dai::node::MonoCamera>();
 	auto monoRight = p.create<dai::node::MonoCamera>();
-	auto stereo    = p.create<dai::node::StereoDepth>();
+	std::shared_ptr<dai::node::StereoDepth> stereo;
+	if(imagesRectified_)
+		stereo = p.create<dai::node::StereoDepth>();
 	std::shared_ptr<dai::node::Camera> colorCam;
 	if(outputMode_==2)
 	{
 		colorCam = p.create<dai::node::Camera>();
+		if(!imagesRectified_)
+			colorCam->setMeshSource(dai::CameraProperties::WarpMeshSource::NONE);
 		if(detectFeatures_)
 		{
 			UWARN("On-device feature detectors cannot be enabled on color camera input!");
@@ -235,51 +295,45 @@ bool CameraDepthAI::init(const std::string & calibrationFolder, const std::strin
 		imu = p.create<dai::node::IMU>();
 	std::shared_ptr<dai::node::FeatureTracker> gfttDetector;
 	std::shared_ptr<dai::node::ImageManip> manip;
-	std::shared_ptr<dai::node::NeuralNetwork> superPointNetwork;
+	std::shared_ptr<dai::node::NeuralNetwork> neuralNetwork;
 	if(detectFeatures_ == 1)
 	{
 		gfttDetector = p.create<dai::node::FeatureTracker>();
 	}
-	else if(detectFeatures_ == 2)
+	else if(detectFeatures_ >= 2)
 	{
 		if(!blobPath_.empty())
 		{
 			manip = p.create<dai::node::ImageManip>();
-			superPointNetwork = p.create<dai::node::NeuralNetwork>();
+			neuralNetwork = p.create<dai::node::NeuralNetwork>();
 		}
 		else
 		{
-			UWARN("Missing SuperPoint blob file!");
+			UWARN("Missing MyriadX blob file!");
 			detectFeatures_ = 0;
 		}
 	}
 
-	auto xoutLeftOrColor = p.create<dai::node::XLinkOut>();
-	auto xoutDepthOrRight = p.create<dai::node::XLinkOut>();
+	auto sync = p.create<dai::node::Sync>();
+	auto xoutCamera = p.create<dai::node::XLinkOut>();
 	std::shared_ptr<dai::node::XLinkOut> xoutIMU;
 	if(imuPublished_)
 		xoutIMU = p.create<dai::node::XLinkOut>();
-	std::shared_ptr<dai::node::XLinkOut> xoutFeatures;
-	if(detectFeatures_)
-		xoutFeatures = p.create<dai::node::XLinkOut>();
 
 	// XLinkOut
-	xoutLeftOrColor->setStreamName(outputMode_<2?"rectified_left":"rectified_color");
-	xoutDepthOrRight->setStreamName(outputMode_?"depth":"rectified_right");
+	xoutCamera->setStreamName("camera");
 	if(imuPublished_)
 		xoutIMU->setStreamName("imu");
-	if(detectFeatures_)
-		xoutFeatures->setStreamName("features");
 
 	monoLeft->setResolution((dai::MonoCameraProperties::SensorResolution)resolution_);
 	monoRight->setResolution((dai::MonoCameraProperties::SensorResolution)resolution_);
 	monoLeft->setCamera("left");
 	monoRight->setCamera("right");
-	if(detectFeatures_ == 2)
+	if(detectFeatures_ >= 2)
 	{
 		if(this->getImageRate() <= 0 || this->getImageRate() > 15)
 		{
-			UWARN("On-device SuperPoint enabled, image rate is limited to 15 FPS!");
+			UWARN("On-device SuperPoint or HF-Net enabled, image rate is limited to 15 FPS!");
 			monoLeft->setFps(15);
 			monoRight->setFps(15);
 		}
@@ -291,30 +345,34 @@ bool CameraDepthAI::init(const std::string & calibrationFolder, const std::strin
 	}
 
 	// StereoDepth
-	if(outputMode_ == 2)
-		stereo->setDepthAlign(dai::CameraBoardSocket::CAM_A);
-	else
-		stereo->setDepthAlign(dai::StereoDepthProperties::DepthAlign::RECTIFIED_LEFT);
-	stereo->setExtendedDisparity(false);
-	stereo->setRectifyEdgeFillColor(0); // black, to better see the cutout
-	stereo->enableDistortionCorrection(true);
-	stereo->setDisparityToDepthUseSpecTranslation(useSpecTranslation_);
-	stereo->setDepthAlignmentUseSpecTranslation(useSpecTranslation_);
-	if(alphaScaling_ > -1.0f)
-		stereo->setAlphaScaling(alphaScaling_);
-	stereo->initialConfig.setConfidenceThreshold(confThreshold_);
-	stereo->initialConfig.setLeftRightCheck(true);
-	stereo->initialConfig.setLeftRightCheckThreshold(lrcThreshold_);
-	stereo->initialConfig.setMedianFilter(dai::MedianFilter::KERNEL_7x7);
-	auto config = stereo->initialConfig.get();
-	config.censusTransform.kernelSize = dai::StereoDepthConfig::CensusTransform::KernelSize::KERNEL_7x9;
-	config.censusTransform.kernelMask = 0X2AA00AA805540155;
-	config.postProcessing.brightnessFilter.maxBrightness = 255;
-	stereo->initialConfig.set(config);
+	if(stereo.get())
+	{
+		if(outputMode_ == 2)
+			stereo->setDepthAlign(dai::CameraBoardSocket::CAM_A);
+		else
+			stereo->setDepthAlign(dai::StereoDepthProperties::DepthAlign::RECTIFIED_LEFT);
+		stereo->setExtendedDisparity(extendedDisparity_);
+		stereo->setRectifyEdgeFillColor(0); // black, to better see the cutout
+		stereo->enableDistortionCorrection(true);
+		stereo->setDisparityToDepthUseSpecTranslation(useSpecTranslation_);
+		stereo->setDepthAlignmentUseSpecTranslation(useSpecTranslation_);
+		if(alphaScaling_ > -1.0f)
+			stereo->setAlphaScaling(alphaScaling_);
+		stereo->initialConfig.setConfidenceThreshold(confThreshold_);
+		stereo->initialConfig.setLeftRightCheck(lrcThreshold_>=0);
+		if(lrcThreshold_>=0)
+			stereo->initialConfig.setLeftRightCheckThreshold(lrcThreshold_);
+		stereo->initialConfig.setMedianFilter(dai::MedianFilter::KERNEL_7x7);
+		auto config = stereo->initialConfig.get();
+		config.censusTransform.kernelSize = dai::StereoDepthConfig::CensusTransform::KernelSize::KERNEL_7x9;
+		config.censusTransform.kernelMask = 0X2AA00AA805540155;
+		config.postProcessing.brightnessFilter.maxBrightness = 255;
+		stereo->initialConfig.set(config);
 
-	// Link plugins CAM -> STEREO -> XLINK
-	monoLeft->out.link(stereo->left);
-	monoRight->out.link(stereo->right);
+		// Link plugins CAM -> STEREO -> XLINK
+		monoLeft->out.link(stereo->left);
+		monoRight->out.link(stereo->right);
+	}
 
 	if(outputMode_ == 2)
 	{
@@ -325,6 +383,7 @@ bool CameraDepthAI::init(const std::string & calibrationFolder, const std::strin
 		if(alphaScaling_ > -1.0f)
 			colorCam->setCalibrationAlpha(alphaScaling_);
 	}
+	this->setImageRate(0);
 
 	// Using VideoEncoder on PoE devices, Subpixel is not supported
 	if(deviceToUse.protocol == X_LINK_TCP_IP || mxidOrName_.find(".") != std::string::npos)
@@ -335,52 +394,79 @@ bool CameraDepthAI::init(const std::string & calibrationFolder, const std::strin
 		depthOrRightEnc->setDefaultProfilePreset(monoRight->getFps(), dai::VideoEncoderProperties::Profile::MJPEG);
 		if(outputMode_ < 2)
 		{
-			stereo->rectifiedLeft.link(leftOrColorEnc->input);
+			if(imagesRectified_) {
+				stereo->rectifiedLeft.link(leftOrColorEnc->input);
+			}
+			else {
+				monoLeft->out.link(leftOrColorEnc->input);
+			}
+			leftOrColorEnc->bitstream.link(sync->inputs["left"]);
 		}
 		else
 		{
 			colorCam->video.link(leftOrColorEnc->input);
+			leftOrColorEnc->bitstream.link(sync->inputs["color"]);
 		}
-		if(outputMode_)
+		if(imagesRectified_ && outputMode_)
 		{
 			depthOrRightEnc->setQuality(100);
 			stereo->disparity.link(depthOrRightEnc->input);
+			depthOrRightEnc->bitstream.link(sync->inputs["depth"]);
 		}
 		else
 		{
-			stereo->rectifiedRight.link(depthOrRightEnc->input);
+			if(imagesRectified_) {
+				stereo->rectifiedRight.link(depthOrRightEnc->input);
+			}
+			else {
+				monoRight->out.link(depthOrRightEnc->input);
+			}
+			depthOrRightEnc->bitstream.link(sync->inputs["right"]);
 		}
-		leftOrColorEnc->bitstream.link(xoutLeftOrColor->input);
-		depthOrRightEnc->bitstream.link(xoutDepthOrRight->input);
 	}
 	else
 	{
-		stereo->setSubpixel(true);
-		stereo->setSubpixelFractionalBits(4);
-		config = stereo->initialConfig.get();
-		config.costMatching.disparityWidth = dai::StereoDepthConfig::CostMatching::DisparityWidth::DISPARITY_64;
-		config.costMatching.enableCompanding = true;
-		stereo->initialConfig.set(config);
+		if(stereo.get()) {
+			stereo->setSubpixel(subpixelFractionalBits_>=3 && subpixelFractionalBits_<=5);
+			if(subpixelFractionalBits_>=3 && subpixelFractionalBits_<=5)
+				stereo->setSubpixelFractionalBits(subpixelFractionalBits_);
+			auto config = stereo->initialConfig.get();
+			config.costMatching.enableCompanding = compandingWidth_>0;
+			if(compandingWidth_>0)
+				config.costMatching.disparityWidth = compandingWidth_==64?dai::StereoDepthConfig::CostMatching::DisparityWidth::DISPARITY_64:dai::StereoDepthConfig::CostMatching::DisparityWidth::DISPARITY_96;
+			stereo->initialConfig.set(config);
+		}
 		if(outputMode_ < 2)
 		{
-			stereo->rectifiedLeft.link(xoutLeftOrColor->input);
+			if(imagesRectified_)
+				stereo->rectifiedLeft.link(sync->inputs["left"]);
+			else
+				monoLeft->out.link(sync->inputs["left"]);
 		}
 		else
 		{
 			monoLeft->setResolution(dai::MonoCameraProperties::SensorResolution::THE_400_P);
 			monoRight->setResolution(dai::MonoCameraProperties::SensorResolution::THE_400_P);
-			colorCam->video.link(xoutLeftOrColor->input);
+			colorCam->video.link(sync->inputs["color"]);
 		}
-		if(outputMode_)
-			stereo->depth.link(xoutDepthOrRight->input);
-		else
-			stereo->rectifiedRight.link(xoutDepthOrRight->input);
+		if(imagesRectified_) {
+			if(outputMode_)
+				stereo->depth.link(sync->inputs["depth"]);
+			else
+				stereo->rectifiedRight.link(sync->inputs["right"]);
+		}
+		else {
+			monoRight->out.link(sync->inputs["right"]);
+		}
 	}
+
+	sync->setSyncThreshold(std::chrono::milliseconds(int(500 / monoLeft->getFps())));
+	sync->out.link(xoutCamera->input);
 
 	if(imuPublished_)
 	{
-		// enable ACCELEROMETER_RAW and GYROSCOPE_RAW at 100 hz rate
-		imu->enableIMUSensor({dai::IMUSensor::ACCELEROMETER_RAW, dai::IMUSensor::GYROSCOPE_RAW}, 100);
+		// enable ACCELEROMETER_RAW and GYROSCOPE_RAW at 200 hz rate
+		imu->enableIMUSensor({dai::IMUSensor::ACCELEROMETER_RAW, dai::IMUSensor::GYROSCOPE_RAW}, 200);
 		// above this threshold packets will be sent in batch of X, if the host is not blocked and USB bandwidth is available
 		imu->setBatchReportThreshold(1);
 		// maximum number of IMU packets in a batch, if it's reached device will block sending until host can receive it
@@ -402,27 +488,129 @@ bool CameraDepthAI::init(const std::string & calibrationFolder, const std::strin
 		auto cfg = gfttDetector->initialConfig.get();
 		cfg.featureMaintainer.minimumDistanceBetweenFeatures = minDistance_ * minDistance_;
 		gfttDetector->initialConfig.set(cfg);
-		stereo->rectifiedLeft.link(gfttDetector->inputImage);
-		gfttDetector->outputFeatures.link(xoutFeatures->input);
+		if(stereo.get())
+			stereo->rectifiedLeft.link(gfttDetector->inputImage);
+		else
+			monoLeft->out.link(gfttDetector->inputImage);
+		gfttDetector->outputFeatures.link(sync->inputs["feat"]);
 	}
-	else if(detectFeatures_ == 2)
+	else if(detectFeatures_ >= 2)
 	{
 		manip->setKeepAspectRatio(false);
 		manip->setMaxOutputFrameSize(320 * 200);
 		manip->initialConfig.setResize(320, 200);
-		superPointNetwork->setBlobPath(blobPath_);
-		superPointNetwork->setNumInferenceThreads(2);
-		superPointNetwork->setNumNCEPerInferenceThread(1);
-		superPointNetwork->input.setBlocking(false);
-		stereo->rectifiedLeft.link(manip->inputImage);
-		manip->out.link(superPointNetwork->input);
-		superPointNetwork->out.link(xoutFeatures->input);
+		neuralNetwork->setBlobPath(blobPath_);
+		neuralNetwork->setNumInferenceThreads(2);
+		neuralNetwork->setNumNCEPerInferenceThread(1);
+		neuralNetwork->input.setBlocking(false);
+		if(stereo.get())
+			stereo->rectifiedLeft.link(manip->inputImage);
+		else
+			monoLeft->out.link(manip->inputImage);
+		manip->out.link(neuralNetwork->input);
+		neuralNetwork->out.link(sync->inputs["feat"]);
 	}
 
 	device_.reset(new dai::Device(p, deviceToUse));
 
+	UINFO("Device serial: %s", device_->getMxId().c_str());
+	UINFO("Available camera sensors: ");
+	for(auto& sensor : device_->getCameraSensorNames()) {
+		UINFO("Socket: CAM_%c - %s", 'A'+(unsigned char)sensor.first, sensor.second.c_str());
+	}
+
 	UINFO("Loading eeprom calibration data");
 	dai::CalibrationHandler calibHandler = device_->readCalibration();
+
+	if(!calibrationFolder.empty() && !cameraName.empty() && imagesRectified_)
+	{
+		UINFO("Flashing camera...");
+		if(outputMode_ == 2)
+		{
+			stereoModel_.setName(cameraName, "rgb", "depth");
+		}
+		if(stereoModel_.load(calibrationFolder, cameraName, false))
+		{
+			std::vector<std::vector<float> > intrinsicsLeft(3);
+			std::vector<std::vector<float> > intrinsicsRight(3);
+			for(int row = 0; row<3; ++row)
+			{
+				intrinsicsLeft[row].resize(3);
+				intrinsicsRight[row].resize(3);
+				for(int col = 0; col<3; ++col)
+				{
+					intrinsicsLeft[row][col] = stereoModel_.left().K_raw().at<double>(row,col);
+					intrinsicsRight[row][col] = stereoModel_.right().K_raw().at<double>(row,col);
+				}
+			}
+
+			std::vector<float> distortionsLeft = stereoModel_.left().D_raw();
+			std::vector<float> distortionsRight = stereoModel_.right().D_raw();
+			std::vector<std::vector<float> > rotationMatrix(3);
+			for(int row = 0; row<3; ++row)
+			{
+				rotationMatrix[row].resize(3);
+				for(int col = 0; col<3; ++col)
+				{
+					rotationMatrix[row][col] = stereoModel_.stereoTransform()(row,col);
+				}
+			}
+
+			std::vector<float> translation(3);
+			translation[0] = stereoModel_.stereoTransform().x()*100.0f;
+			translation[1] = stereoModel_.stereoTransform().y()*100.0f;
+			translation[2] = stereoModel_.stereoTransform().z()*100.0f;
+
+			if(outputMode_ == 2)
+			{
+				// Only set RGB intrinsics
+				calibHandler.setCameraIntrinsics(dai::CameraBoardSocket::CAM_A, intrinsicsLeft, stereoModel_.left().imageWidth(), stereoModel_.left().imageHeight());
+				calibHandler.setDistortionCoefficients(dai::CameraBoardSocket::CAM_A, distortionsLeft);
+				std::vector<float> specTranslation = calibHandler.getCameraTranslationVector(dai::CameraBoardSocket::CAM_A, dai::CameraBoardSocket::CAM_C, true);
+				calibHandler.setCameraExtrinsics(dai::CameraBoardSocket::CAM_A, dai::CameraBoardSocket::CAM_C, rotationMatrix, translation, specTranslation);
+			}
+			else
+			{
+				calibHandler.setCameraIntrinsics(dai::CameraBoardSocket::CAM_B, intrinsicsLeft, stereoModel_.left().imageWidth(), stereoModel_.left().imageHeight());
+				calibHandler.setDistortionCoefficients(dai::CameraBoardSocket::CAM_B, distortionsLeft);
+				calibHandler.setCameraIntrinsics(dai::CameraBoardSocket::CAM_C, intrinsicsRight, stereoModel_.right().imageWidth(), stereoModel_.right().imageHeight());
+				calibHandler.setDistortionCoefficients(dai::CameraBoardSocket::CAM_C, distortionsRight);
+				std::vector<float> specTranslation = calibHandler.getCameraTranslationVector(dai::CameraBoardSocket::CAM_B, dai::CameraBoardSocket::CAM_C, true);
+				calibHandler.setCameraExtrinsics(dai::CameraBoardSocket::CAM_B, dai::CameraBoardSocket::CAM_C, rotationMatrix, translation, specTranslation);
+			}
+
+			try {
+				UINFO("Flashing camera with calibration from %s with camera name %s", calibrationFolder.c_str(), cameraName.c_str());
+				if(ULogger::level() <= ULogger::kInfo)
+				{
+					std::cout << "K left: " << stereoModel_.left().K_raw() << std::endl;
+					std::cout << "K right: " << stereoModel_.right().K_raw() << std::endl;
+					std::cout << "D left: " << stereoModel_.left().D_raw() << std::endl;
+					std::cout << "D right: " << stereoModel_.right().D_raw() << std::endl;
+					std::cout << "Extrinsics: " << stereoModel_.stereoTransform() << std::endl;
+					std::cout << "Expected K with rectification_alpha=0: " << stereoModel_.left().K()*(double(targetSize_.width)/double(stereoModel_.left().imageWidth())) << std::endl;
+				}
+				device_->flashCalibration2(calibHandler);
+				UINFO("Closing device...");
+				device_->close();
+				UINFO("Restarting pipeline...");
+				device_.reset(new dai::Device(p, deviceToUse));
+			}
+			catch(const std::runtime_error & e) {
+				UERROR("Failed flashing calibration: %s", e.what());
+			}
+		}
+		else
+		{
+			UERROR("Failed loading calibration from %s with camera name %s", calibrationFolder.c_str(), cameraName.c_str());
+		}
+
+		//Reload calibration
+		calibHandler = device_->readCalibration();
+	}
+
+	auto eeprom = calibHandler.getEepromData();
+	UINFO("Product name: %s, board name: %s", eeprom.productName.c_str(), eeprom.boardName.c_str());
 
 	auto cameraId = outputMode_<2?dai::CameraBoardSocket::CAM_B:dai::CameraBoardSocket::CAM_A;
 	cv::Mat cameraMatrix, distCoeffs, newCameraMatrix;
@@ -446,12 +634,15 @@ bool CameraDepthAI::init(const std::string & calibrationFolder, const std::strin
 	double fy = newCameraMatrix.at<double>(1, 1);
 	double cx = newCameraMatrix.at<double>(0, 2);
 	double cy = newCameraMatrix.at<double>(1, 2);
-	double baseline = calibHandler.getBaselineDistance(dai::CameraBoardSocket::CAM_C, dai::CameraBoardSocket::CAM_B, useSpecTranslation_)/100.0;
-	UINFO("fx=%f fy=%f cx=%f cy=%f baseline=%f", fx, fy, cx, cy, baseline);
-	if(outputMode_ == 2)
-		stereoModel_ = StereoCameraModel(device_->getDeviceName(), fx, fy, cx, cy, baseline, this->getLocalTransform(), targetSize_);
-	else
-		stereoModel_ = StereoCameraModel(device_->getDeviceName(), fx, fy, cx, cy, baseline, this->getLocalTransform()*Transform(-calibHandler.getBaselineDistance(dai::CameraBoardSocket::CAM_A)/100.0, 0, 0), targetSize_);
+	UINFO("fx=%f fy=%f cx=%f cy=%f (target size = %dx%d)", fx, fy, cx, cy, targetSize_.width, targetSize_.height);
+	if(outputMode_ == 2) {
+		stereoModel_ = StereoCameraModel(device_->getDeviceName(), fx, fy, cx, cy, 0, this->getLocalTransform(), targetSize_);
+	}
+	else {
+		double baseline = calibHandler.getBaselineDistance(dai::CameraBoardSocket::CAM_C, dai::CameraBoardSocket::CAM_B, false)/100.0;
+		UINFO("baseline=%f", baseline);
+		stereoModel_ = StereoCameraModel(device_->getDeviceName(), fx, fy, cx, cy, outputMode_==0?baseline:0, this->getLocalTransform()*Transform(-calibHandler.getBaselineDistance(dai::CameraBoardSocket::CAM_A)/100.0, 0, 0), targetSize_);
+	}
 
 	if(imuPublished_)
 	{
@@ -462,7 +653,6 @@ bool CameraDepthAI::init(const std::string & calibrationFolder, const std::strin
 		//		matrix[0][0], matrix[0][1], matrix[0][2], matrix[0][3],
 		//		matrix[1][0], matrix[1][1], matrix[1][2], matrix[1][3],
 		//		matrix[2][0], matrix[2][1], matrix[2][2], matrix[2][3]);
-		auto eeprom = calibHandler.getEepromData();
 		if(eeprom.boardName == "OAK-D" ||
 		   eeprom.boardName == "BW1098OBC")
 		{
@@ -503,6 +693,7 @@ bool CameraDepthAI::init(const std::string & calibrationFolder, const std::strin
 		UINFO("IMU disabled");
 	}
 
+	cameraQueue_ = device_->getOutputQueue("camera", 8, false);
 	if(imuPublished_)
 	{
 		imuLocalTransform_ = this->getLocalTransform() * imuLocalTransform_;
@@ -534,16 +725,16 @@ bool CameraDepthAI::init(const std::string & calibrationFolder, const std::strin
 			}
 		});
 	}
-	leftOrColorQueue_ = device_->getOutputQueue(outputMode_<2?"rectified_left":"rectified_color", 8, false);
-	rightOrDepthQueue_ = device_->getOutputQueue(outputMode_?"depth":"rectified_right", 8, false);
-	if(detectFeatures_)
-		featuresQueue_ = device_->getOutputQueue("features", 8, false);
 
-	std::vector<std::tuple<std::string, int, int>> irDrivers = device_->getIrDrivers();
-	if(!irDrivers.empty())
+	if(!device_->getIrDrivers().empty())
 	{
-		device_->setIrLaserDotProjectorBrightness(dotProjectormA_);
-		device_->setIrFloodLightBrightness(floodLightmA_);
+		UINFO("Setting IR intensity");
+		device_->setIrLaserDotProjectorIntensity(dotIntensity_);
+		device_->setIrFloodLightIntensity(floodIntensity_);
+	}
+	else if(dotIntensity_ > 0 || floodIntensity_ > 0)
+	{
+		UWARN("No IR drivers were detected! IR intensity cannot be set.");
 	}
 
 	uSleep(2000); // avoid bad frames on start
@@ -558,7 +749,7 @@ bool CameraDepthAI::init(const std::string & calibrationFolder, const std::strin
 bool CameraDepthAI::isCalibrated() const
 {
 #ifdef RTABMAP_DEPTHAI
-	return stereoModel_.isValidForProjection();
+	return outputMode_ == 0?stereoModel_.isValidForProjection():stereoModel_.left().isValidForProjection();
 #else
 	return false;
 #endif
@@ -572,26 +763,21 @@ std::string CameraDepthAI::getSerial() const
 	return "";
 }
 
-SensorData CameraDepthAI::captureImage(CameraInfo * info)
+SensorData CameraDepthAI::captureImage(SensorCaptureInfo * info)
 {
 	SensorData data;
 #ifdef RTABMAP_DEPTHAI
 
+	auto messageGroup = cameraQueue_->get<dai::MessageGroup>();
+	auto rectifLeftOrColor = messageGroup->get<dai::ImgFrame>(outputMode_<2?"left":"color");
+	auto rectifRightOrDepth = messageGroup->get<dai::ImgFrame>(imagesRectified_ && outputMode_?"depth":"right");
+
 	cv::Mat leftOrColor, depthOrRight;
-	auto rectifLeftOrColor = leftOrColorQueue_->get<dai::ImgFrame>();
-	auto rectifRightOrDepth = rightOrDepthQueue_->get<dai::ImgFrame>();
-
-	while(rectifLeftOrColor->getSequenceNum() < rectifRightOrDepth->getSequenceNum())
-		rectifLeftOrColor = leftOrColorQueue_->get<dai::ImgFrame>();
-	while(rectifLeftOrColor->getSequenceNum() > rectifRightOrDepth->getSequenceNum())
-		rectifRightOrDepth = rightOrDepthQueue_->get<dai::ImgFrame>();
-
-	double stamp = std::chrono::duration<double>(rectifLeftOrColor->getTimestampDevice(dai::CameraExposureOffset::MIDDLE).time_since_epoch()).count();
 	if(device_->getDeviceInfo().protocol == X_LINK_TCP_IP || mxidOrName_.find(".") != std::string::npos)
 	{
 		leftOrColor = cv::imdecode(rectifLeftOrColor->getData(), cv::IMREAD_ANYCOLOR);
 		depthOrRight = cv::imdecode(rectifRightOrDepth->getData(), cv::IMREAD_GRAYSCALE);
-		if(outputMode_)
+		if(imagesRectified_ && outputMode_)
 		{
 			cv::Mat disp;
 			depthOrRight.convertTo(disp, CV_16UC1);
@@ -604,7 +790,8 @@ SensorData CameraDepthAI::captureImage(CameraInfo * info)
 		depthOrRight = rectifRightOrDepth->getCvFrame();
 	}
 
-	if(outputMode_)
+	double stamp = std::chrono::duration<double>(rectifLeftOrColor->getTimestampDevice(dai::CameraExposureOffset::MIDDLE).time_since_epoch()).count();
+	if(imagesRectified_ && outputMode_)
 		data = SensorData(leftOrColor, depthOrRight, stereoModel_.left(), this->getNextSeqID(), stamp);
 	else
 		data = SensorData(leftOrColor, depthOrRight, stereoModel_, this->getNextSeqID(), stamp);
@@ -660,28 +847,30 @@ SensorData CameraDepthAI::captureImage(CameraInfo * info)
 
 	if(detectFeatures_ == 1)
 	{
-		auto features = featuresQueue_->get<dai::TrackedFeatures>();
-		while(features->getSequenceNum() < rectifLeftOrColor->getSequenceNum())
-			features = featuresQueue_->get<dai::TrackedFeatures>();
-		auto detectedFeatures = features->trackedFeatures;
-
+		auto features = messageGroup->get<dai::TrackedFeatures>("feat")->trackedFeatures;
 		std::vector<cv::KeyPoint> keypoints;
-		for(auto& feature : detectedFeatures)
+		for(auto& feature : features)
 			keypoints.emplace_back(cv::KeyPoint(feature.position.x, feature.position.y, 3));
 		data.setFeatures(keypoints, std::vector<cv::Point3f>(), cv::Mat());
 	}
-	else if(detectFeatures_ == 2)
+	else if(detectFeatures_ >= 2)
 	{
-		auto features = featuresQueue_->get<dai::NNData>();
-		while(features->getSequenceNum() < rectifLeftOrColor->getSequenceNum())
-			features = featuresQueue_->get<dai::NNData>();
+		auto features = messageGroup->get<dai::NNData>("feat");
+		std::vector<float> scores_dense, local_descriptor_map, global_descriptor;
+		if(detectFeatures_ == 2)
+		{
+			scores_dense = features->getLayerFp16("heatmap");
+			local_descriptor_map = features->getLayerFp16("desc");
+		}
+		else if(detectFeatures_ == 3)
+		{
+			scores_dense = features->getLayerFp16("pred/local_head/detector/Squeeze");
+			local_descriptor_map = features->getLayerFp16("pred/local_head/descriptor/transpose");
+			global_descriptor = features->getLayerFp16("pred/global_head/l2_normalize_1");
+		}
 
-		auto heatmap = features->getLayerFp16("heatmap");
-		auto desc = features->getLayerFp16("desc");
-
-		cv::Mat scores(200, 320, CV_32FC1, heatmap.data());
-		cv::resize(scores, scores, targetSize_, 0, 0, cv::INTER_CUBIC);
-
+		cv::Mat scores(200, 320, CV_32FC1, scores_dense.data());
+		cv::resize(scores, scores, targetSize_, 0, 0, cv::INTER_CUBIC);	
 		if(nms_)
 		{
 			cv::Mat dilated_scores(targetSize_, CV_32FC1);
@@ -714,10 +903,11 @@ SensorData CameraDepthAI::captureImage(CameraInfo * info)
 			keypoints.emplace_back(cv::KeyPoint(kpt, 8, -1, response));
 		}
 
-		cv::Mat coarse_desc(25, 40, CV_32FC(256), desc.data());
-		coarse_desc.forEach<cv::Vec<float, 256>>([&](cv::Vec<float, 256>& descriptor, const int position[]) -> void {
-			cv::normalize(descriptor, descriptor);
-		});
+		cv::Mat coarse_desc(25, 40, CV_32FC(256), local_descriptor_map.data());
+		if(detectFeatures_ == 2)
+			coarse_desc.forEach<cv::Vec<float, 256>>([&](cv::Vec<float, 256>& descriptor, const int position[]) -> void {
+				cv::normalize(descriptor, descriptor);
+			});
 		cv::Mat mapX(keypoints.size(), 1, CV_32FC1);
 		cv::Mat mapY(keypoints.size(), 1, CV_32FC1);
 		for(size_t i=0; i<keypoints.size(); ++i)
@@ -734,6 +924,8 @@ SensorData CameraDepthAI::captureImage(CameraInfo * info)
 		descriptors = descriptors.reshape(1);
 
 		data.setFeatures(keypoints, std::vector<cv::Point3f>(), descriptors);
+		if(detectFeatures_ == 3)
+			data.addGlobalDescriptor(GlobalDescriptor(1, cv::Mat(1, global_descriptor.size(), CV_32FC1, global_descriptor.data()).clone()));
 	}
 
 #else
