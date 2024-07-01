@@ -422,6 +422,11 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	{
 		_ui->comboBox_cameraStereo->setItemData(kSrcStereoDepthAI - kSrcStereo, 0, Qt::UserRole - 1);
 	}
+	if (!CameraSeerSense::available())
+	{
+		_ui->comboBox_cameraRGBD->setItemData(kSrcSeerSense - kSrcRGBD, 0, Qt::UserRole - 1);
+		_ui->comboBox_odom_sensor->setItemData(3, 0, Qt::UserRole - 1);
+	}
 	_ui->openni2_exposure->setEnabled(CameraOpenNI2::exposureGainAvailable());
 	_ui->openni2_gain->setEnabled(CameraOpenNI2::exposureGainAvailable());
 
@@ -1005,6 +1010,7 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 
 	// Create hypotheses
 	_ui->general_doubleSpinBox_hardThr->setObjectName(Parameters::kRtabmapLoopThr().c_str());
+	_ui->general_doubleSpinBox_agressiveThr->setObjectName(Parameters::kRGBDAggressiveLoopThr().c_str());
 	_ui->general_doubleSpinBox_loopRatio->setObjectName(Parameters::kRtabmapLoopRatio().c_str());
 	_ui->comboBox_virtualPlaceLikelihoodRatio->setObjectName(Parameters::kRtabmapVirtualPlaceLikelihoodRatio().c_str());
 	_ui->comboBox_globalDescriptorExtractor->setObjectName(Parameters::kMemGlobalDescriptorStrategy().c_str());
@@ -5187,7 +5193,14 @@ void PreferencesDialog::makeObsoleteLoggingPanel()
 
 void PreferencesDialog::makeObsoleteSourcePanel()
 {
+	ULOGGER_DEBUG("");
 	_obsoletePanels = _obsoletePanels | kPanelSource;
+}
+
+void PreferencesDialog::makeObsoleteCalibrationPanel()
+{
+	ULOGGER_DEBUG("");
+	_obsoletePanels = _obsoletePanels | kPanelCalibration;
 }
 
 QList<QGroupBox*> PreferencesDialog::getGroupBoxes()
@@ -5620,7 +5633,8 @@ void PreferencesDialog::updateSourceGrpVisibility()
 			 _ui->comboBox_cameraRGBD->currentIndex() == kSrcRealSense - kSrcRGBD ||
 			 _ui->comboBox_cameraRGBD->currentIndex() == kSrcRGBDImages-kSrcRGBD ||
 			 _ui->comboBox_cameraRGBD->currentIndex() == kSrcOpenNI_PCL-kSrcRGBD ||
-			 _ui->comboBox_cameraRGBD->currentIndex() == kSrcRealSense2-kSrcRGBD));
+			 _ui->comboBox_cameraRGBD->currentIndex() == kSrcRealSense2-kSrcRGBD ||
+			 _ui->comboBox_cameraRGBD->currentIndex() == kSrcSeerSense-kSrcRGBD));
 	_ui->groupBox_openni2->setVisible(_ui->comboBox_sourceType->currentIndex() == 0 && _ui->comboBox_cameraRGBD->currentIndex() == kSrcOpenNI2-kSrcRGBD);
 	_ui->groupBox_freenect2->setVisible(_ui->comboBox_sourceType->currentIndex() == 0 && _ui->comboBox_cameraRGBD->currentIndex() == kSrcFreenect2-kSrcRGBD);
 	_ui->groupBox_k4w2->setVisible(_ui->comboBox_sourceType->currentIndex() == 0 && _ui->comboBox_cameraRGBD->currentIndex() == kSrcK4W2 - kSrcRGBD);
@@ -5695,6 +5709,7 @@ void PreferencesDialog::updateSourceGrpVisibility()
 			(_ui->comboBox_sourceType->currentIndex() == 0 && _ui->comboBox_cameraRGBD->currentIndex() == kSrcFreenect - kSrcRGBD) || //Kinect360
 			(_ui->comboBox_sourceType->currentIndex() == 0 && _ui->comboBox_cameraRGBD->currentIndex() == kSrcK4A - kSrcRGBD) || //K4A
 			(_ui->comboBox_sourceType->currentIndex() == 0 && _ui->comboBox_cameraRGBD->currentIndex() == kSrcRealSense2 - kSrcRGBD) || //D435i
+			(_ui->comboBox_sourceType->currentIndex() == 0 && _ui->comboBox_cameraRGBD->currentIndex() == kSrcSeerSense - kSrcRGBD) ||
 			(_ui->comboBox_sourceType->currentIndex() == 1 && _ui->comboBox_cameraStereo->currentIndex() == kSrcStereoRealSense2 - kSrcStereo) || //T265
 			(_ui->comboBox_sourceType->currentIndex() == 1 && _ui->comboBox_cameraStereo->currentIndex() == kSrcStereoZed - kSrcStereo) || // ZEDm, ZED2
 			(_ui->comboBox_sourceType->currentIndex() == 1 && _ui->comboBox_cameraStereo->currentIndex() == kSrcStereoMyntEye - kSrcStereo) || // MYNT EYE S
@@ -6234,6 +6249,11 @@ PreferencesDialog::Src PreferencesDialog::getOdomSourceDriver() const
 		//Zed SDK
 		return kSrcStereoZed;
 	}
+	else if(_ui->comboBox_odom_sensor->currentIndex() == 3)
+	{
+		//XVisio SDK
+		return kSrcSeerSense;
+	}
 	else if(_ui->comboBox_odom_sensor->currentIndex() != 0)
 	{
 		UERROR("Not implemented!");
@@ -6402,7 +6422,7 @@ Camera * PreferencesDialog::createCamera(
 		bool odomOnly,
 		bool odomSensorExtrinsicsCalib)
 {
-	if(odomOnly && !(driver == kSrcStereoRealSense2 || driver == kSrcStereoZed))
+	if(odomOnly && !(driver == kSrcStereoRealSense2 || driver == kSrcStereoZed || driver == kSrcSeerSense))
 	{
 		QMessageBox::warning(this, tr("Odometry Sensor"),
 				tr("Driver %1 cannot support odometry only mode.").arg(driver), QMessageBox::Ok);
@@ -6783,7 +6803,7 @@ Camera * PreferencesDialog::createCamera(
 		((CameraDepthAI*)camera)->setExtendedDisparity(_ui->checkBox_depthai_extended_disparity->isChecked());
 		((CameraDepthAI*)camera)->setSubpixelMode(_ui->comboBox_depthai_subpixel_fractional_bits->currentIndex()!=0, _ui->comboBox_depthai_subpixel_fractional_bits->currentIndex()==2?4:_ui->comboBox_depthai_subpixel_fractional_bits->currentIndex()==3?5:3);
 		((CameraDepthAI*)camera)->setCompanding(_ui->comboBox_depthai_disparity_companding->currentIndex()!=0, _ui->comboBox_depthai_disparity_companding->currentIndex()==1?64:96);
-		((CameraDepthAI*)camera)->setRectification(_ui->checkBox_depthai_use_spec_translation->isChecked(), _ui->doubleSpinBox_depthai_alpha_scaling->value());
+		((CameraDepthAI*)camera)->setRectification(_ui->checkBox_depthai_use_spec_translation->isChecked(), _ui->doubleSpinBox_depthai_alpha_scaling->value(), !useRawImages);
 		((CameraDepthAI*)camera)->setIMU(_ui->checkBox_depthai_imu_published->isChecked(), _ui->checkbox_publishInterIMU->isChecked());
 		((CameraDepthAI*)camera)->setIrIntensity(_ui->doubleSpinBox_depthai_dot_intensity->value(), _ui->doubleSpinBox_depthai_flood_intensity->value());
 		((CameraDepthAI*)camera)->setDetectFeatures(_ui->comboBox_depthai_detect_features->currentIndex());
@@ -6796,6 +6816,18 @@ Camera * PreferencesDialog::createCamera(
 		{
 			((CameraDepthAI*)camera)->setSuperPointDetector(_ui->doubleSpinBox_sptorch_threshold->value(), _ui->checkBox_sptorch_nms->isChecked(), _ui->spinBox_sptorch_minDistance->value());
 		}
+	}
+	else if (driver == kSrcSeerSense)
+	{
+		UDEBUG("SeerSense");
+		camera = new CameraSeerSense(
+			getOdomSourceDriver() == kSrcSeerSense || odomOnly,
+			this->getGeneralInputRate(),
+			this->getSourceLocalTransform());
+		camera->setInterIMUPublishing(
+			_ui->checkbox_publishInterIMU->isChecked(),
+			_ui->checkbox_publishInterIMU->isChecked() && getIMUFilteringStrategy()>0?
+					IMUFilter::create((IMUFilter::Type)(getIMUFilteringStrategy()-1), this->getAllParameters()):0);
 	}
 	else if(driver == kSrcUsbDevice)
 	{
@@ -7537,11 +7569,14 @@ void PreferencesDialog::calibrate()
 		}
 
 		bool freenect2 = driver == kSrcFreenect2;
-		bool fisheye = driver == kSrcStereoRealSense2;
-		_calibrationDialog->setStereoMode(this->getSourceType() != kSrcRGB && driver != kSrcRealSense, freenect2?"rgb":"left", freenect2?"depth":"right"); // RGB+Depth or left+right
+		bool rgbDepth = freenect2 || (driver==kSrcStereoDepthAI && _ui->comboBox_depthai_output_mode->currentIndex() == 2);
+		_calibrationDialog->setStereoMode(this->getSourceType() != kSrcRGB && driver != kSrcRealSense, rgbDepth?"rgb":"left", rgbDepth?"depth":"right"); // RGB+Depth or left+right
 		_calibrationDialog->setCameraName("");
 		_calibrationDialog->setSwitchedImages(freenect2);
-		_calibrationDialog->setFisheyeImages(fisheye);
+		if(driver == kSrcStereoRealSense2)
+			_calibrationDialog->setFisheyeModel();
+		if(driver == kSrcStereoDepthAI)
+			_calibrationDialog->setRationalModel();
 		_calibrationDialog->setSavingDirectory(this->getCameraInfoDir());
 		_calibrationDialog->registerToEventsManager();
 
@@ -7555,6 +7590,7 @@ void PreferencesDialog::calibrate()
 
 		cameraThread.join(true);
 	}
+	makeObsoleteCalibrationPanel();
 }
 
 void PreferencesDialog::calibrateSimple()
