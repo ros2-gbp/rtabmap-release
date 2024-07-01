@@ -50,6 +50,7 @@ class Ui_DatabaseViewer;
 class QGraphicsScene;
 class QGraphicsView;
 class QLabel;
+class QToolButton;
 class QDialog;
 
 namespace rtabmap
@@ -71,7 +72,7 @@ class RTABMAP_GUI_EXPORT DatabaseViewer : public QMainWindow
 public:
 	DatabaseViewer(const QString & ini = QString(), QWidget * parent = 0);
 	virtual ~DatabaseViewer();
-	bool openDatabase(const QString & path);
+	bool openDatabase(const QString & path, const ParametersMap & overridenParameters = ParametersMap());
 	bool isSavedMaximized() const {return savedMaximized_;}
 	void showCloseButton(bool visible = true);
 
@@ -128,6 +129,8 @@ private Q_SLOTS:
 	void updateAllLandmarkCovariances();
 	void refineLinks();
 	void resetAllChanges();
+	void graphNodeSelected(int);
+	void graphLinkSelected(int, int);
 	void sliderAValueChanged(int);
 	void sliderBValueChanged(int);
 	void sliderAMoved(int);
@@ -174,6 +177,8 @@ private:
 				QLabel * labelScan,
 				QLabel * labelGravity,
 				QLabel * labelPrior,
+				QToolButton * editPriorButton,
+				QToolButton * removePriorButton,
 				QLabel * labelGps,
 				QLabel * labelGt,
 				QLabel * labelSensors,
