@@ -13,8 +13,10 @@ SET(SRC_FILES
     
     Recovery.cpp
     
+    SensorCapture.cpp
+    SensorCaptureThread.cpp
+    
     Camera.cpp
-    CameraThread.cpp
     CameraModel.cpp
     
     camera/CameraFreenect.cpp
@@ -38,6 +40,7 @@ SET(SRC_FILES
     camera/CameraVideo.cpp
     camera/CameraMyntEye.cpp
     camera/CameraDepthAI.cpp
+	camera/CameraSeerSense.cpp
     
     EpipolarGeometry.cpp
     VisualWord.cpp
@@ -115,6 +118,8 @@ SET(SRC_FILES
     
     MarkerDetector.cpp
     
+    GlobalDescriptorExtractor.cpp
+    
     GainCompensator.cpp
 
     rtflann/ext/lz4.c
@@ -131,6 +136,13 @@ SET(SRC_FILES
     opencv/solvepnp.cpp
     opencv/five-point.cpp
 )
+
+IF(PCL_VERSION VERSION_GREATER_EQUAL "1.8")
+SET(SRC_FILES
+    ${SRC_FILES}
+    lidar/LidarVLP16.cpp
+)
+ENDIF(PCL_VERSION VERSION_GREATER_EQUAL "1.8")
 
 IF(OpenCV_VERSION_MAJOR EQUAL 2)
 SET(SRC_FILES
@@ -173,14 +185,14 @@ SET(PUBLIC_LIBRARIES
 	${PCL_LIBRARIES}
 )
 
-IF(Sqlite3_FOUND)
+IF(SQLite3_FOUND)
     SET(INCLUDE_DIRS
 		${INCLUDE_DIRS}
-		${Sqlite3_INCLUDE_DIRS}
+		${SQLite3_INCLUDE_DIRS}
 	)
 	SET(LIBRARIES
 		${LIBRARIES}
-		${Sqlite3_LIBRARIES}
+		${SQLite3_LIBRARIES}
 	)
 ELSE()
 	SET(SRC_FILES
@@ -224,6 +236,7 @@ IF(WITH_PYTHON AND Python3_FOUND)
 		python/PythonInterface.cpp
 		python/PyMatcher.cpp
 		python/PyDetector.cpp
+		python/PyDescriptor.cpp
 	)
 	 SET(INCLUDE_DIRS
 	    ${TORCH_INCLUDE_DIRS}
@@ -370,6 +383,13 @@ IF(depthai_FOUND)
 		depthai::opencv
 	)
 ENDIF(depthai_FOUND)
+
+IF(xvsdk_FOUND)
+	SET(PUBLIC_LIBRARIES
+		${PUBLIC_LIBRARIES}
+		${xvsdk_LIBRARIES}
+	)
+ENDIF(xvsdk_FOUND)
 
 IF(TARGET OpenMP::OpenMP_CXX)
 	SET(LIBRARIES

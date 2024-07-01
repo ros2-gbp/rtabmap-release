@@ -59,6 +59,7 @@ class RegistrationVis;
 class Stereo;
 class LocalGridMaker;
 class MarkerDetector;
+class GlobalDescriptorExtractor;
 
 class RTABMAP_CORE_EXPORT Memory
 {
@@ -333,6 +334,7 @@ private:
 	bool _rotateImagesUpsideUp;
 	bool _createOccupancyGrid;
 	int _visMaxFeatures;
+	bool _visSSC;
 	bool _imagesAlreadyRectified;
 	bool _rectifyOnlyFeatures;
 	bool _covOffDiagonalIgnored;
@@ -375,6 +377,8 @@ private:
 	LocalGridMaker * _localMapMaker;
 
 	MarkerDetector * _markerDetector;
+
+	GlobalDescriptorExtractor * _globalDescriptorExtractor;
 };
 
 } // namespace rtabmap
