@@ -716,36 +716,6 @@ void Rtabmap::parseParameters(const ParametersMap & parameters)
 
 	if(_memory)
 	{
-		bool isMemIncremental = _memory->isIncremental();
-		if(Parameters::parse(parameters, Parameters::kMemIncrementalMemory(), isMemIncremental) &&
-			isMemIncremental != _memory->isIncremental())
-		{
-			// Mode has changed from Mapping to Localization, cleanup the local graph
-			if(_memory->isGraphReduced() && _memory->isIncremental())
-			{
-				// Force reducing graph, then remove filtered nodes from the optimized poses
-				std::map<int, int> reducedIds;
-				_memory->incrementMapId(&reducedIds);
-				for(std::map<int, int>::iterator iter=reducedIds.begin(); iter!=reducedIds.end(); ++iter)
-				{
-					_optimizedPoses.erase(iter->first);
-				}
-			}
-
-			// In both cases, we save the latest optimized graph and latest localization pose
-			_memory->saveOptimizedPoses(_optimizedPoses, _lastLocalizationPose);
-
-			// Mode changed from Localization to Mapping, clear local graph
-			if(!_memory->isIncremental()) {
-				_optimizedPoses.clear();
-				_lastLocalizationPose.setNull();
-				_mapCorrection.setIdentity();
-				_mapCorrectionBackup.setNull();
-				_localizationCovariance = cv::Mat();
-				_lastLocalizationNodeId = 0;
-			}
-		}
-
 		_memory->parseParameters(parameters);
 		if(_memory->isIncremental() && !_globalScanMap.empty())
 		{
@@ -1750,7 +1720,6 @@ bool Rtabmap::process(
 					_constraints.erase(--_constraints.end());
 				}
 			}
-
 			_constraints.insert(std::make_pair(tmp.from(), tmp));
 		}
 		// Localization mode stuff
@@ -4784,7 +4753,7 @@ void Rtabmap::setMemoryThreshold(int maxMemoryAllowed)
 {
 	//must be positive, 0 mean inf memory allowed (no memory limit)
 	_maxMemoryAllowed = maxMemoryAllowed;
-	if(maxMemoryAllowed < 0)
+	if(_maxMemoryAllowed < 0)
 	{
 		ULOGGER_WARN("maxMemoryAllowed < 0, then setting it to 0 (inf).");
 		_maxMemoryAllowed = 0;

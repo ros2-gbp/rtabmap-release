@@ -34,14 +34,14 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 namespace rtabmap {
 
-// format : ".jpg" ".png" ".rvl" "" (empty is general)
+// format : ".png" ".jpg" "" (empty is general)
 CompressionThread::CompressionThread(const cv::Mat & mat, const std::string & format) :
 	uncompressedData_(mat),
 	format_(format),
 	image_(!format.empty()),
 	compressMode_(true)
 {
-	UASSERT(format.empty() || format.compare(".jpg") == 0 || format.compare(".png") == 0 || format.compare(".rvl") == 0);
+	UASSERT(format.empty() || format.compare(".png") == 0 || format.compare(".jpg") == 0);
 }
 // assume image
 CompressionThread::CompressionThread(const cv::Mat & bytes, bool isImage) :
@@ -96,7 +96,7 @@ void CompressionThread::mainLoop()
 	this->kill();
 }
 
-// ".jpg" or ".png" or ".rvl"
+// ".png" or ".jpg"
 std::vector<unsigned char> compressImage(const cv::Mat & image, const std::string & format)
 {
 	std::vector<unsigned char> bytes;
@@ -106,21 +106,7 @@ std::vector<unsigned char> compressImage(const cv::Mat & image, const std::strin
 		{
 			//save in 8bits-4channel
 			cv::Mat bgra(image.size(), CV_8UC4, image.data);
-			cv::imencode(".png", bgra, bytes);
-		}
-		else if(format == ".rvl")
-		{
-			bytes = {'D', 'E', 'P', 'T', 'H', 'R', 'V', 'L'};
-			int numPixels = image.rows * image.cols;
-        	// In the worst case, RVL compression results in ~1.5x larger data.
-        	bytes.resize(3 * numPixels + 20);
-        	uint32_t cols = image.cols;
-        	uint32_t rows = image.rows;
-        	memcpy(&bytes[8], &cols, 4);
-        	memcpy(&bytes[12], &rows, 4);
-        	RvlCodec rvl;
-        	int compressedSize = rvl.CompressRVL(image.ptr<uint16_t>(), &bytes[16], numPixels);
-        	bytes.resize(16 + compressedSize);
+			cv::imencode(format, bgra, bytes);
 		}
 		else
 		{
@@ -130,7 +116,7 @@ std::vector<unsigned char> compressImage(const cv::Mat & image, const std::strin
 	return bytes;
 }
 
-// ".jpg" or ".png" or ".rvl"
+// ".png" or ".jpg"
 cv::Mat compressImage2(const cv::Mat & image, const std::string & format)
 {
 	std::vector<unsigned char> bytes = compressImage(image, format);
@@ -143,33 +129,21 @@ cv::Mat compressImage2(const cv::Mat & image, const std::string & format)
 
 cv::Mat uncompressImage(const cv::Mat & bytes)
 {
-	cv::Mat image;
+	 cv::Mat image;
 	if(!bytes.empty())
 	{
-		if (compressedDepthFormat(bytes) == ".rvl")
-		{
-			uint32_t cols, rows;
-        	memcpy(&cols, &bytes.data[8], 4);
-        	memcpy(&rows, &bytes.data[12], 4);
-			image = cv::Mat(rows, cols, CV_16UC1);
-			RvlCodec rvl;
-        	rvl.DecompressRVL(&bytes.data[16], image.ptr<uint16_t>(), cols * rows);
-		}
-		else
-		{
 #if CV_MAJOR_VERSION>2 || (CV_MAJOR_VERSION >=2 && CV_MINOR_VERSION >=4)
-			image = cv::imdecode(bytes, cv::IMREAD_UNCHANGED);
+		image = cv::imdecode(bytes, cv::IMREAD_UNCHANGED);
 #else
-			image = cv::imdecode(bytes, -1);
+		image = cv::imdecode(bytes, -1);
 #endif
-			if(image.type() == CV_8UC4)
-			{
-				// Using clone() or copyTo() caused a memory leak !?!?
-				// image = cv::Mat(image.size(), CV_32FC1, image.data).clone();
-				cv::Mat depth(image.size(), CV_32FC1);
-				memcpy(depth.data, image.data, image.total()*image.elemSize());
-				image = depth;
-			}
+		if(image.type() == CV_8UC4)
+		{
+			// Using clone() or copyTo() caused a memory leak !?!?
+			// image = cv::Mat(image.size(), CV_32FC1, image.data).clone();
+			cv::Mat depth(image.size(), CV_32FC1);
+			memcpy(depth.data, image.data, image.total()*image.elemSize());
+			image = depth;
 		}
 	}
 	return image;
@@ -177,29 +151,17 @@ cv::Mat uncompressImage(const cv::Mat & bytes)
 
 cv::Mat uncompressImage(const std::vector<unsigned char> & bytes)
 {
-	cv::Mat image;
+	 cv::Mat image;
 	if(bytes.size())
 	{
-		if (compressedDepthFormat(bytes) == ".rvl")
-		{
-			uint32_t cols, rows;
-        	memcpy(&cols, &bytes[8], 4);
-        	memcpy(&rows, &bytes[12], 4);
-			image = cv::Mat(rows, cols, CV_16UC1);
-			RvlCodec rvl;
-        	rvl.DecompressRVL(&bytes[16], image.ptr<uint16_t>(), cols * rows);
-		}
-		else
-		{
 #if CV_MAJOR_VERSION>2 || (CV_MAJOR_VERSION >=2 && CV_MINOR_VERSION >=4)
-			image = cv::imdecode(bytes, cv::IMREAD_UNCHANGED);
+		image = cv::imdecode(bytes, cv::IMREAD_UNCHANGED);
 #else
-			image = cv::imdecode(bytes, -1);
+		image = cv::imdecode(bytes, -1);
 #endif
-			if(image.type() == CV_8UC4)
-			{
-				image = cv::Mat(image.size(), CV_32FC1, image.data).clone();
-			}
+		if(image.type() == CV_8UC4)
+		{
+			image = cv::Mat(image.size(), CV_32FC1, image.data).clone();
 		}
 	}
 	return image;
@@ -327,35 +289,6 @@ std::string uncompressString(const cv::Mat & bytes)
 		return (const char*)strMat.data;
 	}
 	return "";
-}
-
-std::string compressedDepthFormat(const cv::Mat & bytes)
-{
-	return compressedDepthFormat(bytes.data, bytes.rows * bytes.cols * bytes.elemSize());
-}
-std::string compressedDepthFormat(const std::vector<unsigned char> & bytes)
-{
-	return compressedDepthFormat(bytes.data(), bytes.size());
-}
-std::string compressedDepthFormat(const unsigned char * bytes, size_t size)
-{
-	std::string format;
-	if(bytes && size)
-	{
-		size_t maxlen = std::min(size, size_t(8));
-		std::vector<unsigned char> signature(maxlen);
-		memcpy(&signature[0], bytes, maxlen);
-		if (std::string(signature.begin(), signature.end()) == "DEPTHRVL")
-		{
-			format = ".rvl";
-		}
-		else
-		{
-			// Assuming png by default
-			format = ".png";
-		}
-	}
-	return format;
 }
 
 } /* namespace rtabmap */

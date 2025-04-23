@@ -70,8 +70,7 @@ class RTABMapApp : public UEventsHandler {
                                                     int,
                                                     float, float, float, float,
                                                     int, int,
-                                                    float, float, float, float, float, float),
-                           void(*cameraInfoCallback)(void *, int, const char*, const char*));
+                                                    float, float, float, float, float, float));
     
 #endif
   ~RTABMapApp();
@@ -139,7 +138,6 @@ class RTABMapApp : public UEventsHandler {
   void setSmoothing(bool enabled);
   void setDepthFromMotion(bool enabled);
   void setAppendMode(bool enabled);
-  void setUpstreamRelocalizationAccThr(float value);
   void setDataRecorderMode(bool enabled);
   void setMaxCloudDepth(float value);
   void setMinCloudDepth(float value);
@@ -152,7 +150,6 @@ class RTABMapApp : public UEventsHandler {
   void setRenderingTextureDecimation(int value);
   void setBackgroundColor(float gray);
   void setDepthConfidence(int value);
-  void setExportPointCloudFormat(const std::string & format);
   int setMappingParameter(const std::string & key, const std::string & value);
   void setGPS(const rtabmap::GPS & gps);
   void addEnvSensor(int type, float value);
@@ -181,6 +178,9 @@ class RTABMapApp : public UEventsHandler {
   bool writeExportedMesh(const std::string & directory, const std::string & name);
   int postProcessing(int approach);
 
+  void postCameraPoseEvent(
+  		float x, float y, float z, float qx, float qy, float qz, float qw, double stamp);
+
   void postOdometryEvent(
 		rtabmap::Transform pose,
 		float rgb_fx, float rgb_fy, float rgb_cx, float rgb_cy,
@@ -193,7 +193,7 @@ class RTABMapApp : public UEventsHandler {
         const void * depth, int depthLen, int depthWidth, int depthHeight, int depthFormat,
         const void * conf, int confLen, int confWidth, int confHeight, int confFormat,
         const float * points, int pointsLen, int pointsChannels,
-		rtabmap::Transform viewMatrix, //view matrix
+		const rtabmap::Transform & viewMatrix, //view matrix
         float p00, float p11, float p02, float p12, float p22, float p32, float p23, // projection matrix
         float t0, float t1, float t2, float t3, float t4, float t5, float t6, float t7); // tex coord
 
@@ -239,8 +239,6 @@ class RTABMapApp : public UEventsHandler {
   int renderingTextureDecimation_;
   float backgroundColor_;
   int depthConfidence_;
-  float upstreamRelocalizationMaxAcc_;
-  std::string exportPointCloudFormat_;
 
   rtabmap::ParametersMap mappingParameters_;
 
@@ -311,7 +309,6 @@ class RTABMapApp : public UEventsHandler {
                              float, float, float, float,
                              int, int,
                              float, float, float, float, float, float);
-    void(*swiftCameraInfoEventCallback)(void *, int, const char *, const char *);
     
 #endif
 };

@@ -80,7 +80,6 @@ Memory::Memory(const ParametersMap & parameters) :
 	_notLinkedNodesKeptInDb(Parameters::defaultMemNotLinkedNodesKept()),
 	_saveIntermediateNodeData(Parameters::defaultMemIntermediateNodeDataKept()),
 	_rgbCompressionFormat(Parameters::defaultMemImageCompressionFormat()),
-	_depthCompressionFormat(Parameters::defaultMemDepthCompressionFormat()),
 	_incrementalMemory(Parameters::defaultMemIncrementalMemory()),
 	_localizationDataSaved(Parameters::defaultMemLocalizationDataSaved()),
 	_reduceGraph(Parameters::defaultMemReduceGraph()),
@@ -92,7 +91,6 @@ Memory::Memory(const ParametersMap & parameters) :
 	_badSignaturesIgnored(Parameters::defaultMemBadSignaturesIgnored()),
 	_mapLabelsAdded(Parameters::defaultMemMapLabelsAdded()),
 	_depthAsMask(Parameters::defaultMemDepthAsMask()),
-	_maskFloorThreshold(Parameters::defaultMemDepthMaskFloorThr()),
 	_stereoFromMotion(Parameters::defaultMemStereoFromMotion()),
     _imagePreDecimation(Parameters::defaultMemImagePreDecimation()),
 	_imagePostDecimation(Parameters::defaultMemImagePostDecimation()),
@@ -569,7 +567,6 @@ void Memory::parseParameters(const ParametersMap & parameters)
 	Parameters::parse(params, Parameters::kMemNotLinkedNodesKept(), _notLinkedNodesKeptInDb);
 	Parameters::parse(params, Parameters::kMemIntermediateNodeDataKept(), _saveIntermediateNodeData);
 	Parameters::parse(params, Parameters::kMemImageCompressionFormat(), _rgbCompressionFormat);
-	Parameters::parse(params, Parameters::kMemDepthCompressionFormat(), _depthCompressionFormat);
 	Parameters::parse(params, Parameters::kMemRehearsalIdUpdatedToNewOne(), _idUpdatedToNewOneRehearsal);
 	Parameters::parse(params, Parameters::kMemGenerateIds(), _generateIds);
 	Parameters::parse(params, Parameters::kMemBadSignaturesIgnored(), _badSignaturesIgnored);
@@ -579,7 +576,6 @@ void Memory::parseParameters(const ParametersMap & parameters)
 	Parameters::parse(params, Parameters::kMemTransferSortingByWeightId(), _transferSortingByWeightId);
 	Parameters::parse(params, Parameters::kMemSTMSize(), _maxStMemSize);
 	Parameters::parse(params, Parameters::kMemDepthAsMask(), _depthAsMask);
-	Parameters::parse(params, Parameters::kMemDepthMaskFloorThr(), _maskFloorThreshold);
 	Parameters::parse(params, Parameters::kMemStereoFromMotion(), _stereoFromMotion);
 	Parameters::parse(params, Parameters::kMemImagePreDecimation(), _imagePreDecimation);
 	Parameters::parse(params, Parameters::kMemImagePostDecimation(), _imagePostDecimation);
@@ -3190,15 +3186,6 @@ Transform Memory::computeTransform(
 			transform = transform.inverse();
 		}
 	}
-	else
-	{
-		std::string msg = uFormat("Missing visual features or missing raw data to compute them. Transform cannot be estimated.");
-		if(info)
-		{
-			info->rejectedMsg = msg;
-		}
-		UWARN(msg.c_str());
-	}
 	return transform;
 }
 
@@ -4559,7 +4546,7 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 	float t;
 	std::vector<cv::KeyPoint> keypoints;
 	cv::Mat descriptors;
-	bool isIntermediateNode = data.id() < 0;
+	bool isIntermediateNode = data.id() < 0 || (data.imageRaw().empty() && data.keypoints().empty() && data.laserScanRaw().empty());
 	int id = data.id();
 	if(_generateIds)
 	{
@@ -4730,14 +4717,13 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 		cv::Mat rotatedDepthImages;
 		std::vector<CameraModel> rotatedCameraModels;
 		bool allOutputSizesAreOkay = true;
-		bool atLeastOneCameraRotated = false;
 		for(size_t i=0; i<data.cameraModels().size(); ++i)
 		{
 			UDEBUG("Rotating camera %ld", i);
 			cv::Mat rgb = cv::Mat(data.imageRaw(), cv::Rect(subInputImageWidth*i, 0, subInputImageWidth, data.imageRaw().rows));
 			cv::Mat depth = !data.depthRaw().empty()?cv::Mat(data.depthRaw(), cv::Rect(subInputDepthWidth*i, 0, subInputDepthWidth, data.depthRaw().rows)):cv::Mat();
 			CameraModel model = data.cameraModels()[i];
-			atLeastOneCameraRotated |= util2d::rotateImagesUpsideUpIfNecessary(model, rgb, depth);
+			util2d::rotateImagesUpsideUpIfNecessary(model, rgb, depth);
 			if(rotatedColorImages.empty())
 			{
 				rotatedColorImages = cv::Mat(cv::Size(rgb.cols * data.cameraModels().size(), rgb.rows), rgb.type());
@@ -4771,7 +4757,7 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 			}
 			rotatedCameraModels.push_back(model);
 		}
-		if(allOutputSizesAreOkay && atLeastOneCameraRotated)
+		if(allOutputSizesAreOkay)
 		{
 			data.setRGBDImage(rotatedColorImages, rotatedDepthImages, rotatedCameraModels);
 
@@ -4888,26 +4874,7 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 					imageMono.cols % decimatedData.depthRaw().cols == 0 &&
 					imageMono.rows/decimatedData.depthRaw().rows == imageMono.cols/decimatedData.depthRaw().cols)
 				{
-					depthMask = decimatedData.depthRaw();
-
-					if(_maskFloorThreshold != 0.0f)
-					{
-						UASSERT(!decimatedData.cameraModels().empty());
-						UDEBUG("Masking floor (threshold=%f)", _maskFloorThreshold);
-						if(_maskFloorThreshold<0.0f)
-						{
-							cv::Mat depthBelow;
-							util3d::filterFloor(depthMask, decimatedData.cameraModels(), _maskFloorThreshold*-1.0f, &depthBelow);
-							depthMask = depthBelow;
-						}
-						else
-						{
-							depthMask = util3d::filterFloor(depthMask, decimatedData.cameraModels(), _maskFloorThreshold);
-						}
-						UDEBUG("Masking floor done.");
-					}
-
-					depthMask = util2d::interpolate(depthMask, imageMono.rows/depthMask.rows, 0.1f);
+					depthMask = util2d::interpolate(decimatedData.depthRaw(), imageMono.rows/decimatedData.depthRaw().rows, 0.1f);
 				}
 				else
 				{
@@ -5525,12 +5492,7 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 	}
 
 	Landmarks landmarks = data.landmarks();
-	if(!landmarks.empty() && isIntermediateNode)
-	{
-		UDEBUG("Landmarks provided (size=%ld) are ignored because this signature is set as intermediate.", landmarks.size());
-		landmarks.clear();
-	}
-	else if(_detectMarkers && !isIntermediateNode && !data.imageRaw().empty())
+	if(_detectMarkers && !isIntermediateNode && !data.imageRaw().empty())
 	{
 		UDEBUG("Detecting markers...");
 		if(landmarks.empty())
@@ -5810,42 +5772,10 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 		std::vector<unsigned char> imageBytes;
 		std::vector<unsigned char> depthBytes;
 
-		if(!depthOrRightImage.empty() && depthOrRightImage.type() == CV_32FC1)
+		if(_saveDepth16Format && !depthOrRightImage.empty() && depthOrRightImage.type() == CV_32FC1)
 		{
-			if(_saveDepth16Format)
-			{
-				static bool warned = false;
-				if(!warned)
-				{
-					UWARN("Converting depth data to 16 bits format because depth type detected is 32FC1, "
-					      "feed 16UC1 depth format directly to avoid this conversion (or set parameter %s=false "
-						  "to save 32bits format). This warning is only printed once.",
-						Parameters::kMemSaveDepth16Format().c_str());
-					warned = true;
-				}
-				depthOrRightImage = util2d::cvtDepthFromFloat(depthOrRightImage);
-			}
-			else if(_depthCompressionFormat == ".rvl")
-			{
-				static bool warned = false;
-				if(!warned)
-				{
-					UWARN("%s is set to false to use 32bits format but this is not "
-					 	  "compatible with the compressed depth format chosen (%s=\"%s\"), depth "
-						  "images will be compressed in \".png\" format instead. Explicitly "
-						  "set %s to true to keep using \"%s\" format and images will be "
-						  "converted to 16bits for convenience (warning: that would "
-						  "remove all depth values over 65 meters). Explicitly set %s=\".png\" "
-						  "to suppress this warning. This warning is only printed once.",
-						Parameters::kMemSaveDepth16Format().c_str(),
-						Parameters::kMemDepthCompressionFormat().c_str(),
-						_depthCompressionFormat.c_str(),
-						Parameters::kMemSaveDepth16Format().c_str(),
-						_depthCompressionFormat.c_str(),
-						Parameters::kMemDepthCompressionFormat().c_str());
-					warned = true;
-				}
-			}
+			UWARN("Save depth data to 16 bits format: depth type detected is 32FC1, use 16UC1 depth format to avoid this conversion (or set parameter \"Mem/SaveDepth16Format\"=false to use 32bits format).");
+			depthOrRightImage = util2d::cvtDepthFromFloat(depthOrRightImage);
 		}
 
 		cv::Mat compressedImage;
@@ -5855,7 +5785,7 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 		if(_compressionParallelized)
 		{
 			rtabmap::CompressionThread ctImage(image, _rgbCompressionFormat);
-			rtabmap::CompressionThread ctDepth(depthOrRightImage, depthOrRightImage.type() == CV_32FC1 || depthOrRightImage.type() == CV_16UC1?_depthCompressionFormat:_rgbCompressionFormat);
+			rtabmap::CompressionThread ctDepth(depthOrRightImage, depthOrRightImage.type() == CV_32FC1 || depthOrRightImage.type() == CV_16UC1?std::string(".png"):_rgbCompressionFormat);
 			rtabmap::CompressionThread ctLaserScan(laserScan.data());
 			rtabmap::CompressionThread ctUserData(data.userDataRaw());
 			if(!image.empty())
@@ -5887,7 +5817,7 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 		else
 		{
 			compressedImage = compressImage2(image, _rgbCompressionFormat);
-			compressedDepth = compressImage2(depthOrRightImage, depthOrRightImage.type() == CV_32FC1 || depthOrRightImage.type() == CV_16UC1?_depthCompressionFormat:_rgbCompressionFormat);
+			compressedDepth = compressImage2(depthOrRightImage, depthOrRightImage.type() == CV_32FC1 || depthOrRightImage.type() == CV_16UC1?std::string(".png"):_rgbCompressionFormat);
 			compressedScan = compressData2(laserScan.data());
 			compressedUserData = compressData2(data.userDataRaw());
 		}
@@ -6052,23 +5982,16 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 	s->sensorData().setGPS(data.gps());
 	s->sensorData().setEnvSensors(data.envSensors());
 
-	if(!isIntermediateNode)
+	std::vector<GlobalDescriptor> globalDescriptors = data.globalDescriptors();
+	if(_globalDescriptorExtractor)
 	{
-		std::vector<GlobalDescriptor> globalDescriptors = data.globalDescriptors();
-		if(_globalDescriptorExtractor)
+		GlobalDescriptor gdescriptor = _globalDescriptorExtractor->extract(inputData);
+		if(!gdescriptor.data().empty())
 		{
-			GlobalDescriptor gdescriptor = _globalDescriptorExtractor->extract(inputData);
-			if(!gdescriptor.data().empty())
-			{
-				globalDescriptors.push_back(gdescriptor);
-			}
+			globalDescriptors.push_back(gdescriptor);
 		}
-		s->sensorData().setGlobalDescriptors(globalDescriptors);
 	}
-	else if(!data.globalDescriptors().empty())
-	{
-		UDEBUG("Global descriptors provided (size=%ld) are ignored because this signature is set as intermediate.", data.globalDescriptors().size());
-	}
+	s->sensorData().setGlobalDescriptors(globalDescriptors);
 
 	t = timer.ticks();
 	if(stats) stats->addStatistic(Statistics::kTimingMemCompressing_data(), t*1000.0f);

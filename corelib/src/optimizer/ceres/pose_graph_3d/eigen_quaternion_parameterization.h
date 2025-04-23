@@ -31,7 +31,7 @@
 #ifndef CERES_EXAMPLES_POSE_GRAPH_3D_EIGEN_QUATERNION_PARAMETERIZATION_H_
 #define CERES_EXAMPLES_POSE_GRAPH_3D_EIGEN_QUATERNION_PARAMETERIZATION_H_
 
-#include "ceres/manifold.h"
+#include "ceres/local_parameterization.h"
 
 namespace ceres {
 
@@ -46,7 +46,7 @@ namespace ceres {
 //
 // Plus(x, delta) = [sin(|delta|) delta / |delta|, cos(|delta|)] * x
 // with * being the quaternion multiplication operator.
-class EigenQuaternionParameterization : public ceres::Manifold {
+class EigenQuaternionParameterization : public ceres::LocalParameterization {
  public:
   virtual ~EigenQuaternionParameterization() {}
   virtual bool Plus(const double* x_ptr,

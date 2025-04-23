@@ -56,8 +56,9 @@ public class ARCoreSharedCamera {
       };
 	
 	private static RTABMapActivity mActivity;
-	public ARCoreSharedCamera(RTABMapActivity c) {
+	public ARCoreSharedCamera(RTABMapActivity c, float arCoreLocalizationFilteringSpeed) {
 		mActivity = c;
+		mARCoreLocalizationFilteringSpeed = arCoreLocalizationFilteringSpeed;
 	}
 
 	// Depth TOF Image.
@@ -71,7 +72,11 @@ public class ARCoreSharedCamera {
 	// ARCore session that supports camera sharing.
 	private Session sharedSession;
 	
+	private Pose previousAnchorPose = null;
+	private long previousAnchorTimeStamp;
+	private Pose arCoreCorrection = Pose.IDENTITY;
 	private Pose odomPose = Pose.IDENTITY;
+	private float mARCoreLocalizationFilteringSpeed = 1.0f;
 
 	// Camera capture session. Used by both non-AR and AR modes.
 	private CameraCaptureSession captureSession;
@@ -106,7 +111,6 @@ public class ARCoreSharedCamera {
 	private CaptureRequest.Builder previewCaptureRequestBuilder;
 
 	private int cameraTextureId = -1;
-	private boolean firstFrameReceived = false;
 
 	// Image reader that continuously processes CPU images.
 	public TOF_ImageReader mTOFImageReader = new TOF_ImageReader();
@@ -114,8 +118,6 @@ public class ARCoreSharedCamera {
 
 	ByteBuffer mPreviousDepth = null;
 	double mPreviousDepthStamp = 0.0;
-	ByteBuffer mPreviousDepth2 = null;
-	double mPreviousDepthStamp2 = 0.0;
 	
 	public boolean isDepthSupported() {return mTOFAvailable;}
 
@@ -631,7 +633,6 @@ public class ARCoreSharedCamera {
 		}
 		
 		mTOFImageReader.close();
-		firstFrameReceived = false;
 
 		if(cameraTextureId>=0)
 		{
@@ -680,15 +681,14 @@ public class ARCoreSharedCamera {
 			Log.e(TAG, String.format("camera is null!"));
 			return;
 		}
-		boolean lost = false;
 		if (camera.getTrackingState() != TrackingState.TRACKING) {
 			final String trackingState = camera.getTrackingState().toString();
 			Log.e(TAG, String.format("Tracking lost! state=%s", trackingState));
 			// This will force a new session on the next frame received
-			lost = true;
+			RTABMapLib.postCameraPoseEvent(RTABMapActivity.nativeApplication, 0,0,0,0,0,0,0,0);
 			mActivity.runOnUiThread(new Runnable() {
 				public void run() {
-					if(mToast!=null && firstFrameReceived)
+					if(mToast!=null && previousAnchorPose != null)
 					{
 						String msg = "Tracking lost! If you are mapping, you will need to relocalize before continuing.";
 						if(mToast.getView() == null || !mToast.getView().isShown())
@@ -700,14 +700,67 @@ public class ARCoreSharedCamera {
 						{
 							mToast.setText(msg);
 						}
+						previousAnchorPose = null;
+						arCoreCorrection = Pose.IDENTITY;
 					}
 				}
 			});
+			return;
 		}
 
 		if (frame.getTimestamp() != 0) {
 			Pose pose = camera.getPose();
+			
+			// Remove ARCore SLAM corrections by integrating pose from previous frame anchor
+			if(previousAnchorPose == null || mARCoreLocalizationFilteringSpeed==0)
+			{
+				odomPose = pose;
+			}
+			else
+			{
+				float[] t = previousAnchorPose.inverse().compose(pose).getTranslation();
+				final double speed = Math.sqrt(t[0]*t[0]+t[1]*t[1]+t[2]*t[2])/((double)(frame.getTimestamp()-previousAnchorTimeStamp)/10e8);
+				if(speed>=mARCoreLocalizationFilteringSpeed)
+				{
+					// Only correct the translation to not lose rotation aligned with gravity
+					arCoreCorrection = arCoreCorrection.compose(previousAnchorPose.compose(pose.inverse()).extractTranslation());
+					t = arCoreCorrection.getTranslation();
+					Log.e(TAG, String.format("POTENTIAL TELEPORTATION!!!!!!!!!!!!!! previous anchor moved (speed=%f), new arcorrection: %f %f %f", speed, t[0], t[1], t[2]));
+					
+					t = odomPose.getTranslation();
+					float[] t2 = (arCoreCorrection.compose(pose)).getTranslation();
+					float[] t3 = previousAnchorPose.getTranslation();
+					float[] t4 = pose.getTranslation();
+					Log.e(TAG, String.format("Odom = %f %f %f -> %f %f %f ArCore= %f %f %f -> %f %f %f", t[0], t[1], t[2], t2[0], t2[1], t2[2], t3[0], t3[1], t3[2], t4[0], t4[1], t4[2]));
+				
+					mActivity.runOnUiThread(new Runnable() {
+						public void run() {
+							if(mToast!=null)
+							{
+								String msg = String.format("ARCore localization has been suppressed "
+										+ "because of high speed detected (%f m/s) causing a jump! You can change "
+										+ "ARCore localization filtering speed in Settings->Mapping if you are "
+										+ "indeed moving as fast.", speed);
+								if(mToast.getView() == null || !mToast.getView().isShown())
+								{
+									mToast.makeText(mActivity.getApplicationContext(), msg, Toast.LENGTH_LONG).show();
+								}
+								else
+								{
+									mToast.setText(msg);
+								}
+							}
+						}
+					});
+				}
+				odomPose = arCoreCorrection.compose(pose);
+			}
+			previousAnchorPose = pose;
+			previousAnchorTimeStamp = frame.getTimestamp();
+			
 			double stamp = (double)frame.getTimestamp()/10e8;
+			if(!RTABMapActivity.DISABLE_LOG) Log.d(TAG, String.format("pose=%f %f %f arcore %f %f %f cor= %f %f %f stamp=%f", odomPose.tx(), odomPose.ty(), odomPose.tz(), pose.tx(), pose.ty(), pose.tz(), arCoreCorrection.tx(), arCoreCorrection.ty(), arCoreCorrection.tz(), stamp));
+			RTABMapLib.postCameraPoseEvent(RTABMapActivity.nativeApplication, odomPose.tx(), odomPose.ty(), odomPose.tz(), odomPose.qx(), odomPose.qy(), odomPose.qz(), odomPose.qw(), stamp);
 			CameraIntrinsics intrinsics = camera.getImageIntrinsics();
 			try{
 				Image image = frame.acquireCameraImage();
@@ -750,7 +803,7 @@ public class ARCoreSharedCamera {
 		        camera.getProjectionMatrix(p, 0, 0.1f, 100.0f);
    
 		        float[] viewMatrix = new float[16];
-		        camera.getDisplayOrientedPose().inverse().toMatrix(viewMatrix, 0);
+		        arCoreCorrection.compose(camera.getDisplayOrientedPose()).inverse().toMatrix(viewMatrix, 0);
 		        float[] quat = new float[4];
 		        rotationMatrixToQuaternion(viewMatrix, quat);
 
@@ -769,47 +822,35 @@ public class ARCoreSharedCamera {
 						mPreviousDepth = depth;
 						mPreviousDepthStamp = depthStamp;
 					}
-					if(mPreviousDepth2 == null)
-					{
-						mPreviousDepth2 = depth;
-						mPreviousDepthStamp2 = depthStamp;
-					}
 					
-					if(!RTABMapActivity.DISABLE_LOG) Log.d(TAG, String.format("Depth %dx%d len=%dbytes format=%d stamp=%f previous=%f rgb=%f",
-							mTOFImageReader.WIDTH, mTOFImageReader.HEIGHT, depth.limit(), ImageFormat.DEPTH16, depthStamp, mPreviousDepthStamp, stamp));
+					if(!RTABMapActivity.DISABLE_LOG) Log.d(TAG, String.format("Depth %dx%d len=%dbytes format=%d stamp=%f",
+							mTOFImageReader.WIDTH, mTOFImageReader.HEIGHT, depth.limit(), ImageFormat.DEPTH16, depthStamp));
 
 					RTABMapLib.postOdometryEventDepth(
 							RTABMapActivity.nativeApplication,
-							lost?0:pose.tx(), lost?0:pose.ty(), lost?0:pose.tz(), lost?0:pose.qx(), lost?0:pose.qy(), lost?0:pose.qz(), lost?0:pose.qw(), 
+							odomPose.tx(), odomPose.ty(), odomPose.tz(), odomPose.qx(), odomPose.qy(), odomPose.qz(), odomPose.qw(), 
 							fl[0], fl[1], pp[0], pp[1], 
 							depthIntrinsics[0], depthIntrinsics[1], depthIntrinsics[2], depthIntrinsics[3],
 							rgbExtrinsics.tx(), rgbExtrinsics.ty(), rgbExtrinsics.tz(), rgbExtrinsics.qx(), rgbExtrinsics.qy(), rgbExtrinsics.qz(), rgbExtrinsics.qw(),
 							depthExtrinsics.tx(), depthExtrinsics.ty(), depthExtrinsics.tz(), depthExtrinsics.qx(), depthExtrinsics.qy(), depthExtrinsics.qz(), depthExtrinsics.qw(),
 							stamp,
-							depthStamp<=stamp?depthStamp:mPreviousDepthStamp<=stamp?mPreviousDepthStamp:mPreviousDepthStamp2,
+							depthStamp>stamp?mPreviousDepthStamp:depthStamp,
 							y, u, v, y.limit(), image.getWidth(), image.getHeight(), image.getFormat(), 
-							depthStamp<=stamp?depth:mPreviousDepthStamp<=stamp?mPreviousDepth:mPreviousDepth2,
-							depthStamp<=stamp?depth.limit():mPreviousDepthStamp<=stamp?mPreviousDepth.limit():mPreviousDepth2.limit(),
-							mTOFImageReader.WIDTH, mTOFImageReader.HEIGHT, ImageFormat.DEPTH16,
+							depthStamp>stamp?mPreviousDepth:depth, depthStamp>stamp?mPreviousDepth.limit():depth.limit(), mTOFImageReader.WIDTH, mTOFImageReader.HEIGHT, ImageFormat.DEPTH16,
 							points, points.limit()/4,
 							viewMatrix[12], viewMatrix[13], viewMatrix[14], quat[1], quat[2], quat[3], quat[0],
 							p[0], p[5], p[8], p[9], p[10], p[11], p[14],
                             texCoord[0],texCoord[1],texCoord[2],texCoord[3],texCoord[4],texCoord[5],texCoord[6],texCoord[7]);
 					
-					// triple buffer in case delay of rgb frame is > 60 ms
-					if(depthStamp != mPreviousDepthStamp)
-					{
-						mPreviousDepthStamp2 = mPreviousDepthStamp;
-						mPreviousDepth2 = mPreviousDepth;
-						mPreviousDepthStamp = depthStamp;
-						mPreviousDepth = depth;
-					}
+					
+					mPreviousDepthStamp = depthStamp;
+					mPreviousDepth = depth;
 				}
 				else
 				{
 					RTABMapLib.postOdometryEvent(
 							RTABMapActivity.nativeApplication,
-							lost?0:pose.tx(), lost?0:pose.ty(), lost?0:pose.tz(), lost?0:pose.qx(), lost?0:pose.qy(), lost?0:pose.qz(), lost?0:pose.qw(), 
+							odomPose.tx(), odomPose.ty(), odomPose.tz(), odomPose.qx(), odomPose.qy(), odomPose.qz(), odomPose.qw(), 
 							fl[0], fl[1], pp[0], pp[1], 
 							rgbExtrinsics.tx(), rgbExtrinsics.ty(), rgbExtrinsics.tz(), rgbExtrinsics.qx(), rgbExtrinsics.qy(), rgbExtrinsics.qz(), rgbExtrinsics.qw(),
 							stamp, 
@@ -820,7 +861,6 @@ public class ARCoreSharedCamera {
                             texCoord[0],texCoord[1],texCoord[2],texCoord[3],texCoord[4],texCoord[5],texCoord[6],texCoord[7]);
 				}
 				
-				firstFrameReceived = !lost;
 				image.close();
 				cloud.close();
 				

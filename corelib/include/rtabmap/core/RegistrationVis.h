@@ -91,7 +91,6 @@ private:
 	int _flowIterations;
 	float _flowEps;
 	int _flowMaxLevel;
-	bool _flowGpu;
 	float _nndr;
 	int _nnType;
 	bool _gmsWithRotation;
@@ -101,7 +100,6 @@ private:
 	bool _guessMatchToProjection;
 	int _bundleAdjustment;
 	bool _depthAsMask;
-	float _maskFloorThreshold;
 	float _minInliersDistributionThr;
 	float _maxInliersMeanDistance;
 

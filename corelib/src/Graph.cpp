@@ -104,20 +104,7 @@ bool exportPoses(
 #endif
 		if(fout)
 		{
-			std::list<std::pair<int, Transform> > posesList;
-			for(std::map<int, Transform>::const_iterator iter=poses.lower_bound(0); iter!=poses.end(); ++iter)
-			{
-				posesList.push_back(*iter);
-			}
-			if(format == 11)
-			{	
-				// Put landmarks at the end
-				for(std::map<int, Transform>::const_iterator iter=poses.begin(); iter!=poses.end() && iter->first < 0; ++iter)
-				{
-					posesList.push_back(*iter);
-				}
-			}
-			for(std::list<std::pair<int, Transform> >::const_iterator iter=posesList.begin(); iter!=posesList.end(); ++iter)
+			for(std::map<int, Transform>::const_iterator iter=poses.begin(); iter!=poses.end(); ++iter)
 			{
 				if(format == 1 || format == 10 || format == 11) // rgbd-slam format
 				{
@@ -138,7 +125,7 @@ bool exportPoses(
 					// Format: stamp x y z qx qy qz qw
 					Eigen::Quaternionf q = pose.getQuaternionf();
 
-					if(iter == posesList.begin())
+					if(iter == poses.begin())
 					{
 						// header
 						if(format == 11)
@@ -783,8 +770,7 @@ Transform calcRMSE (
 		float & rotational_median,
 		float & rotational_std,
 		float & rotational_min,
-		float & rotational_max,
-		bool align2D)
+		float & rotational_max)
 {
 
 	translational_rmse = 0.0f;
@@ -816,8 +802,8 @@ Transform calcRMSE (
 			{
 				idFirst = iter->first;
 			}
-			cloud1[oi] = pcl::PointXYZ(jter->second.x(), jter->second.y(), align2D?0:jter->second.z());
-			cloud2[oi++] = pcl::PointXYZ(iter->second.x(), iter->second.y(), align2D?0:iter->second.z());
+			cloud1[oi] = pcl::PointXYZ(jter->second.x(), jter->second.y(), jter->second.z());
+			cloud2[oi++] = pcl::PointXYZ(iter->second.x(), iter->second.y(), iter->second.z());
 		}
 	}
 

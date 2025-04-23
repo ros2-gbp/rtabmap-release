@@ -64,8 +64,6 @@ SET(SRC_FILES
     util3d_correspondences.cpp
     util3d_motion_estimation.cpp
     
-	rvl_codec.cpp
-	
     SensorData.cpp
     Graph.cpp
     Compression.cpp
@@ -541,30 +539,6 @@ IF(PDAL_FOUND)
 	ENDIF(PDAL_VERSION VERSION_LESS "1.7")
 ENDIF(PDAL_FOUND)
 
-IF(libLAS_FOUND)
-	SET(INCLUDE_DIRS
-		${INCLUDE_DIRS}
-		${libLAS_INCLUDE_DIRS}
-	)
-	SET(LIBRARIES
-		${LIBRARIES}
-		${libLAS_LIBRARIES}
-	)
-	SET(SRC_FILES
-		${SRC_FILES}
-		LASWriter.cpp
-	)
-ENDIF(libLAS_FOUND)
-
-
-IF(CudaSift_FOUND)
-	#target
-	SET(LIBRARIES
-		${LIBRARIES}
-		cudasift
-	)
-ENDIF(CudaSift_FOUND)
-
 
 IF(loam_velodyne_FOUND)
 	SET(INCLUDE_DIRS 
@@ -645,18 +619,18 @@ IF(octomap_FOUND)
 ENDIF(octomap_FOUND)
 
 IF(grid_map_core_FOUND)
-    IF(TARGET grid_map_core::grid_map_core)
-        SET(LIBRARIES
-            ${LIBRARIES}
-            grid_map_core::grid_map_core
+    IF(TARGET grid_map_core)
+        SET(PUBLIC_LIBRARIES
+            ${PUBLIC_LIBRARIES}
+            grid_map_core
         )
     ELSE()
-        SET(INCLUDE_DIRS
-            ${INCLUDE_DIRS}
+        SET(PUBLIC_INCLUDE_DIRS
+            ${PUBLIC_INCLUDE_DIRS}
             ${grid_map_core_INCLUDE_DIRS}
         )
-        SET(LIBRARIES
-            ${LIBRARIES}
+        SET(PUBLIC_LIBRARIES
+            ${PUBLIC_LIBRARIES}
             ${grid_map_core_LIBRARIES}
         )
     ENDIF()
@@ -846,6 +820,10 @@ ADD_CUSTOM_COMMAND(
 
 add_definitions(${PCL_DEFINITIONS})
 
+
+# Make sure the compiler can find include files from our library.
+INCLUDE_DIRECTORIES(${INCLUDE_DIRS})
+
 # Add binary that is built from the source file "main.cpp".
 # The extension is automatically found.
 ADD_LIBRARY(rtabmap_core ${SRC_FILES} ${RESOURCES_HEADERS})
@@ -855,7 +833,7 @@ generate_export_header(rtabmap_core
  DEPRECATED_MACRO_NAME RTABMAP_DEPRECATED)
 
 target_include_directories(rtabmap_core PUBLIC 
-  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include;${CMAKE_CURRENT_BINARY_DIR}/include;${PUBLIC_INCLUDE_DIRS};${INCLUDE_DIRS}>"
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include;${CMAKE_CURRENT_BINARY_DIR}/include;${PUBLIC_INCLUDE_DIRS}>"
   "$<INSTALL_INTERFACE:${INSTALL_INCLUDE_DIR};${PUBLIC_INCLUDE_DIRS}>")
   
 TARGET_LINK_LIBRARIES(rtabmap_core 

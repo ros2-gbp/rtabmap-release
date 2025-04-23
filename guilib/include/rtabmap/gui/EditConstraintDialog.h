@@ -42,14 +42,12 @@ class RTABMAP_GUI_EXPORT EditConstraintDialog : public QDialog
 	Q_OBJECT
 
 public:
-	EditConstraintDialog(const Transform & constraint, const cv::Mat & covariance = cv::Mat::eye(6,6,CV_64FC1), QWidget * parent = 0);
-
-  void setPoseGroupVisible(bool visible);
-  void setCovarianceGroupVisible(bool visible);
+	EditConstraintDialog(const Transform & constraint, double linearSigma = 1, double angularSigma = 1, QWidget * parent = 0);
 
 	virtual ~EditConstraintDialog();
 	Transform getTransform() const;
-	cv::Mat getCovariance() const;
+	double getLinearVariance() const;
+	double getAngularVariance() const;
 
 private Q_SLOTS:
 	void switchUnits();

@@ -75,18 +75,11 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #ifdef HAVE_OPENCV_CUDAFEATURES2D
   #include <opencv2/cudafeatures2d.hpp>
 #endif
-#ifdef HAVE_OPENCV_CUDAIMGPROC
-#include <opencv2/cudaimgproc.hpp>
-#endif
 
 #ifdef RTABMAP_FASTCV
 #include <fastcv.h>
 #endif
 
-#ifdef RTABMAP_CUDASIFT
-#include <cudasift/cudaImage.h>
-#include <cudasift/cudaSift.h>
-#endif
 namespace rtabmap {
 
 void Feature2D::filterKeypointsByDepth(
@@ -301,24 +294,8 @@ void Feature2D::limitKeypoints(std::vector<cv::KeyPoint> & keypoints, std::vecto
 		if(ssc)
 		{
 			ULOGGER_DEBUG("too much words (%d), removing words with SSC", keypoints.size());
-
-			// Sorting keypoints by deacreasing order of strength
-			std::vector<float> responseVector;
-			for (unsigned int i = 0; i < keypoints.size(); i++)
-			{
-				responseVector.push_back(keypoints[i].response);
-			}
-			std::vector<int> indx(responseVector.size());
-			std::iota(std::begin(indx), std::end(indx), 0);
-
-#if CV_MAJOR_VERSION >= 4
-			cv::sortIdx(responseVector, indx, cv::SORT_DESCENDING);
-#else
-			cv::sortIdx(responseVector, indx, CV_SORT_DESCENDING);
-#endif
-
 			static constexpr float tolerance = 0.1;
-			auto ResultVec = util2d::SSC(keypoints, maxKeypoints, tolerance, imageSize.width, imageSize.height, indx);
+			auto ResultVec = util2d::SSC(keypoints, maxKeypoints, tolerance, imageSize.width, imageSize.height);
 			removed = keypoints.size()-ResultVec.size();
 			// retrieve final keypoints
 			kptsTmp.resize(ResultVec.size());
@@ -352,7 +329,7 @@ void Feature2D::limitKeypoints(std::vector<cv::KeyPoint> & keypoints, std::vecto
 		}
 		else
 		{
-			ULOGGER_DEBUG("too many words (%d), removing words with the hessian threshold", keypoints.size());
+			ULOGGER_DEBUG("too much words (%d), removing words with the hessian threshold", keypoints.size());
 			// Remove words under the new hessian threshold
 
 			// Sort words by hessian
@@ -417,24 +394,8 @@ void Feature2D::limitKeypoints(const std::vector<cv::KeyPoint> & keypoints, std:
 		if(ssc)
 		{
 			ULOGGER_DEBUG("too much words (%d), removing words with SSC", keypoints.size());
-
-			// Sorting keypoints by deacreasing order of strength
-			std::vector<float> responseVector;
-			for (unsigned int i = 0; i < keypoints.size(); i++)
-			{
-				responseVector.push_back(keypoints[i].response);
-			}
-			std::vector<int> indx(responseVector.size());
-			std::iota(std::begin(indx), std::end(indx), 0);
-
-#if CV_MAJOR_VERSION >= 4
-			cv::sortIdx(responseVector, indx, cv::SORT_DESCENDING);
-#else
-			cv::sortIdx(responseVector, indx, CV_SORT_DESCENDING);
-#endif
-
 			static constexpr float tolerance = 0.1;
-			auto ResultVec = util2d::SSC(keypoints, maxKeypoints, tolerance, imageSize.width, imageSize.height, indx);
+			auto ResultVec = util2d::SSC(keypoints, maxKeypoints, tolerance, imageSize.width, imageSize.height);
 			removed = keypoints.size()-ResultVec.size();
 			for(unsigned int k=0; k<ResultVec.size(); ++k)
 			{
@@ -897,36 +858,15 @@ std::vector<cv::Point3f> Feature2D::generateKeypoints3D(
 			data.stereoCameraModels()[0].isValidForProjection())
 		{
 			//stereo
-			cv::Mat imageLeft = data.imageRaw();
-			cv::Mat imageRight = data.rightRaw();
-#ifdef HAVE_OPENCV_CUDEV
-			cv::cuda::GpuMat d_imageLeft;
-			cv::cuda::GpuMat d_imageRight;
-			if(_stereo->isGpuEnabled())
+			cv::Mat imageMono;
+			// convert to grayscale
+			if(data.imageRaw().channels() > 1)
 			{
-				d_imageLeft = data.imageRawGpu();
-				if(d_imageLeft.empty()) {
-					d_imageLeft = cv::cuda::GpuMat(imageLeft);
-				}
-				// convert to grayscale
-				if(d_imageLeft.channels() > 1) {
-					cv::cuda::GpuMat tmp;
-					cv::cuda::cvtColor(d_imageLeft, tmp, cv::COLOR_BGR2GRAY);
-					d_imageLeft = tmp;
-				}
-				d_imageRight = data.depthOrRightRawGpu();
-				if(d_imageRight.empty()) {
-					d_imageRight = cv::cuda::GpuMat(imageRight);
-				}
+				cv::cvtColor(data.imageRaw(), imageMono, cv::COLOR_BGR2GRAY);
 			}
 			else
-#endif
 			{
-				// convert to grayscale (right image should be already grayscale)
-				if(imageLeft.channels() > 1)
-				{
-					cv::cvtColor(data.imageRaw(), imageLeft, cv::COLOR_BGR2GRAY);
-				}
+				imageMono = data.imageRaw();
 			}
 
 			std::vector<cv::Point2f> leftCorners;
@@ -937,24 +877,11 @@ std::vector<cv::Point3f> Feature2D::generateKeypoints3D(
 			if(data.stereoCameraModels().size() == 1)
 			{
 				std::vector<unsigned char> status;
-#ifdef HAVE_OPENCV_CUDEV
-				if(_stereo->isGpuEnabled())
-				{
-					rightCorners = _stereo->computeCorrespondences(
-							d_imageLeft,
-							d_imageRight,
-							leftCorners,
-							status);
-				}
-				else
-#endif
-				{
-					rightCorners = _stereo->computeCorrespondences(
-							imageLeft,
-							imageRight,
-							leftCorners,
-							status);
-				}
+				rightCorners = _stereo->computeCorrespondences(
+						imageMono,
+						data.rightRaw(),
+						leftCorners,
+						status);
 
 				if(ULogger::level() >= ULogger::kWarning)
 				{
@@ -989,8 +916,8 @@ std::vector<cv::Point3f> Feature2D::generateKeypoints3D(
 			}
 			else
 			{
-				int subImageWith = imageLeft.cols / data.stereoCameraModels().size();
-				UASSERT(imageLeft.cols % subImageWith == 0);
+				int subImageWith = imageMono.cols / data.stereoCameraModels().size();
+				UASSERT(imageMono.cols % subImageWith == 0);
 				std::vector<std::vector<cv::Point2f> > subLeftCorners(data.stereoCameraModels().size());
 				std::vector<std::vector<int> > subIndex(data.stereoCameraModels().size());
 				// Assign keypoints per camera
@@ -1010,24 +937,11 @@ std::vector<cv::Point3f> Feature2D::generateKeypoints3D(
 					if(!subLeftCorners[i].empty())
 					{
 						std::vector<unsigned char> status;
-#ifdef HAVE_OPENCV_CUDEV
-						if(_stereo->isGpuEnabled())
-						{
-							rightCorners = _stereo->computeCorrespondences(
-								d_imageLeft.colRange(cv::Range(subImageWith*i, subImageWith*(i+1))),
-								d_imageRight.colRange(cv::Range(subImageWith*i, subImageWith*(i+1))),
+						rightCorners = _stereo->computeCorrespondences(
+								imageMono.colRange(cv::Range(subImageWith*i, subImageWith*(i+1))),
+								data.rightRaw().colRange(cv::Range(subImageWith*i, subImageWith*(i+1))),
 								subLeftCorners[i],
 								status);
-						}
-						else
-#endif
-						{
-							rightCorners = _stereo->computeCorrespondences(
-								imageLeft.colRange(cv::Range(subImageWith*i, subImageWith*(i+1))),
-								imageRight.colRange(cv::Range(subImageWith*i, subImageWith*(i+1))),
-								subLeftCorners[i],
-								status);
-						}
 
 						std::vector<cv::Point3f> subKeypoints3D = util3d::generateKeypoints3DStereo(
 								subLeftCorners[i],
@@ -1229,29 +1143,13 @@ SIFT::SIFT(const ParametersMap & parameters) :
 	contrastThreshold_(Parameters::defaultSIFTContrastThreshold()),
 	edgeThreshold_(Parameters::defaultSIFTEdgeThreshold()),
 	sigma_(Parameters::defaultSIFTSigma()),
-	preciseUpscale_(Parameters::defaultSIFTPreciseUpscale()),
-	rootSIFT_(Parameters::defaultSIFTRootSIFT()),
-	gpu_(Parameters::defaultSIFTGpu()),
-	guaussianThreshold_(Parameters::defaultSIFTGaussianThreshold()),
-	upscale_(Parameters::defaultSIFTUpscale()),
-	cudaSiftData_(0),
-	cudaSiftMemory_(0),
-	cudaSiftUpscaling_(upscale_)
+	rootSIFT_(Parameters::defaultSIFTRootSIFT())
 {
 	parseParameters(parameters);
 }
 
 SIFT::~SIFT()
 {
-#ifdef RTABMAP_CUDASIFT
-	if(cudaSiftData_) {
-		FreeSiftData(*cudaSiftData_);
-		delete cudaSiftData_;
-	}
-	if(cudaSiftMemory_) {
-		FreeSiftTempMemory(cudaSiftMemory_);
-	}
-#endif
 }
 
 void SIFT::parseParameters(const ParametersMap & parameters)
@@ -1262,52 +1160,21 @@ void SIFT::parseParameters(const ParametersMap & parameters)
 	Parameters::parse(parameters, Parameters::kSIFTEdgeThreshold(), edgeThreshold_);
 	Parameters::parse(parameters, Parameters::kSIFTNOctaveLayers(), nOctaveLayers_);
 	Parameters::parse(parameters, Parameters::kSIFTSigma(), sigma_);
-	Parameters::parse(parameters, Parameters::kSIFTPreciseUpscale(), preciseUpscale_);
 	Parameters::parse(parameters, Parameters::kSIFTRootSIFT(), rootSIFT_);
-	Parameters::parse(parameters, Parameters::kSIFTGpu(), gpu_);
-	Parameters::parse(parameters, Parameters::kSIFTGaussianThreshold(), guaussianThreshold_);
-	Parameters::parse(parameters, Parameters::kSIFTUpscale(), upscale_);
-	
-	if(gpu_)
-	{
-#ifdef RTABMAP_CUDASIFT
-		// Check if there is a cuda device
-		if(InitCuda(0, ULogger::level() == ULogger::kDebug)) {
-			UDEBUG("Init SiftData");
-			if(cudaSiftData_ == 0) {
-				cudaSiftData_ = new SiftData();
-				InitSiftData(*cudaSiftData_, 8192, true, true);
-			}
-		}
-		else{
-			UWARN("No cuda device(s) detected, CudaSift is not available! Using SIFT CPU version instead.");
-			gpu_ = false;
-		}
-#else
-		UWARN("RTAB-Map is not built with CudaSift so %s cannot be used!", Parameters::kSIFTGpu().c_str());
-		gpu_ = false;
-#endif
-	}
-	
-	if(!gpu_)
-	{
-		#if CV_MAJOR_VERSION < 3 || (CV_MAJOR_VERSION == 4 && CV_MINOR_VERSION <= 3) || (CV_MAJOR_VERSION == 3 && (CV_MINOR_VERSION < 4 || (CV_MINOR_VERSION==4 && CV_SUBMINOR_VERSION<11)))
+
+#if CV_MAJOR_VERSION < 3 || (CV_MAJOR_VERSION == 4 && CV_MINOR_VERSION <= 3) || (CV_MAJOR_VERSION == 3 && (CV_MINOR_VERSION < 4 || (CV_MINOR_VERSION==4 && CV_SUBMINOR_VERSION<11)))
 #ifdef RTABMAP_NONFREE
 #if CV_MAJOR_VERSION < 3
-		sift_ = cv::Ptr<CV_SIFT>(new CV_SIFT(this->getMaxFeatures(), nOctaveLayers_, contrastThreshold_, edgeThreshold_, sigma_));
+	_sift = cv::Ptr<CV_SIFT>(new CV_SIFT(this->getMaxFeatures(), nOctaveLayers_, contrastThreshold_, edgeThreshold_, sigma_));
 #else
-		sift_ = CV_SIFT::create(this->getMaxFeatures(), nOctaveLayers_, contrastThreshold_, edgeThreshold_, sigma_);
+	_sift = CV_SIFT::create(this->getMaxFeatures(), nOctaveLayers_, contrastThreshold_, edgeThreshold_, sigma_);
 #endif
 #else
-		UWARN("RTAB-Map is not built with OpenCV nonfree module so SIFT cannot be used!");
+	UWARN("RTAB-Map is not built with OpenCV nonfree module so SIFT cannot be used!");
 #endif
-#elif CV_MAJOR_VERSION>4 || (CV_MAJOR_VERSION==4 && CV_MINOR_VERSION>=8)// >=4.8
-		sift_ = CV_SIFT::create(this->getMaxFeatures(), nOctaveLayers_, contrastThreshold_, edgeThreshold_, sigma_, preciseUpscale_);
 #else // >=4.4, >=3.4.11
-		sift_ = CV_SIFT::create(this->getMaxFeatures(), nOctaveLayers_, contrastThreshold_, edgeThreshold_, sigma_);
+	_sift = CV_SIFT::create(this->getMaxFeatures(), nOctaveLayers_, contrastThreshold_, edgeThreshold_, sigma_);
 #endif
-	}
-
 }
 
 std::vector<cv::KeyPoint> SIFT::generateKeypointsImpl(const cv::Mat & image, const cv::Rect & roi, const cv::Mat & mask)
@@ -1320,149 +1187,30 @@ std::vector<cv::KeyPoint> SIFT::generateKeypointsImpl(const cv::Mat & image, con
 	{
 		maskRoi = cv::Mat(mask, roi);
 	}
-#ifdef RTABMAP_CUDASIFT
-	if(gpu_)
-	{
-		/* Read image using OpenCV and convert to floating point. */
-		int w = imgRoi.cols;
-		int h = imgRoi.rows;
-		cv::Mat img_h;
-		imgRoi.convertTo(img_h, CV_32FC1);
-		CudaImage img_d;
-		img_d.Allocate(w, h, iAlignUp(w, 128), false, NULL, (float*)img_h.data);
-		img_d.Download();
-
-		// Compute number of octaves like OpenCV based on resolution
-		// ref: https://github.com/opencv/opencv/blob/4d665419992dda6e40364f741ae4765176b64bb0/modules/features2d/src/sift.dispatch.cpp#L538
-		// *** stack smashing detected *** if "-2" term is higher
-		int numOctaves = cvRound(std::log( (double)std::min(w*(upscale_?2:1), h*(upscale_?2:1)) ) / std::log(2.) - (upscale_?3:2));
-		if(numOctaves < 1) {
-			numOctaves = 1;
-		}
-		else if (numOctaves>7)
-		{
-			numOctaves = 7; // hard-coded limit in CudaSift
-		}
-		float initBlur = sigma_; /* Amount of initial Gaussian blurring in standard deviations */
-		float thresh = guaussianThreshold_;   /* Threshold on difference of Gaussians for feature pruning */
-		float edgeLimit = edgeThreshold_;   
-		float minScale = 0.0f; /* Minimum acceptable scale to remove fine-scale features */
-		UDEBUG("numOctaves=%d initBlur=%f thresh=%f edgeLimit=%f minScale=%f upScale=%s w=%d h=%d", numOctaves, initBlur, thresh, edgeLimit, minScale, upscale_?"true":"false", w, h);
-
-		if(cudaSiftMemory_ && (cudaSiftMemorySize_ != cv::Size(w, h) || cudaSiftUpscaling_ != upscale_)) {
-			// Resolution changed, reset buffer
-			FreeSiftTempMemory(cudaSiftMemory_);
-			cudaSiftMemory_ = 0;
-		}
-
-		if(cudaSiftMemory_ == 0) {
-			cudaSiftMemory_ = AllocSiftTempMemory(w, h, numOctaves, upscale_);
-			UASSERT(cudaSiftMemory_ != 0);
-			cudaSiftMemorySize_ = cv::Size(w, h);
-			cudaSiftUpscaling_ = upscale_;
-		}
-
-		ExtractSift(*cudaSiftData_, img_d, numOctaves, initBlur, thresh, edgeLimit, minScale, upscale_, cudaSiftMemory_);
-		UDEBUG("%d features extracted", cudaSiftData_->numPts);
-		
-		// Convert CudaSift into OpenCV format
-		cudaSiftDescriptors_ = cv::Mat();
-		if(cudaSiftData_->numPts)
-		{
-			int maxKeypoints = this->getMaxFeatures();
-			if(maxKeypoints == 0 || maxKeypoints > cudaSiftData_->numPts)
-			{
-				maxKeypoints = cudaSiftData_->numPts;
-			}
-
-			// Re-using same implementation of limitKeypoints() directly here to avoid doubling memory copies
-			// Sort words by hessian
-			std::multimap<float, int> hessianMap; // <hessian,id>
-			for(int i=0; i<cudaSiftData_->numPts; ++i)
-			{
-				// Ignore keypoints with invalid descriptors
-				float *desc = cudaSiftData_->h_data[i].data;
-				if(desc[0] != 0 && desc[0] == desc[63] && desc[0] == desc[127])
-				{
-					//UWARN("Invalid decsriptor? skipping: %f,%f,%f", cudaSiftData_->h_data[i].xpos, cudaSiftData_->h_data[i].ypos, cudaSiftData_->h_data[i].scale);
-					//std::cout << cv::Mat(1, 128*4, CV_8UC1, desc) << std::endl;
-					continue;
-				}
-				// Ignore keypoints not in the mask
-				if(!maskRoi.empty() && maskRoi.at<unsigned char>(cudaSiftData_->h_data[i].ypos, cudaSiftData_->h_data[i].xpos) == 0)
-				{
-					continue;
-				}
-
-				//Keep track of the data, to be easier to manage the data in the next step
-				hessianMap.insert(std::pair<float, int>(cudaSiftData_->h_data[i].sharpness, i));
-			}
-
-			if((int)hessianMap.size() < maxKeypoints)
-			{
-				maxKeypoints = hessianMap.size();
-			}
-
-			std::multimap<float, int>::reverse_iterator iter = hessianMap.rbegin();
-			keypoints.resize(maxKeypoints);
-			cudaSiftDescriptors_ = cv::Mat(maxKeypoints, 128, CV_32FC1);
-			for(unsigned int k=0; k<keypoints.size() && iter!=hessianMap.rend(); ++k, ++iter)
-			{
-				int i = iter->second;
-				float *desc = cudaSiftData_->h_data[i].data;
-				cv::Mat(1, 128, CV_32FC1, desc).copyTo(cudaSiftDescriptors_.row(k));
-				keypoints[k].pt.x = cudaSiftData_->h_data[i].xpos;
-				keypoints[k].pt.y = cudaSiftData_->h_data[i].ypos;
-				keypoints[k].size = 2.0f*cudaSiftData_->h_data[i].scale; // x2 because the scale is more like a radius than a diameter, see CudaSift's ExtractSiftDescriptors function to see how they convert scale to patch size
-				keypoints[k].angle = cudaSiftData_->h_data[i].orientation;
-				keypoints[k].response = cudaSiftData_->h_data[i].sharpness; 
-				keypoints[k].octave = log2(cudaSiftData_->h_data[i].subsampling)-(upscale_?1:0);
-			}
-		}
-	}
-	else
-#endif
-	{
 #if CV_MAJOR_VERSION < 3 || (CV_MAJOR_VERSION == 4 && CV_MINOR_VERSION <= 3) || (CV_MAJOR_VERSION == 3 && (CV_MINOR_VERSION < 4 || (CV_MINOR_VERSION==4 && CV_SUBMINOR_VERSION<11)))
 #ifdef RTABMAP_NONFREE
-		sift_->detect(imgRoi, keypoints, maskRoi); // Opencv keypoints
+	_sift->detect(imgRoi, keypoints, maskRoi); // Opencv keypoints
 #else
-		UWARN("RTAB-Map is not built with OpenCV nonfree module so SIFT cannot be used!");
+	UWARN("RTAB-Map is not built with OpenCV nonfree module so SIFT cannot be used!");
 #endif
 #else // >=4.4, >=3.4.11
-		sift_->detect(imgRoi, keypoints, maskRoi); // Opencv keypoints
+	_sift->detect(imgRoi, keypoints, maskRoi); // Opencv keypoints
 #endif
-	}
 	return keypoints;
 }
 
 cv::Mat SIFT::generateDescriptorsImpl(const cv::Mat & image, std::vector<cv::KeyPoint> & keypoints) const
 {
-#ifdef RTABMAP_CUDASIFT
-	if(gpu_)
-	{
-		if((int)keypoints.size() == cudaSiftDescriptors_.rows)
-		{
-			return cudaSiftDescriptors_.clone();
-		}
-		else
-		{
-			UERROR("CudaSift: keypoints size %ld is not equal to extracted descriptors size %d", keypoints.size(), cudaSiftDescriptors_.rows);
-			return cv::Mat();
-		}
-	}
-#endif
-
 	UASSERT(!image.empty() && image.channels() == 1 && image.depth() == CV_8U);
 	cv::Mat descriptors;
 #if CV_MAJOR_VERSION < 3 || (CV_MAJOR_VERSION == 4 && CV_MINOR_VERSION <= 3) || (CV_MAJOR_VERSION == 3 && (CV_MINOR_VERSION < 4 || (CV_MINOR_VERSION==4 && CV_SUBMINOR_VERSION<11)))
 #ifdef RTABMAP_NONFREE
-	sift_->compute(image, keypoints, descriptors);
+	_sift->compute(image, keypoints, descriptors);
 #else
 	UWARN("RTAB-Map is not built with OpenCV nonfree module so SIFT cannot be used!");
 #endif
 #else // >=4.4, >=3.4.11
-	sift_->compute(image, keypoints, descriptors);
+	_sift->compute(image, keypoints, descriptors);
 #endif
 	if( rootSIFT_ && !descriptors.empty())
 	{
@@ -2042,8 +1790,7 @@ GFTT::GFTT(const ParametersMap & parameters) :
 		_minDistance(Parameters::defaultGFTTMinDistance()),
 		_blockSize(Parameters::defaultGFTTBlockSize()),
 		_useHarrisDetector(Parameters::defaultGFTTUseHarrisDetector()),
-		_k(Parameters::defaultGFTTK()),
-		_gpu(Parameters::defaultGFTTGpu())
+		_k(Parameters::defaultGFTTK())
 {
 	parseParameters(parameters);
 }
@@ -2061,45 +1808,12 @@ void GFTT::parseParameters(const ParametersMap & parameters)
 	Parameters::parse(parameters, Parameters::kGFTTBlockSize(), _blockSize);
 	Parameters::parse(parameters, Parameters::kGFTTUseHarrisDetector(), _useHarrisDetector);
 	Parameters::parse(parameters, Parameters::kGFTTK(), _k);
-	Parameters::parse(parameters, Parameters::kGFTTGpu(), _gpu);
 
 #if CV_MAJOR_VERSION < 3
-	if(_gpu)
-	{
-		UWARN("GPU version of GFTT is not implemented for OpenCV<3! Using CPU version instead...");
-		_gpu = false;
-	}
-#endif
-
-#ifdef HAVE_OPENCV_CUDAIMGPROC
-	if(_gpu && cv::cuda::getCudaEnabledDeviceCount() == 0)
-	{
-		UWARN("GPU version of GFTT not available! Using CPU version instead...");
-		_gpu = false;
-	}
+	_gftt = cv::Ptr<CV_GFTT>(new CV_GFTT(this->getMaxFeatures(), _qualityLevel, _minDistance, _blockSize, _useHarrisDetector ,_k));
 #else
-	if(_gpu)
-	{
-		UWARN("GPU version of GFTT not available (OpenCV cudaimageproc module)! Using CPU version instead...");
-		_gpu = false;
-	}
+	_gftt = CV_GFTT::create(this->getMaxFeatures(), _qualityLevel, _minDistance, _blockSize, _useHarrisDetector ,_k);
 #endif
-	if(_gpu)
-	{
-#ifdef HAVE_OPENCV_CUDAIMGPROC
-		_gpuGftt = cv::cuda::createGoodFeaturesToTrackDetector(CV_8UC1, this->getMaxFeatures(), _qualityLevel, _minDistance, _blockSize, _useHarrisDetector ,_k);
-#else
-		UFATAL("not supposed to be here!");
-#endif
-	}
-	else
-	{
-#if CV_MAJOR_VERSION < 3
-		_gftt = cv::Ptr<CV_GFTT>(new CV_GFTT(this->getMaxFeatures(), _qualityLevel, _minDistance, _blockSize, _useHarrisDetector ,_k));
-#else
-		_gftt = CV_GFTT::create(this->getMaxFeatures(), _qualityLevel, _minDistance, _blockSize, _useHarrisDetector ,_k);
-#endif
-	}
 }
 
 std::vector<cv::KeyPoint> GFTT::generateKeypointsImpl(const cv::Mat & image, const cv::Rect & roi, const cv::Mat & mask)
@@ -2112,25 +1826,7 @@ std::vector<cv::KeyPoint> GFTT::generateKeypointsImpl(const cv::Mat & image, con
 	{
 		maskRoi = cv::Mat(mask, roi);
 	}
-
-#if CV_MAJOR_VERSION >= 3 && defined(HAVE_OPENCV_CUDAIMGPROC)
-	if(_gpu)
-	{
-		cv::cuda::GpuMat imgGpu(imgRoi);
-		cv::cuda::GpuMat maskGpu(maskRoi);
-		cv::cuda::GpuMat cornersGpu;
-		_gpuGftt->detect(imgGpu, cornersGpu, maskGpu);
-		std::vector<cv::Point2f> corners(cornersGpu.cols);
-		cv::Mat cornersMat(1, cornersGpu.cols, CV_32FC2, (void*)&corners[0]);
-		cornersGpu.download(cornersMat);
-		cv::KeyPoint::convert(corners, keypoints, _blockSize);
-	}
-	else
-#endif
-	{
-		_gftt->detect(imgRoi, keypoints, maskRoi); // Opencv keypoints
-	}
-	
+	_gftt->detect(imgRoi, keypoints, maskRoi); // Opencv keypoints
 	return keypoints;
 }
 

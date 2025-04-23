@@ -159,28 +159,10 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 		_ui->checkBox_ORBGpu->setEnabled(false);
 		_ui->label_orbGpu->setEnabled(false);
 
-		_ui->checkBox_GFTT_gpu->setEnabled(false);
-		_ui->label_GFTT_gpu->setEnabled(false);
-
 		// disable BruteForceGPU option
 		_ui->comboBox_dictionary_strategy->setItemData(4, 0, Qt::UserRole - 1);
 		_ui->reextract_nn->setItemData(4, 0, Qt::UserRole - 1);
 	}
-#ifndef RTABMAP_CUDASIFT
-	_ui->sift_checkBox_gpu->setEnabled(false);
-	_ui->sift_label_gpu->setEnabled(false);
-	_ui->sift_doubleSpinBox_gaussianDiffThreshold->setEnabled(false);
-	_ui->sift_label_gaussianThreshold->setEnabled(false);
-	_ui->sift_checkBox_upscale->setEnabled(false);
-	_ui->sift_label_upscale->setEnabled(false);
-#endif
-
-#ifndef HAVE_OPENCV_CUDAOPTFLOW
-	_ui->odom_flow_gpu->setEnabled(false);
-	_ui->label_odom_flow_gpu->setEnabled(false);
-	_ui->stereo_flow_gpu->setEnabled(false);
-	_ui->label_stereo_flow_gpu->setEnabled(false);
-#endif
 
 #ifndef RTABMAP_OCTOMAP
 	_ui->groupBox_octomap->setChecked(false);
@@ -259,10 +241,6 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_ui->comboBox_detector_strategy->setItemData(1, 0, Qt::UserRole - 1);
 	_ui->vis_feature_detector->setItemData(1, 0, Qt::UserRole - 1);
 #endif
-#endif
-#if CV_MAJOR_VERSION < 4 || (CV_MAJOR_VERSION == 4 && CV_MINOR_VERSION < 8)
-	_ui->sift_checkBox_preciseUpscale->setEnabled(false);
-	_ui->sift_label_preciseUpscale->setEnabled(false);
 #endif
 
 #if CV_MAJOR_VERSION >= 3 && !defined(HAVE_OPENCV_XFEATURES2D)
@@ -423,7 +401,7 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	}
 	else if(CameraStereoZed::sdkVersion() < 4)
 	{
-		_ui->comboBox_stereoZed_resolution->setItemData(1, 0, Qt::UserRole - 1);
+		_ui->comboBox_stereoZed_resolution->setItemData(2, 0, Qt::UserRole - 1);
 		_ui->comboBox_stereoZed_resolution->setItemData(4, 0, Qt::UserRole - 1);
 		_ui->comboBox_stereoZed_resolution->setItemData(6, 0, Qt::UserRole - 1);
 		_ui->comboBox_stereoZed_quality->setItemData(3, 0, Qt::UserRole - 1);
@@ -724,7 +702,6 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	// usb group
 	connect(_ui->spinBox_usbcam_streamWidth, SIGNAL(valueChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->spinBox_usbcam_streamHeight, SIGNAL(valueChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
-	connect(_ui->lineEdit_usbcam_fourcc, SIGNAL(textChanged(const QString &)), this, SLOT(makeObsoleteSourcePanel()));
 	//video group
 	connect(_ui->source_video_toolButton_selectSource, SIGNAL(clicked()), this, SLOT(selectSourceVideoPath()));
 	connect(_ui->source_video_lineEdit_path, SIGNAL(textChanged(const QString &)), this, SLOT(makeObsoleteSourcePanel()));
@@ -837,7 +814,6 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	connect(_ui->spinBox_stereo_right_device, SIGNAL(valueChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->spinBox_stereousbcam_streamWidth, SIGNAL(valueChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->spinBox_stereousbcam_streamHeight, SIGNAL(valueChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
-	connect(_ui->lineEdit_stereousbcam_fourcc, SIGNAL(textChanged(const QString &)), this, SLOT(makeObsoleteSourcePanel()));
 
 	connect(_ui->comboBox_stereoZed_resolution, SIGNAL(currentIndexChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->comboBox_stereoZed_quality, SIGNAL(currentIndexChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
@@ -995,7 +971,6 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_ui->general_checkBox_keepBinaryData->setObjectName(Parameters::kMemBinDataKept().c_str());
 	_ui->general_checkBox_saveIntermediateNodeData->setObjectName(Parameters::kMemIntermediateNodeDataKept().c_str());
 	_ui->lineEdit_rgbCompressionFormat->setObjectName(Parameters::kMemImageCompressionFormat().c_str());
-	_ui->lineEdit_depthCompressionFormat->setObjectName(Parameters::kMemDepthCompressionFormat().c_str());
 	_ui->general_checkBox_keepDescriptors->setObjectName(Parameters::kMemRawDescriptorsKept().c_str());
 	_ui->general_checkBox_saveDepth16bits->setObjectName(Parameters::kMemSaveDepth16Format().c_str());
 	_ui->general_checkBox_compressionParallelized->setObjectName(Parameters::kMemCompressionParallelized().c_str());
@@ -1058,7 +1033,6 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_ui->surf_doubleSpinBox_maxDepth->setObjectName(Parameters::kKpMaxDepth().c_str());
 	_ui->surf_doubleSpinBox_minDepth->setObjectName(Parameters::kKpMinDepth().c_str());
 	_ui->checkBox_memDepthAsMask->setObjectName(Parameters::kMemDepthAsMask().c_str());
-	_ui->doubleSpinBox_memDepthMaskFloorThr->setObjectName(Parameters::kMemDepthMaskFloorThr().c_str());
 	_ui->checkBox_memStereoFromMotion->setObjectName(Parameters::kMemStereoFromMotion().c_str());
 	_ui->surf_spinBox_wordsPerImageTarget->setObjectName(Parameters::kKpMaxFeatures().c_str());
 	_ui->checkBox_kp_ssc->setObjectName(Parameters::kKpSSC().c_str());
@@ -1089,15 +1063,12 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_ui->surf_doubleSpinBox_gpuKeypointsRatio->setObjectName(Parameters::kSURFGpuKeypointsRatio().c_str());
 
 	//SIFT detector
+	_ui->sift_spinBox_nFeatures->setObjectName(Parameters::kSIFTNFeatures().c_str());
 	_ui->sift_spinBox_nOctaveLayers->setObjectName(Parameters::kSIFTNOctaveLayers().c_str());
 	_ui->sift_doubleSpinBox_contrastThr->setObjectName(Parameters::kSIFTContrastThreshold().c_str());
 	_ui->sift_doubleSpinBox_edgeThr->setObjectName(Parameters::kSIFTEdgeThreshold().c_str());
 	_ui->sift_doubleSpinBox_sigma->setObjectName(Parameters::kSIFTSigma().c_str());
-	_ui->sift_checkBox_preciseUpscale->setObjectName(Parameters::kSIFTPreciseUpscale().c_str());
 	_ui->sift_checkBox_rootsift->setObjectName(Parameters::kSIFTRootSIFT().c_str());
-	_ui->sift_checkBox_gpu->setObjectName(Parameters::kSIFTGpu().c_str());
-	_ui->sift_doubleSpinBox_gaussianDiffThreshold->setObjectName(Parameters::kSIFTGaussianThreshold().c_str());
-	_ui->sift_checkBox_upscale->setObjectName(Parameters::kSIFTUpscale().c_str());
 
 	//BRIEF descriptor
 	_ui->briefBytes->setObjectName(Parameters::kBRIEFBytes().c_str());
@@ -1135,7 +1106,6 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_ui->spinBox_GFTT_blockSize->setObjectName(Parameters::kGFTTBlockSize().c_str());
 	_ui->checkBox_GFTT_useHarrisDetector->setObjectName(Parameters::kGFTTUseHarrisDetector().c_str());
 	_ui->doubleSpinBox_GFTT_k->setObjectName(Parameters::kGFTTK().c_str());
-	_ui->checkBox_GFTT_gpu->setObjectName(Parameters::kGFTTGpu().c_str());
 
 	//BRISK
 	_ui->spinBox_BRISK_thresh->setObjectName(Parameters::kBRISKThresh().c_str());
@@ -1291,16 +1261,14 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_ui->loopClosure_bowMaxDepth->setObjectName(Parameters::kVisMaxDepth().c_str());
 	_ui->loopClosure_bowMinDepth->setObjectName(Parameters::kVisMinDepth().c_str());
 	_ui->checkBox_visDepthAsMask->setObjectName(Parameters::kVisDepthAsMask().c_str());
-	_ui->doubleSpinBox_visDepthMaskFloorThr->setObjectName(Parameters::kVisDepthMaskFloorThr().c_str());
 	_ui->loopClosure_roi->setObjectName(Parameters::kVisRoiRatios().c_str());
 	_ui->subpix_winSize->setObjectName(Parameters::kVisSubPixWinSize().c_str());
 	_ui->subpix_iterations->setObjectName(Parameters::kVisSubPixIterations().c_str());
 	_ui->subpix_eps->setObjectName(Parameters::kVisSubPixEps().c_str());
-	_ui->odom_flow_winSize->setObjectName(Parameters::kVisCorFlowWinSize().c_str());
-	_ui->odom_flow_maxLevel->setObjectName(Parameters::kVisCorFlowMaxLevel().c_str());
-	_ui->odom_flow_iterations->setObjectName(Parameters::kVisCorFlowIterations().c_str());
-	_ui->odom_flow_eps->setObjectName(Parameters::kVisCorFlowEps().c_str());
-	_ui->odom_flow_gpu->setObjectName(Parameters::kVisCorFlowGpu().c_str());
+	_ui->odom_flow_winSize_2->setObjectName(Parameters::kVisCorFlowWinSize().c_str());
+	_ui->odom_flow_maxLevel_2->setObjectName(Parameters::kVisCorFlowMaxLevel().c_str());
+	_ui->odom_flow_iterations_2->setObjectName(Parameters::kVisCorFlowIterations().c_str());
+	_ui->odom_flow_eps_2->setObjectName(Parameters::kVisCorFlowEps().c_str());
 	_ui->loopClosure_bundle->setObjectName(Parameters::kVisBundleAdjustment().c_str());
 
 	//RegistrationIcp
@@ -1617,8 +1585,6 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_ui->stereo_ssd->setObjectName(Parameters::kStereoSSD().c_str());
 	_ui->stereo_flow_eps->setObjectName(Parameters::kStereoEps().c_str());
 	_ui->stereo_opticalFlow->setObjectName(Parameters::kStereoOpticalFlow().c_str());
-	_ui->stereo_flow_gpu->setObjectName(Parameters::kStereoGpu().c_str());
-	
 
 	// Odometry Open3D
 	_ui->odom_open3d_method->setObjectName(Parameters::kOdomOpen3DMethod().c_str());
@@ -2234,7 +2200,7 @@ void PreferencesDialog::resetSettings(QGroupBox * groupBox)
 		_ui->spinBox_stereo_right_device->setValue(-1);
 		_ui->spinBox_stereousbcam_streamWidth->setValue(0);
 		_ui->spinBox_stereousbcam_streamHeight->setValue(0);
-		_ui->comboBox_stereoZed_resolution->setCurrentIndex(0);
+		_ui->comboBox_stereoZed_resolution->setCurrentIndex(CameraStereoZed::sdkVersion()<4?3:6);
 		_ui->comboBox_stereoZed_quality->setCurrentIndex(1);
 		_ui->checkbox_stereoZed_selfCalibration->setChecked(true);
 		_ui->comboBox_stereoZed_sensingMode->setCurrentIndex(0);
@@ -2737,7 +2703,6 @@ void PreferencesDialog::readCameraSettings(const QString & filePath)
 	_ui->spinBox_stereo_right_device->setValue(settings.value("device2", _ui->spinBox_stereo_right_device->value()).toInt());
 	_ui->spinBox_stereousbcam_streamWidth->setValue(settings.value("width", _ui->spinBox_stereousbcam_streamWidth->value()).toInt());
 	_ui->spinBox_stereousbcam_streamHeight->setValue(settings.value("height", _ui->spinBox_stereousbcam_streamHeight->value()).toInt());
-	_ui->lineEdit_stereousbcam_fourcc->setText(settings.value("fourcc", _ui->lineEdit_stereousbcam_fourcc->text()).toString());
 	settings.endGroup(); // StereoVideo
 
 	settings.beginGroup("StereoZed");
@@ -2815,7 +2780,6 @@ void PreferencesDialog::readCameraSettings(const QString & filePath)
 	settings.beginGroup("UsbCam");
 	_ui->spinBox_usbcam_streamWidth->setValue(settings.value("width", _ui->spinBox_usbcam_streamWidth->value()).toInt());
 	_ui->spinBox_usbcam_streamHeight->setValue(settings.value("height", _ui->spinBox_usbcam_streamHeight->value()).toInt());
-	_ui->lineEdit_usbcam_fourcc->setText(settings.value("fourcc", _ui->lineEdit_usbcam_fourcc->text()).toString());
 	settings.endGroup(); // UsbCam
 
 	settings.beginGroup("Video");
@@ -3339,7 +3303,6 @@ void PreferencesDialog::writeCameraSettings(const QString & filePath) const
 	settings.setValue("device2",		_ui->spinBox_stereo_right_device->value());
 	settings.setValue("width",		    _ui->spinBox_stereousbcam_streamWidth->value());
 	settings.setValue("height",		    _ui->spinBox_stereousbcam_streamHeight->value());
-	settings.setValue("fourcc",         _ui->lineEdit_stereousbcam_fourcc->text());
 	settings.endGroup(); // StereoVideo
 
 	settings.beginGroup("StereoZed");
@@ -3415,7 +3378,6 @@ void PreferencesDialog::writeCameraSettings(const QString & filePath) const
 	settings.beginGroup("UsbCam");
 	settings.setValue("width",          _ui->spinBox_usbcam_streamWidth->value());
 	settings.setValue("height",         _ui->spinBox_usbcam_streamHeight->value());
-	settings.setValue("fourcc",         _ui->lineEdit_usbcam_fourcc->text());
 	settings.endGroup(); // UsbCam
 
 	settings.beginGroup("Video");
@@ -4872,46 +4834,22 @@ void PreferencesDialog::setParameter(const std::string & key, const std::string 
 				{
 					if(valueInt==1 && combo->objectName().toStdString().compare(Parameters::kOptimizerStrategy()) == 0)
 					{
-						if(Optimizer::isAvailable(Optimizer::kTypeGTSAM)) {
-							UWARN("Trying to set \"%s\" to g2o but RTAB-Map isn't built "
-								"with g2o. Falling back to GTSAM.",
-								combo->objectName().toStdString().c_str());
-							valueInt = 2;
-						}
-						else
-						{
-							UWARN("Trying to set \"%s\" to g2o but RTAB-Map isn't built "
-								"with g2o. Keeping default combo value: %s.",
-								combo->objectName().toStdString().c_str(),
-								combo->currentText().toStdString().c_str());
-							ok = false;
-						}
+						UWARN("Trying to set \"%s\" to g2o but RTAB-Map isn't built "
+							  "with g2o. Keeping default combo value: %s.",
+							  combo->objectName().toStdString().c_str(),
+							  combo->currentText().toStdString().c_str());
+						ok = false;
 					}
 				}
 				if(!Optimizer::isAvailable(Optimizer::kTypeGTSAM))
 				{
 					if(valueInt==2 && combo->objectName().toStdString().compare(Parameters::kOptimizerStrategy()) == 0)
 					{
-					if(
-#ifndef RTABMAP_ORB_SLAM
-						Optimizer::isAvailable(Optimizer::kTypeG2O)
-#else
-						true
-#endif
-						){
-							UWARN("Trying to set \"%s\" to GTSAM but RTAB-Map isn't built "
-								"with GTSAM. Falling back to g2o.",
-								combo->objectName().toStdString().c_str());
-							valueInt = 1;
-						}
-						else
-						{
-							UWARN("Trying to set \"%s\" to GTSAM but RTAB-Map isn't built "
-								"with GTSAM. Keeping default combo value: %s.",
-								combo->objectName().toStdString().c_str(),
-								combo->currentText().toStdString().c_str());
-							ok = false;
-						}
+						UWARN("Trying to set \"%s\" to GTSAM but RTAB-Map isn't built "
+							  "with GTSAM. Keeping default combo value: %s.",
+							  combo->objectName().toStdString().c_str(),
+							  combo->currentText().toStdString().c_str());
+						ok = false;
 					}
 				}
 				if(ok)
@@ -6771,10 +6709,6 @@ Camera * PreferencesDialog::createCamera(
 				this->getSourceLocalTransform());
 		}
 		((CameraStereoVideo*)camera)->setResolution(_ui->spinBox_stereousbcam_streamWidth->value(), _ui->spinBox_stereousbcam_streamHeight->value());
-		if(!_ui->lineEdit_stereousbcam_fourcc->text().isEmpty())
-		{
-			((CameraStereoVideo*)camera)->setFOURCC(_ui->lineEdit_stereousbcam_fourcc->text().toStdString());
-		}
 	}
 	else if(driver == kSrcStereoVideo)
 	{
@@ -6830,7 +6764,7 @@ Camera * PreferencesDialog::createCamera(
 		{
 			camera = new CameraStereoZed(
 				device.isEmpty()?0:atoi(device.toStdString().c_str()),
-				_ui->comboBox_stereoZed_resolution->currentIndex()-1,
+				_ui->comboBox_stereoZed_resolution->currentIndex(),
 				// depth should be enabled for zed vo to work
 				_ui->comboBox_stereoZed_quality->currentIndex()==0&&odomOnly?1:_ui->comboBox_stereoZed_quality->currentIndex(),
 				_ui->comboBox_stereoZed_sensingMode->currentIndex(),
@@ -6903,10 +6837,6 @@ Camera * PreferencesDialog::createCamera(
 			this->getGeneralInputRate(),
 			this->getSourceLocalTransform());
 		((CameraVideo*)camera)->setResolution(_ui->spinBox_usbcam_streamWidth->value(), _ui->spinBox_usbcam_streamHeight->value());
-		if(!_ui->lineEdit_usbcam_fourcc->text().isEmpty())
-		{
-			((CameraVideo*)camera)->setFOURCC(_ui->lineEdit_usbcam_fourcc->text().toStdString());
-		}
 	}
 	else if(driver == kSrcVideo)
 	{
