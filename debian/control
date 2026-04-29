@@ -1,0 +1,13 @@
+Source: ros-lyrical-rtabmap
+Section: misc
+Priority: optional
+Maintainer: Mathieu Labbe <matlabbe@gmail.com>
+Build-Depends: debhelper (>= 9.0.0), cmake, liboctomap-dev, libpcl-dev, libproj-dev, libsqlite3-dev, libtbb-dev, qtbase5-dev, ros-lyrical-cv-bridge, ros-lyrical-gtsam, ros-lyrical-libg2o, ros-lyrical-libpointmatcher, zlib1g-dev, ros-lyrical-ros-workspace
+Homepage: http://introlab.github.io/rtabmap
+Standards-Version: 3.9.2
+
+Package: ros-lyrical-rtabmap
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, liboctomap-dev, libpcl-dev, libsqlite3-dev, libtbb-dev, qtbase5-dev, ros-lyrical-cv-bridge, ros-lyrical-gtsam, ros-lyrical-libg2o, ros-lyrical-libpointmatcher, zlib1g-dev, ros-lyrical-ros-workspace
+Description: RTAB-Map's standalone library.
+ RTAB-Map is a RGB-D SLAM approach with real-time constraints.
