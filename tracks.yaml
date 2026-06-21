@@ -308,11 +308,11 @@ tracks:
     - git-bloom-generate -y rosdynrpm --prefix release/:{ros_distro} :{ros_distro}
       -i :{release_inc} --require-os fedora rhel
     devel_branch: lyrical-devel
-    last_release: 0.22.1-rolling
-    last_version: 0.22.1
+    last_release: 0.23.7-lyrical
+    last_version: 0.23.7
     name: rtabmap
     patches: null
-    release_inc: '3'
+    release_inc: '1'
     release_repo_url: null
     release_tag: :{version}-lyrical
     ros_distro: lyrical
