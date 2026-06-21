@@ -307,14 +307,14 @@ tracks:
       :{release_inc} --os-name rhel
     - git-bloom-generate -y rosdynrpm --prefix release/:{ros_distro} :{ros_distro}
       -i :{release_inc} --require-os fedora rhel
-    devel_branch: rolling-devel
+    devel_branch: lyrical-devel
     last_release: 0.22.1-rolling
     last_version: 0.22.1
     name: rtabmap
     patches: null
     release_inc: '3'
     release_repo_url: null
-    release_tag: :{version}-rolling
+    release_tag: :{version}-lyrical
     ros_distro: lyrical
     vcs_type: git
     vcs_uri: https://github.com/introlab/rtabmap.git
