@@ -1,3 +1,26 @@
+## rtabmap (lyrical) - 0.23.7-1
+
+The packages in the `rtabmap` repository were released into the `lyrical` distro by running `/usr/bin/bloom-release --ros-distro lyrical --new-track --edit-track rtabmap` on `Sun, 21 Jun 2026 22:42:29 -0000`
+
+The `rtabmap` package was released.
+
+Version of package(s) in repository `rtabmap`:
+
+- upstream repository: https://github.com/introlab/rtabmap.git
+- release repository: https://github.com/ros2-gbp/rtabmap-release.git
+- rosdistro version: `0.22.1-3`
+- old version: `0.22.1-3`
+- new version: `0.23.7-1`
+
+Versions of tools used:
+
+- bloom version: `0.14.3`
+- catkin_pkg version: `1.1.0`
+- rosdep version: `0.26.0`
+- rosdistro version: `1.0.1`
+- vcstools version: `0.1.42`
+
+
 ## rtabmap (kilted) - 0.23.7-1
 
 The packages in the `rtabmap` repository were released into the `kilted` distro by running `/usr/bin/bloom-release --ros-distro kilted rtabmap` on `Sun, 21 Jun 2026 22:04:19 -0000`
