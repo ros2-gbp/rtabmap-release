@@ -3,7 +3,7 @@ name: CMake-ROS
 on:
   push:
     branches: 
-      - lyrical-devel
+      - humble-devel
     paths-ignore: &platform_only
       - '.github/workflows/android.yml'
       - '.github/workflows/ios.yml'
@@ -33,12 +33,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        ros_distribution: [ lyrical ]
+        ros_distribution: [ humble ]
         # Build against both main (what users install) and ros2-testing (closest to
         # what the buildfarm builds bloom releases against).
         use_ros2_testing: [ false, true ]
         include:
-        - ros_distribution: 'lyrical'
+        - ros_distribution: 'humble'
           skip_keys: "" # When releasing to ROS2, the skip_keys should be empty, patch these deps in package.xml instead.
     container:
       image: osrf/ros:${{ matrix.ros_distribution }}-desktop-full
