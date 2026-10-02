@@ -1,3 +1,26 @@
+## rtabmap (jazzy) - 0.23.13-1
+
+The packages in the `rtabmap` repository were released into the `jazzy` distro by running `/usr/bin/bloom-release --ros-distro jazzy rtabmap` on `Fri, 02 Oct 2026 02:24:30 -0000`
+
+The `rtabmap` package was released.
+
+Version of package(s) in repository `rtabmap`:
+
+- upstream repository: https://github.com/introlab/rtabmap.git
+- release repository: https://github.com/ros2-gbp/rtabmap-release.git
+- rosdistro version: `0.23.7-1`
+- old version: `0.23.7-1`
+- new version: `0.23.13-1`
+
+Versions of tools used:
+
+- bloom version: `0.14.4`
+- catkin_pkg version: `1.1.0`
+- rosdep version: `0.26.0`
+- rosdistro version: `1.0.1`
+- vcstools version: `0.1.42`
+
+
 ## rtabmap (humble) - 0.23.13-1
 
 The packages in the `rtabmap` repository were released into the `humble` distro by running `/usr/bin/bloom-release --ros-distro humble rtabmap` on `Fri, 02 Oct 2026 02:21:11 -0000`
