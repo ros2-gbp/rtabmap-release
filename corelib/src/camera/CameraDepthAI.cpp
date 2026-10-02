@@ -32,7 +32,11 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap/utilite/UEventsManager.h>
 #include <rtabmap/utilite/UConversion.h>
 #include <rtabmap/utilite/UFile.h>
-
+#if CV_MAJOR_VERSION < 5
+#include <opencv2/calib3d/calib3d.hpp>
+#else
+#include <opencv2/geometry.hpp>
+#endif
 
 namespace rtabmap {
 
@@ -370,9 +374,10 @@ bool CameraDepthAI::init(const std::string & calibrationFolder, const std::strin
 		matrix[2][0], matrix[2][1], matrix[2][2]);
 
 	std::vector<float> coeffs = calibHandler.getDistortionCoefficients(cameraId);
-	if(calibHandler.getDistortionModel(cameraId) == dai::CameraModel::Perspective)
-		distCoeffs = (cv::Mat_<double>(1,8) << coeffs[0], coeffs[1], coeffs[2], coeffs[3], coeffs[4], coeffs[5], coeffs[6], coeffs[7]);
-
+	if(calibHandler.getDistortionModel(cameraId) == dai::CameraModel::Perspective) {
+		UASSERT(coeffs.size()>=14);
+		distCoeffs = (cv::Mat_<double>(1,14) << coeffs[0], coeffs[1], coeffs[2], coeffs[3], coeffs[4], coeffs[5], coeffs[6], coeffs[7], coeffs[8], coeffs[9], coeffs[10], coeffs[11], coeffs[12], coeffs[13]);
+	}
 	if(alphaScaling_>-1.0f)
 		newCameraMatrix = cv::getOptimalNewCameraMatrix(cameraMatrix, distCoeffs, targetSize_, alphaScaling_);
 	else
@@ -728,6 +733,21 @@ std::string CameraDepthAI::getSerial() const
 	return "";
 }
 
+#ifdef RTABMAP_DEPTHAI
+namespace {
+// Convert the depthai depth ImgFrame to cv::Mat (similar to dai::ImgFrame::getCvFrame())
+cv::Mat depthImgFrameToCvMat(const std::shared_ptr<dai::ImgFrame> & frame)
+{
+	if(frame->getType() != dai::ImgFrame::Type::RAW16)
+	{
+		UERROR("Expected RAW16 depth ImgFrame but got type %d", (int)frame->getType());
+		return cv::Mat();
+	}
+	return cv::Mat((int)frame->getHeight(), (int)frame->getWidth(), CV_16UC1, frame->getData().data()).clone();
+}
+}
+#endif
+
 SensorData CameraDepthAI::captureImage(SensorCaptureInfo * info)
 {
 	SensorData data;
@@ -739,7 +759,7 @@ SensorData CameraDepthAI::captureImage(SensorCaptureInfo * info)
 
 	double stamp = std::chrono::duration<double>(depthOrRight->getTimestampDevice(dai::CameraExposureOffset::MIDDLE).time_since_epoch()).count();
 	if(outputMode_)
-		data = SensorData(cv::imdecode(rgbOrLeft->getData(), cv::IMREAD_ANYCOLOR), depthOrRight->getCvFrame(), stereoModel_.left(), this->getNextSeqID(), stamp);
+		data = SensorData(cv::imdecode(rgbOrLeft->getData(), cv::IMREAD_ANYCOLOR), depthImgFrameToCvMat(depthOrRight), stereoModel_.left(), this->getNextSeqID(), stamp);
 	else
 		data = SensorData(cv::imdecode(rgbOrLeft->getData(), cv::IMREAD_GRAYSCALE), cv::imdecode(depthOrRight->getData(), cv::IMREAD_GRAYSCALE), stereoModel_, this->getNextSeqID(), stamp);
 
