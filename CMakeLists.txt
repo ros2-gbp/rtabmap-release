@@ -22,7 +22,7 @@ SET(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake_modules")
 #######################
 SET(RTABMAP_MAJOR_VERSION 0)
 SET(RTABMAP_MINOR_VERSION 23)
-SET(RTABMAP_PATCH_VERSION 13)
+SET(RTABMAP_PATCH_VERSION 14)
 SET(RTABMAP_VERSION
   ${RTABMAP_MAJOR_VERSION}.${RTABMAP_MINOR_VERSION}.${RTABMAP_PATCH_VERSION})
 
@@ -188,6 +188,10 @@ OPTION(BUILD_PERF_TESTS "Build the performance tests (see ctest -L performance)"
 include(CTest)
 if(BUILD_TESTING)
    # Add GTest using FetchContent
+   # The fetched googletest must not be installed into the install prefix: it
+   # would shadow the GTest of other projects sharing the prefix and break
+   # their builds (see https://github.com/introlab/rtabmap/issues/1812).
+   set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
    include(FetchContent)
    FetchContent_Declare(
        googletest
